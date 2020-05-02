@@ -5,7 +5,7 @@ use hyper::{http, Body, Client, Request, Response, Uri};
 use serde::export::fmt::Debug;
 use serde::export::Option::Some;
 use serde::{Deserialize, Serialize};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell, RefMut};
 use std::convert::{TryFrom, TryInto};
 use std::future::Future;
 use std::time::Duration;
@@ -30,8 +30,8 @@ async fn main() {
     };
 
     let overload_req = OverloadRequest {
-        qps_spec: ConstantQPSSPec { qps: 4 },
-        req_spec: single_req,
+        qps_spec: RefCell::new(ConstantQPSSPec { qps: 4 }),
+        req_spec: RefCell::new(single_req),
         duration: 10,
     };
     debug!("Start processing request {:?}", overload_req);
@@ -39,16 +39,16 @@ async fn main() {
 }
 
 #[instrument(skip(overload_req))]
-async fn execute<T, U>(mut overload_req: OverloadRequest<T, U>)
-where
-    T: ReqSpec + Debug,
-    U: QPSSpec + Debug,
+async fn execute<T, U>(overload_req: OverloadRequest<T, U>)
+    where
+        T: ReqSpec + Debug,
+        U: QPSSpec + Debug,
 {
     info!("Processing request");
     let duration = overload_req.duration;
-    let qps_spec = overload_req.get_qps_spec_mut();
+    let mut qps_spec = overload_req.get_qps_spec_mut();
+    let mut req_spec = overload_req.get_req_spec_mut();
     let qps = qps_spec.next();
-    let req_spec = overload_req.get_req_spec_mut();
     let mut qps_stream = throttle(
         Duration::from_secs(1),
         futures::stream::repeat(qps).take(duration as usize),
@@ -116,26 +116,18 @@ enum ReqMethod {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct OverloadRequest<R, Q> {
-    req_spec: R,
-    qps_spec: Q,
+    req_spec: RefCell<R>,
+    qps_spec: RefCell<Q>,
     duration: i32,
 }
 
 impl<R: ReqSpec, Q: QPSSpec> OverloadRequest<R, Q> {
-    fn get_req_spec(&self) -> &R {
-        &self.req_spec
+    fn get_req_spec_mut(&self) -> RefMut<'_, R> {
+        self.req_spec.borrow_mut()
     }
 
-    fn get_req_spec_mut(&mut self) -> &mut R {
-        &mut self.req_spec
-    }
-
-    fn get_qps_spec(&self) -> &Q {
-        &self.qps_spec
-    }
-
-    fn get_qps_spec_mut(&mut self) -> &mut Q {
-        &mut self.qps_spec
+    fn get_qps_spec_mut(&self) -> RefMut<'_, Q> {
+        self.qps_spec.borrow_mut()
     }
 
     fn duration(&self) -> i32 {
