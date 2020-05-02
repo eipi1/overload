@@ -1,0 +1,28 @@
+[package]
+name = "overload"
+version = "0.1.0"
+authors = ["sarowar <sarowar.cse@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+#[[bin]]
+#name="scribble_1"
+#path = "scribbles/s1.rs"
+#required-features= ["runtime"]
+
+[dependencies]
+tokio ={version="0.2", features=["full"]}
+futures="0.3"
+futures-util="0.3"
+hyper = "0.13"
+rand = "0.7"
+chrono = "0.4"
+rand_distr = "0.2"
+serde = {version ="1.0", features = ["derive"]}
+rmp-serde = "0.14"
+tracing = "0.1"
+tracing-futures = "0.2"
+tracing-subscriber = {version="0.2", features = ["fmt"]}
+async-trait = "0.1"
+url = {version="2.1", features = ["serde"]}
