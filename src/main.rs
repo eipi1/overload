@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::stream;
+use futures::{stream, StreamExt};
 use futures::stream::FuturesUnordered;
 use hyper::client::HttpConnector;
 use hyper::{http, Body, Client, Method, Request, Response, Uri};
@@ -15,7 +15,6 @@ use std::future::Future;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::stream::StreamExt;
 use tokio::time::throttle;
 use tracing::{debug, info, instrument};
 use tracing_subscriber;
