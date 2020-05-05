@@ -26,3 +26,4 @@ tracing-futures = "0.2"
 tracing-subscriber = {version="0.2", features = ["fmt"]}
 async-trait = "0.1"
 url = {version="2.1", features = ["serde"]}
+bytes = "0.5"

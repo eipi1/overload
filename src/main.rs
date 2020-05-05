@@ -1,13 +1,19 @@
+#![allow(unused_imports)]
+
 use async_trait::async_trait;
+use bytes::Bytes;
 use futures::stream;
 use futures::stream::FuturesUnordered;
-use hyper::{http, Body, Client, Request, Response, Uri};
+use hyper::client::HttpConnector;
+use hyper::{http, Body, Client, Method, Request, Response, Uri};
 use serde::export::fmt::Debug;
 use serde::export::Option::Some;
 use serde::{Deserialize, Serialize};
 use std::cell::{Cell, RefCell, RefMut};
 use std::convert::{TryFrom, TryInto};
 use std::future::Future;
+use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::stream::StreamExt;
 use tokio::time::throttle;
@@ -17,8 +23,8 @@ use url::Url;
 
 #[tokio::main]
 async fn main() {
-    let tracing_builder = tracing_subscriber::fmt()
-        .with_env_filter("debug")
+    tracing_subscriber::fmt()
+        .with_env_filter("info")
         .try_init()
         .unwrap();
     let single_req = SingleReqSpec {
@@ -40,12 +46,12 @@ async fn main() {
 
 #[instrument(skip(overload_req))]
 async fn execute<T, U>(overload_req: OverloadRequest<T, U>)
-    where
-        T: ReqSpec + Debug,
-        U: QPSSpec + Debug,
+where
+    T: ReqSpec + Debug,
+    U: QPSSpec + Debug,
 {
     info!("Processing request");
-    let duration = overload_req.duration;
+    let duration = overload_req.duration();
     let mut qps_spec = overload_req.get_qps_spec_mut();
     let mut req_spec = overload_req.get_req_spec_mut();
     let qps = qps_spec.next();
@@ -53,38 +59,31 @@ async fn execute<T, U>(overload_req: OverloadRequest<T, U>)
         Duration::from_secs(1),
         futures::stream::repeat(qps).take(duration as usize),
     );
-    let client = Client::new();
+    let client = Arc::new(Client::new());
     while let Some(qps) = qps_stream.next().await {
-        info!("QPS => {}", qps);
-        client.get(req_spec.next().url.clone().as_str().try_into().unwrap());
-        for _ in 0..qps {}
-        // generate_request();
-        // let f = FuturesUnordered::new();
+        tokio::spawn(send_requests(req_spec.next(), client.clone(), qps));
     }
-    // while let Some(qps) = qps_stream.next().await {
-    //     let mut request_futures = FuturesUnordered::new();
-    //     for _ in 1..(qps+1) {
-    //         let resp = client.get(request.request.url.clone().try_into().unwrap());
-    //         request_futures.push(resp);
-    //     }
-    //     let response = request_futures.next().await.unwrap().unwrap();
-    //     info!("response {}, headers => {:?}", response.status(), response.headers())
-    // }
 }
 
-// impl TryFrom<Url> for http::Uri {
-//     type Error = ();
-//
-//     fn try_from(value: Url) -> Result<Self, Self::Error> {
-//         value.as_str().try_into()?
-//     }
-// }
-
-// impl From<Url> for http::Uri{
-//     fn from(_: Url) -> Self {
-//         unimplemented!()
-//     }
-// }
+async fn send_requests(req: HttpReq, client: Arc<Client<HttpConnector, Body>>, count: i32) {
+    info!("sending {} requests", count);
+    let body = if let Some(body) = req.body {
+        Bytes::from(body)
+    } else {
+        Bytes::new()
+    };
+    let mut request_futures = FuturesUnordered::new();
+    for _ in 1..=count {
+        let request = Request::builder()
+            .uri(req.url.as_str())
+            .method(req.method.clone())
+            .body(body.clone().into())
+            .unwrap();
+        let request = client.request(request);
+        request_futures.push(request);
+    }
+    request_futures.next().await;
+}
 
 trait QPSSpec {
     fn next(&mut self) -> i32;
@@ -108,10 +107,19 @@ impl QPSSpec for ConstantQPSSPec {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 enum ReqMethod {
     GET,
     POST,
+}
+
+impl Into<Method> for ReqMethod {
+    fn into(self) -> Method {
+        match self {
+            ReqMethod::POST => Method::POST,
+            _ => Method::GET,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -135,7 +143,7 @@ impl<R: ReqSpec, Q: QPSSpec> OverloadRequest<R, Q> {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct HttpReq {
     method: ReqMethod,
     url: Url,
@@ -143,7 +151,7 @@ struct HttpReq {
 }
 
 trait ReqSpec {
-    fn next(&mut self) -> &HttpReq;
+    fn next(&mut self) -> HttpReq;
 }
 
 #[derive(Debug)]
@@ -153,8 +161,8 @@ struct SingleReqSpec {
 
 impl ReqSpec for SingleReqSpec {
     #[inline]
-    fn next(&mut self) -> &HttpReq {
-        &self.req
+    fn next(&mut self) -> HttpReq {
+        self.req.clone()
     }
 }
 
