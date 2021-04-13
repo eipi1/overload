@@ -3,18 +3,18 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use futures::Stream;
-use pin_project_lite::pin_project;
+use pin_project::pin_project;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use tokio_stream::StreamExt;
 
 use crate::HttpReq;
+use futures_util::stream::Stream;
+use tokio_stream::StreamExt;
 
 const MAX_REQ_RET_SIZE: usize = 10;
 
 /// Based on the QPS policy, generate requests to be sent to the application that's being tested.
-pin_project! {
+#[pin_project]
 #[must_use = "futures do nothing unless polled"]
 pub struct RequestGenerator {
     // for how long test should run
@@ -29,8 +29,13 @@ pub struct RequestGenerator {
     current_count: u32,
     // http requests
     requests: Vec<HttpReq>,
-    qps_scheme: Box<dyn QPSScheme+Send>,
+    qps_scheme: Box<dyn QPSScheme + Send>,
 }
+
+impl RequestGenerator {
+    pub fn time_scale(&self) -> u8 {
+        self.time_scale
+    }
 }
 
 pub trait QPSScheme {
@@ -43,8 +48,36 @@ pub struct ConstantQPS {
 }
 
 impl QPSScheme for ConstantQPS {
+    #[inline]
     fn next(&self, _nth: u32, _last_qps: Option<u32>) -> u32 {
         self.qps
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ArrayQPS {
+    qps: Vec<u32>,
+}
+
+impl ArrayQPS {
+    pub fn new(qps: Vec<u32>) -> Self {
+        Self{
+            qps
+        }
+    }
+}
+
+impl QPSScheme for ArrayQPS {
+    #[inline]
+    fn next(&self, nth: u32, _last_qps: Option<u32>) -> u32 {
+        let len = self.qps.len();
+        if len != 0 {
+            let idx = nth as usize % len;
+            let val = self.qps.get(idx).unwrap();
+            *val
+        } else {
+            0
+        }
     }
 }
 
@@ -116,20 +149,20 @@ pub fn request_generator_stream(
 /// `y=ax+b` until hit the max cap
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Linear {
-    a: u32,
+    a: f32,
     b: u32,
     max: u32,
 }
 
 impl QPSScheme for Linear {
     fn next(&self, nth: u32, _last_qps: Option<u32>) -> u32 {
-        min(self.a * nth + self.b, self.max)
+        min((self.a * nth as f32).ceil()  as u32 + self.b, self.max)
     }
 }
 
 #[cfg(test)]
 mod test {
-    use std::time::Duration;
+    use std::time::{Duration};
 
     use tokio::time;
     use tokio_stream::StreamExt;
@@ -139,6 +172,7 @@ mod test {
         request_generator_stream, ConstantQPS, RequestGenerator, MAX_REQ_RET_SIZE,
     };
     use crate::{HttpReq, ReqMethod};
+    use uuid::Uuid;
 
     #[tokio::test]
     async fn test_request_generator_empty_req() {
@@ -222,6 +256,7 @@ mod test {
 
     fn test_http_req() -> HttpReq {
         HttpReq {
+            id: Uuid::new_v4().to_string(),
             method: ReqMethod::GET,
             url: "http://example.com".to_string(),
             body: None,

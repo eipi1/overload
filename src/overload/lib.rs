@@ -1,10 +1,11 @@
 pub mod executor;
-pub mod http;
 pub mod generator;
+pub mod http;
 
-use serde::{Serialize, Deserialize};
-use std::fmt::Display;
+use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::fmt::Display;
+use std::hash::{Hash, Hasher};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ReqMethod {
@@ -14,6 +15,8 @@ pub enum ReqMethod {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HttpReq {
+    #[serde(default = "uuid")]
+    pub id: String,
     pub method: ReqMethod,
     pub url: String,
     pub body: Option<Vec<u8>>,
@@ -26,6 +29,28 @@ impl Display for HttpReq {
     }
 }
 
+impl PartialEq for HttpReq {
+    /// The purpose is not to test if two request is exactly equal, rather to check if two
+    /// represent the same request.
+    /// For a test, each request will be given a uuid. As long as uuid is same
+    /// the request will be treated as equal request.
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+impl Eq for HttpReq {}
+
+impl Hash for HttpReq {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+    }
+}
+
+fn uuid() -> String {
+    uuid::Uuid::new_v4().to_string()
+}
+
 #[derive(Debug, Serialize, Deserialize, Copy, Clone)]
 pub enum JobStatus {
     Starting,
@@ -33,6 +58,13 @@ pub enum JobStatus {
     Stopped,
     Completed,
     Failed,
+    Error(ErrorCode),
+}
+
+#[derive(Debug, Serialize, Deserialize, Copy, Clone)]
+pub enum ErrorCode {
+    InactiveCluster,
+    Others,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -43,10 +75,25 @@ pub struct Response {
 
 impl Response {
     pub fn new(job_id: String, status: JobStatus) -> Self {
-        Response {
-            job_id,
-            status,
-        }
+        Response { job_id, status }
     }
 }
 
+#[macro_export]
+macro_rules! cfg_cluster {
+    ($($item:item)*) => {
+        $(
+            #[cfg(feature = "cluster")]
+            $item
+        )*
+    }
+}
+
+#[macro_export]
+macro_rules! log_error {
+    ($result:expr) => {
+        if let Err(e) = $result {
+            error!("{}", e.to_string());
+        }
+    };
+}

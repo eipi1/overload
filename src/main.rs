@@ -7,8 +7,24 @@ use lazy_static::lazy_static;
 use prometheus::{opts, register_counter, Counter, Encoder, TextEncoder};
 use warp::{Filter, Reply};
 
+use cfg_if::cfg_if;
+#[cfg(feature = "cluster")]
+use cloud_discovery_kubernetes::KubernetesDiscoverService;
+#[cfg(feature = "cluster")]
+use cluster_mode::{get_cluster_info, Cluster};
+#[cfg(feature = "cluster")]
+use http::StatusCode;
+use log::{info, trace};
 use overload::http::handle_history_all;
 use overload::http::request::{PagerOptions, Request};
+#[cfg(feature = "cluster")]
+use rust_cloud_discovery::DiscoveryClient;
+#[cfg(feature = "cluster")]
+use serde_json::Value;
+#[cfg(feature = "cluster")]
+use std::sync::Arc;
+#[cfg(feature = "cluster")]
+use warp::reply::{Json, WithStatus};
 
 lazy_static! {
     static ref HTTP_COUNTER: Counter = register_counter!(opts!(
@@ -18,17 +34,68 @@ lazy_static! {
     .unwrap();
 }
 
-#[tokio::main]
-async fn main() {
-    let log_level = env::var("log.level")
-        .ok()
-        .unwrap_or_else(|| "info".to_string());
+#[cfg(feature = "cluster")]
+lazy_static! {
+    static ref CLUSTER: Arc<Cluster> = Arc::new(Cluster::new(10 * 1000));
+}
 
+#[tokio::main(flavor = "current_thread")]
+async fn main() {
+    //init logging
+    let log_level = env::var_os("log.level")
+        .map(|v| v.into_string().ok())
+        .flatten()
+        .unwrap_or_else(|| "trace".to_string());
     tracing_subscriber::fmt()
-        .with_env_filter(log_level)
+        .with_env_filter(format!(
+            "overload={},rust_cloud_discovery={},cloud_discovery_kubernetes={},cluster_mode={},almost_raft={}",
+            &log_level, &log_level, &log_level, &log_level, &log_level
+        ))
         .try_init()
         .unwrap();
+    info!("log level: {}", &log_level);
 
+    // for var in env::vars() {
+    //     info!("var:{:?}", var);
+    // }
+    // for var in env::vars_os() {
+    //     info!("var_os:{:?}", var);
+    // }
+
+    //todo get from k8s itself
+    #[cfg(feature = "cluster")]
+    let service = env::var("app.k8s.service")
+        .ok()
+        .unwrap_or_else(|| "overload".to_string());
+    #[cfg(feature = "cluster")]
+    let namespace = env::var("app.k8s.namespace")
+        .ok()
+        .unwrap_or_else(|| "default".to_string());
+
+    let mut _cluster_up = true;
+    #[cfg(feature = "cluster")]
+    {
+        info!("Running in cluster mode");
+        // initialize cluster
+        // init discovery service
+        let k8s = KubernetesDiscoverService::init(service, namespace).await;
+
+        match k8s {
+            Ok(k8s) => {
+                let discovery_client = DiscoveryClient::new(k8s);
+                tokio::spawn(cluster_mode::start_cluster(
+                    CLUSTER.clone(),
+                    discovery_client,
+                ));
+            }
+            Err(e) => {
+                _cluster_up = false;
+                info!("error initializing kubernetes: {}", e.to_string());
+            }
+        }
+    }
+
+    info!("spawning executor init");
     tokio::spawn(overload::executor::init());
 
     let prometheus_metric = warp::get().and(warp::path("metrics")).map(|| {
@@ -51,11 +118,17 @@ async fn main() {
     });
     let overload_req = warp::post()
         .and(warp::path("test").and(warp::path::end()))
-        .and(warp::body::content_length_limit(1024 * 20))
+        .and(warp::body::content_length_limit(1024 * 1024))
         .and(warp::body::json())
         .and_then(|request: Request| async move {
             HTTP_COUNTER.inc();
-            execute(request).await
+            cfg_if! {
+                if #[cfg(feature = "cluster")] {
+                    execute_cluster(request).await
+                } else {
+                    execute(request).await
+                }
+            }
         });
 
     let stop_req = warp::path!("test" / "stop" / String)
@@ -68,29 +141,120 @@ async fn main() {
             // ()
         });
 
-    warp::serve(prometheus_metric.or(overload_req).or(stop_req).or(history))
-        .run(([0, 0, 0, 0], 3030))
-        .await;
+    #[cfg(feature = "cluster")]
+    let overload_req_secondary = warp::post()
+        .and(
+            warp::path("cluster")
+                .and(warp::path("test"))
+                .and(warp::path::end()),
+        )
+        .and(warp::body::content_length_limit(1024 * 1024))
+        .and(warp::body::json())
+        .and_then(|request: Request| async move {
+            HTTP_COUNTER.inc();
+            execute(request).await
+        });
+
+    // cluster-mode configurations
+    #[cfg(feature = "cluster")]
+    let info = warp::path!("cluster" / "info").and_then(|| {
+        let tmp = CLUSTER.clone();
+        // let mode=cluster_mode;
+        async move { cluster_info(tmp, true).await }
+    });
+    #[cfg(feature = "cluster")]
+    let request_vote = warp::path!("cluster" / "raft" / "request-vote" / String / usize).and_then(
+        |node_id, term| {
+            let tmp = CLUSTER.clone();
+            // let mode = cluster_up;
+            async move { cluster_request_vote(tmp, true, node_id, term).await }
+        },
+    );
+
+    #[cfg(feature = "cluster")]
+    let request_vote_response =
+        warp::path!("cluster" / "raft" / "vote" / usize / bool).and_then(|term, vote| {
+            let tmp = CLUSTER.clone();
+            async move { cluster_request_vote_response(tmp, true, term, vote).await }
+        });
+
+    #[cfg(feature = "cluster")]
+    let heartbeat =
+        warp::path!("cluster" / "raft" / "beat" / String / usize).and_then(|leader_node, term| {
+            let tmp = CLUSTER.clone();
+            async move { cluster_heartbeat(tmp, true, leader_node, term).await }
+        });
+
+    let routes = prometheus_metric.or(overload_req).or(stop_req).or(history);
+    #[cfg(feature = "cluster")]
+    let routes = routes
+        .or(info)
+        .or(request_vote)
+        .or(request_vote_response)
+        .or(heartbeat)
+        .or(overload_req_secondary);
+
+    // let test_zero_copy = warp::post()
+    //     .and(
+    //         warp::path("zero")
+    //             .and(warp::path("copy"))
+    //             .and(warp::path::end()),
+    //     )
+    //     .and(warp::body::bytes())
+    //     .and_then(|zc: Bytes| async move { zero_copy_async(zc).await });
+    // .map(|zc: Bytes| {
+    //     let zc= serde_json::from_slice::<ZC>(zc.as_ref());
+    //     format!("ACK: {:?}", zc)
+    // });
+
+    warp::serve(routes).run(([0, 0, 0, 0], 3030)).await;
 }
 
+// #[derive(Debug, serde::Deserialize, serde::Serialize)]
+// struct ZC<'a> {
+//     #[serde(borrow)]
+//     pub id: &'a str,
+//     // pub id: Cow<'a, str>,
+//     #[serde(borrow)]
+//     // pub other: Cow<'a, [u8]>,-features
+//     pub other: &'a [u8],
+// }
+//
+// async fn zero_copy_async(option: Bytes) -> Result<impl Reply, Infallible> {
+//     // option.as_ref().to_owned();
+//     // let zc = serde_json::from_slice::<ZC>(&option.as_ref().to_owned()).unwrap();
+//     // format!("ACK: {:?}", zc)
+//     tokio::spawn(some_shit(option));
+//     Ok(warp::reply::json(&"{}"))
+// }
+
+// async fn some_shit(zc: Bytes) {
+//     let zc = serde_json::from_slice::<ZC>(zc.as_ref()).unwrap();
+//     println!("{:?}", &zc);
+// }
+
 async fn all_job(option: PagerOptions) -> Result<impl Reply, Infallible> {
+    trace!("req: all_job: {:?}", &option);
     let status = handle_history_all(option.offset.unwrap_or(0), option.limit.unwrap_or(20)).await;
+    trace!("resp: all_job: {:?}", &status);
     Ok(warp::reply::json(&status))
 }
 
-// async fn execute<R, Q>(request: OverloadRequest<R, Q>) -> Result<impl Reply, Infallible>
-//     where
-//         R: ReqSpec + Iterator<Item=HttpReq> + Serialize + Clone,
-//         Q: QPSSpec + Iterator<Item=i32> + Serialize + Copy,
-// {
-//     let json = warp::reply::json(&request);
-//     overload::executor::execute(request).await;
-//     Ok(json)
-// }
-
+// #[cfg(not(feature = "cluster"))]
 async fn execute(request: Request) -> Result<impl Reply, Infallible> {
+    trace!("req: execute: {:?}", &request);
     let response = overload::http::handle_request(request).await;
     let json = warp::reply::json(&response);
+    trace!("resp: execute: {:?}", &response);
+    Ok(json)
+}
+
+#[cfg(feature = "cluster")]
+async fn execute_cluster(request: Request) -> Result<impl Reply, Infallible> {
+    trace!("req: execute_cluster: {:?}", &request);
+    let response = overload::http::handle_request_cluster(request, CLUSTER.clone()).await;
+    let json = warp::reply::json(&response);
+    trace!("resp: execute_cluster: {:?}", &response);
     Ok(json)
 }
 
@@ -99,58 +263,89 @@ async fn stop(job_id: String) -> Result<impl Reply, Infallible> {
     let json = warp::reply::json(&resp);
     Ok(json)
 }
-
-#[cfg(test)]
-mod test {
-    #![allow(unused_imports)]
-
-    use futures_util::future::{self, ok};
-    use k8s_openapi::api::core::v1::ReadNamespacedEndpointsOptional;
-    use k8s_openapi::ListOptional;
-    use kube::{Client, Config};
-    use tdigest::TDigest;
-    use tokio_test::{assert_ready, assert_ready_ok, task};
-    use url::Url;
-
-    #[test]
-    #[ignore]
-    fn digest_test() {
-        let t = TDigest::new_with_size(100);
-        let values: Vec<f64> = (1..=10).map(f64::from).collect();
-
-        let t = t.merge_unsorted(values);
-
-        let ans = t.estimate_quantile(0.99);
-        println!("{}", ans);
-        let expected: f64 = 990_000.0;
-        let percentage: f64 = (expected - ans).abs() / expected;
-        assert!(percentage < 0.01);
+#[cfg(feature = "cluster")]
+async fn cluster_info(cluster: Arc<Cluster>, cluster_mode: bool) -> Result<impl Reply, Infallible> {
+    if !cluster_mode {
+        let err = no_cluster_err();
+        Ok(err)
+    } else {
+        let info = get_cluster_info(cluster).await;
+        // let json = warp::reply::json(&info);
+        let json = warp::reply::with_status(warp::reply::json(&info), StatusCode::OK);
+        Ok(json)
     }
+}
 
-    #[test]
-    #[ignore]
-    fn merge_digest_test() {
-        let v1 = vec![37.0, 57.0, 73.0, 90.0, 99.0];
-        let v2 = vec![28.0, 34.0, 74.0, 97.0, 106.0];
-        let v3 = vec![15.0, 34.0, 37.0, 39.0, 86.0];
-        let v6 = vec![8.0, 32.0, 70.0, 86.0, 93.0];
-        let v4 = vec![39.0, 69.0, 82.0, 94.0, 100.0];
-        let v5 = vec![71.0, 80.0, 91.0, 98.0, 100.0];
-        let v10 = vec![62.0, 79.0, 88.0, 88.0, 94.0];
-        let v7 = vec![6.0, 13.0, 18.0, 47.0, 98.0];
-        let v8 = vec![8.0, 29.0, 50.0, 66.0, 90.0];
-        let v9 = vec![47.0, 58.0, 66.0, 71.0, 93.0];
-        let digest = TDigest::new_with_size(100)
-            .merge_unsorted(v1)
-            .merge_unsorted(v2)
-            .merge_unsorted(v3)
-            .merge_unsorted(v4)
-            .merge_unsorted(v5)
-            .merge_unsorted(v6)
-            .merge_unsorted(v7)
-            .merge_unsorted(v8)
-            .merge_unsorted(v9)
-            .merge_unsorted(v10);
-        assert_eq!(digest.estimate_quantile(0.99), 94.0)
+#[cfg(feature = "cluster")]
+async fn cluster_request_vote(
+    cluster: Arc<Cluster>,
+    cluster_mode: bool,
+    requester_node_id: String,
+    term: usize,
+) -> Result<impl Reply, Infallible> {
+    trace!(
+        "req: cluster_request_vote: requester: {}, term: {}",
+        &requester_node_id,
+        &term
+    );
+    if !cluster_mode {
+        let err = no_cluster_err();
+        Ok(err)
+    } else {
+        cluster
+            .accept_raft_request_vote(requester_node_id, term)
+            .await;
+        let json = warp::reply::with_status(warp::reply::json(&Value::Null), StatusCode::OK);
+        Ok(json)
     }
+}
+
+#[cfg(feature = "cluster")]
+async fn cluster_request_vote_response(
+    cluster: Arc<Cluster>,
+    cluster_mode: bool,
+    term: usize,
+    vote: bool,
+) -> Result<impl Reply, Infallible> {
+    trace!(
+        "req: cluster_request_vote_response: term: {}, vote: {}",
+        &term,
+        &vote
+    );
+    if !cluster_mode {
+        let err = no_cluster_err();
+        Ok(err)
+    } else {
+        cluster.accept_raft_request_vote_resp(term, vote).await;
+        let json = warp::reply::with_status(warp::reply::json(&Value::Null), StatusCode::OK);
+        Ok(json)
+    }
+}
+
+#[cfg(feature = "cluster")]
+async fn cluster_heartbeat(
+    cluster: Arc<Cluster>,
+    cluster_mode: bool,
+    leader_node_id: String,
+    term: usize,
+) -> Result<impl Reply, Infallible> {
+    trace!(
+        "req: cluster_heartbeat: leader: {}, term: {}",
+        &leader_node_id,
+        &term
+    );
+    if !cluster_mode {
+        let err = no_cluster_err();
+        Ok(err)
+    } else {
+        cluster.accept_raft_heartbeat(leader_node_id, term).await;
+        let json = warp::reply::with_status(warp::reply::json(&Value::Null), StatusCode::OK);
+        Ok(json)
+    }
+}
+
+#[cfg(feature = "cluster")]
+fn no_cluster_err() -> WithStatus<Json> {
+    let error_msg: Value = serde_json::from_str("{\"error\":\"Cluster is not running\"}").unwrap();
+    warp::reply::with_status(warp::reply::json(&error_msg), StatusCode::NOT_FOUND)
 }

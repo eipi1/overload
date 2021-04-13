@@ -1,4 +1,4 @@
-use crate::generator::{ConstantQPS, Linear, RequestGenerator};
+use crate::generator::{ArrayQPS, ConstantQPS, Linear, RequestGenerator};
 use crate::HttpReq;
 use serde::{Deserialize, Serialize};
 
@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 pub(crate) enum QPSSpec {
     ConstantQPS(ConstantQPS),
     Linear(Linear),
+    ArrayQPS(ArrayQPS),
 }
 
 /// Describe the request, for example
@@ -48,6 +49,9 @@ impl Into<RequestGenerator> for Request {
                 RequestGenerator::new(self.duration, self.req, Box::new(_qps))
             }
             QPSSpec::Linear(_qps) => RequestGenerator::new(self.duration, self.req, Box::new(_qps)),
+            QPSSpec::ArrayQPS(_qps) => {
+                RequestGenerator::new(self.duration, self.req, Box::new(_qps))
+            }
         }
     }
 }
@@ -63,6 +67,7 @@ mod test {
     use crate::generator::{request_generator_stream, ConstantQPS, RequestGenerator};
     use crate::http::request::{QPSSpec, Request};
     use crate::{HttpReq, ReqMethod};
+    use uuid::Uuid;
 
     #[test]
     fn test_enum_serde() {
@@ -100,7 +105,8 @@ mod test {
             qps = _qps.qps;
         }
 
-        let generator = RequestGenerator::new(3, req.req, Box::new(ConstantQPS { qps: qps as u32 }));
+        let generator =
+            RequestGenerator::new(3, req.req, Box::new(ConstantQPS { qps: qps as u32 }));
         request_generator_stream(generator);
     }
 
@@ -108,6 +114,7 @@ mod test {
         Request {
             // req: ReqSpecType::SingleReqSpec { req: HttpReq { body: None, url: "example.com".to_string(), method: ReqMethod::GET } },
             req: vec![HttpReq {
+                id: Uuid::new_v4().to_string(),
                 body: None,
                 url: "example.com".to_string(),
                 method: ReqMethod::GET,
