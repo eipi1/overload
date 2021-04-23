@@ -1,0 +1,41 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: overload
+  name: overload
+  namespace: default
+spec:
+  replicas: 4
+  selector:
+    matchLabels:
+      app: overload
+  template:
+    metadata:
+      labels:
+        app: overload
+    spec:
+      containers:
+        - image: 10.1.64.1:5000/overload-cluster
+          imagePullPolicy: "Always"
+          name: overload
+          ports:
+            - containerPort: 3030
+          env:
+            - name: log.level
+              value: "trace"
+            - name: RUST_BACKTRACE
+              value: "1"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: overload
+spec:
+  type: LoadBalancer
+  selector:
+    app: overload
+  ports:
+    - protocol: TCP
+      port: 3030
+      targetPort: 3030
