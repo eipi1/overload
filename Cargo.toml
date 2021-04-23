@@ -16,15 +16,15 @@ name = "overload"
 path = "src/overload/lib.rs"
 
 [dependencies.rust-cloud-discovery]
-git = "https://github.com/eipi1/rust-cloud-discovery"
+version = "0.1"
 optional = true
 
 [dependencies.cloud-discovery-kubernetes]
-git = "https://github.com/eipi1/cloud-discovery-kubernetes"
+version = "0.1"
 optional = true
 
 [dependencies.cluster-mode]
-git = "https://github.com/eipi1/cluster-mode"
+version = "0.1"
 optional = true
 
 [dependencies.bytes]
