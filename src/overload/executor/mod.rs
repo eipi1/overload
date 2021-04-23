@@ -1,3 +1,5 @@
+#![allow(clippy::upper_case_acronyms)]
+
 #[cfg(feature = "cluster")]
 pub mod cluster;
 
@@ -11,7 +13,7 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 
 use hyper::client::{Client, HttpConnector, ResponseFuture};
-use hyper::{Body, Error, Method, Request};
+use hyper::{Body, Error, Request};
 
 use lazy_static::lazy_static;
 use prometheus::{
@@ -30,12 +32,15 @@ use tokio::sync::RwLock;
 use tokio_stream::StreamExt;
 use tracing::{error, info, trace};
 
-use super::{HttpReq, ReqMethod};
+use super::HttpReq;
 use crate::generator::{request_generator_stream, RequestGenerator};
 use crate::JobStatus;
 use futures_util::future::BoxFuture;
 use futures_util::stream::FuturesUnordered;
 use futures_util::FutureExt;
+use http::header::HeaderName;
+use http::HeaderValue;
+use std::str::FromStr;
 
 #[allow(dead_code)]
 enum HttpRequestState {
@@ -110,8 +115,9 @@ impl Future for HttpRequestFuture<'_> {
                         self.status = Some(response.status().to_string());
                         let elapsed = self.timer.unwrap().elapsed().as_millis() as f64;
                         trace!(
-                            "HttpRequestFuture [{}] - request - Ready - Ok, elapsed={}",
+                            "HttpRequestFuture [{}] - request - Ready - Ok, status: {:?}, elapsed={}",
                             &self.job_id,
+                            &self.status,
                             &elapsed
                         );
                         //todo move outside
@@ -140,15 +146,6 @@ impl Future for HttpRequestFuture<'_> {
                     }
                 }
             }
-        }
-    }
-}
-
-impl Into<Method> for ReqMethod {
-    fn into(self) -> Method {
-        match self {
-            ReqMethod::POST => Method::POST,
-            _ => Method::GET,
         }
     }
 }
@@ -261,11 +258,17 @@ async fn send_requests(
     let mut request_futures = FuturesUnordered::new();
     for _ in 1..=count {
         //todo remove unwrap
-        let request = Request::builder()
+        let mut request = Request::builder()
             .uri(req.url.as_str())
-            .method(req.method.clone())
-            .body(body.clone().into())
-            .unwrap();
+            .method(req.method.clone());
+        let headers = request.headers_mut().unwrap();
+        for (k, v) in req.headers.iter() {
+            headers.insert(
+                HeaderName::from_str(k.clone().as_str()).unwrap(),
+                HeaderValue::from_str(v.clone().as_str()).unwrap(),
+            );
+        }
+        let request = request.body(body.clone().into()).unwrap();
         let request = client.request(request);
         // request_futures.push(request);
         request_futures.push(HttpRequestFuture {

@@ -15,8 +15,8 @@ use cluster_mode::{get_cluster_info, Cluster};
 #[cfg(feature = "cluster")]
 use http::StatusCode;
 use log::{info, trace};
-use overload::http::handle_history_all;
-use overload::http::request::{PagerOptions, Request};
+use overload::http_util::handle_history_all;
+use overload::http_util::request::{PagerOptions, Request};
 #[cfg(feature = "cluster")]
 use rust_cloud_discovery::DiscoveryClient;
 #[cfg(feature = "cluster")]
@@ -243,7 +243,7 @@ async fn all_job(option: PagerOptions) -> Result<impl Reply, Infallible> {
 // #[cfg(not(feature = "cluster"))]
 async fn execute(request: Request) -> Result<impl Reply, Infallible> {
     trace!("req: execute: {:?}", &request);
-    let response = overload::http::handle_request(request).await;
+    let response = overload::http_util::handle_request(request).await;
     let json = warp::reply::json(&response);
     trace!("resp: execute: {:?}", &response);
     Ok(json)
@@ -252,14 +252,14 @@ async fn execute(request: Request) -> Result<impl Reply, Infallible> {
 #[cfg(feature = "cluster")]
 async fn execute_cluster(request: Request) -> Result<impl Reply, Infallible> {
     trace!("req: execute_cluster: {:?}", &request);
-    let response = overload::http::handle_request_cluster(request, CLUSTER.clone()).await;
+    let response = overload::http_util::handle_request_cluster(request, CLUSTER.clone()).await;
     let json = warp::reply::json(&response);
     trace!("resp: execute_cluster: {:?}", &response);
     Ok(json)
 }
 
 async fn stop(job_id: String) -> Result<impl Reply, Infallible> {
-    let resp = overload::http::stop(job_id).await;
+    let resp = overload::http_util::stop(job_id).await;
     let json = warp::reply::json(&resp);
     Ok(json)
 }

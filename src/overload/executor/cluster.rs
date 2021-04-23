@@ -10,7 +10,7 @@ use tokio_stream::StreamExt;
 
 use super::HttpReq;
 use crate::generator::{request_generator_stream, ArrayQPS, RequestGenerator};
-use crate::http::request::QPSSpec;
+use crate::http_util::request::QPSSpec;
 use crate::JobStatus;
 use cluster_mode::{Cluster, RestClusterNode};
 use futures_util::stream::FuturesUnordered;
@@ -61,7 +61,7 @@ pub async fn cluster_execute_request_generator(
                 if len == 0 {
                     error!("No secondary. Stopping the job");
                     let mut guard = super::JOB_STATUS.write().await;
-                    guard.insert(job_id.clone(),JobStatus::Stopped);
+                    guard.insert(job_id.clone(), JobStatus::Stopped);
                     continue;
                 }
                 let (qps, reminder, mut requests) =
@@ -148,12 +148,12 @@ fn to_test_request(
     qps: &[u32],
     req: Vec<HttpReq>,
     job_id: String,
-) -> crate::http::request::Request {
+) -> crate::http_util::request::Request {
     let duration = qps.len() as u32;
     let qps = ArrayQPS::new(Vec::from(qps));
     let qps = QPSSpec::ArrayQPS(qps);
 
-    crate::http::request::Request {
+    crate::http_util::request::Request {
         name: Some(job_id),
         duration,
         req,
@@ -192,7 +192,7 @@ mod test {
         calculate_req_per_secondary, cluster_execute_request_generator,
     };
     use crate::generator::{ConstantQPS, RequestGenerator};
-    use crate::{HttpReq, ReqMethod};
+    use crate::HttpReq;
     use cluster_mode::{Cluster, InstanceMode, RestClusterNode};
     use rust_cloud_discovery::ServiceInstance;
     use std::collections::{HashMap, HashSet};
@@ -245,11 +245,6 @@ mod test {
     fn http_req_random() -> HttpReq {
         let r = rand::random::<u8>();
         let uri = format!("http://httpbin.org/anything/{}", r);
-        HttpReq {
-            id: Uuid::new_v4().to_string(),
-            method: ReqMethod::GET,
-            url: uri,
-            body: None,
-        }
+        HttpReq::new(uri)
     }
 }

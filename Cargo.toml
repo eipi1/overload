@@ -5,8 +5,9 @@ authors = ["Md Sarowar Alam <sarowar.cse@gmail.com>"]
 edition = "2018"
 license = "MIT"
 readme = "README.md"
+repository = "https://github.com/eipi1/overload"
 description = """
-An implementation of Raft leader election
+An util to overload API with requests
 """
 categories = ["development-tools"]
 keywords = ["load-testing", "cluster"]
@@ -64,6 +65,9 @@ version = "1.0"
 features = ["derive"]
 
 [dependencies.serde_json]
+version = "1.0"
+
+[dependencies.http-serde]
 version = "1.0"
 
 [dependencies.uuid]

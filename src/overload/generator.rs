@@ -1,3 +1,5 @@
+#![allow(clippy::upper_case_acronyms)]
+
 use std::cmp::min;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -27,7 +29,7 @@ pub struct RequestGenerator {
     total: u32,
     // requests generated so far, initially 0
     current_count: u32,
-    // http requests
+    // http_util requests
     requests: Vec<HttpReq>,
     qps_scheme: Box<dyn QPSScheme + Send>,
 }
@@ -61,9 +63,7 @@ pub struct ArrayQPS {
 
 impl ArrayQPS {
     pub fn new(qps: Vec<u32>) -> Self {
-        Self{
-            qps
-        }
+        Self { qps }
     }
 }
 
@@ -156,13 +156,13 @@ pub struct Linear {
 
 impl QPSScheme for Linear {
     fn next(&self, nth: u32, _last_qps: Option<u32>) -> u32 {
-        min((self.a * nth as f32).ceil()  as u32 + self.b, self.max)
+        min((self.a * nth as f32).ceil() as u32 + self.b, self.max)
     }
 }
 
 #[cfg(test)]
 mod test {
-    use std::time::{Duration};
+    use std::time::Duration;
 
     use tokio::time;
     use tokio_stream::StreamExt;
@@ -171,7 +171,8 @@ mod test {
     use crate::generator::{
         request_generator_stream, ConstantQPS, RequestGenerator, MAX_REQ_RET_SIZE,
     };
-    use crate::{HttpReq, ReqMethod};
+    use crate::HttpReq;
+    use std::collections::HashMap;
     use uuid::Uuid;
 
     #[tokio::test]
@@ -200,7 +201,7 @@ mod test {
             assert_eq!(arg.0, 3);
             assert_eq!(arg.1.len(), 1);
             if let Some(req) = arg.1.get(0) {
-                assert_eq!(req.method, ReqMethod::GET);
+                assert_eq!(req.method, http::Method::GET);
             }
         } else {
             panic!()
@@ -257,9 +258,10 @@ mod test {
     fn test_http_req() -> HttpReq {
         HttpReq {
             id: Uuid::new_v4().to_string(),
-            method: ReqMethod::GET,
+            method: http::Method::GET,
             url: "http://example.com".to_string(),
             body: None,
+            headers: HashMap::new(),
         }
     }
 }
