@@ -47,12 +47,18 @@ features = ["rt-multi-thread", "macros"]
 [dependencies.tokio-stream]
 version = "0.1"
 
+[dependencies.native-tls]
+version = "0.2"
+
 [dependencies.http]
 version = "0.2"
 
 [dependencies.hyper]
 version = "0.14"
 features = ["runtime", "http1", "http2", "client", "stream"]
+
+[dependencies.hyper-tls]
+version = "0.5"
 
 [dependencies.warp]
 version = "0.3"

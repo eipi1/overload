@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 
 use hyper::client::{Client, HttpConnector, ResponseFuture};
-use hyper::{Body, Error, Request};
+use hyper::{Error, Request};
 
 use lazy_static::lazy_static;
 use prometheus::{
@@ -40,6 +40,8 @@ use futures_util::stream::FuturesUnordered;
 use futures_util::FutureExt;
 use http::header::HeaderName;
 use http::HeaderValue;
+use hyper_tls::HttpsConnector;
+use native_tls::TlsConnector;
 use std::str::FromStr;
 
 #[allow(dead_code)]
@@ -210,7 +212,7 @@ pub async fn init() {
 pub async fn execute_request_generator(request: RequestGenerator, job_id: String) {
     let stream = request_generator_stream(request);
     tokio::pin!(stream);
-    let client = Arc::new(Client::new());
+    let client = Arc::new(build_client());
     {
         let mut write_guard = JOB_STATUS.write().await;
         write_guard.insert(job_id.clone(), JobStatus::InProgress);
@@ -245,7 +247,7 @@ pub async fn execute_request_generator(request: RequestGenerator, job_id: String
 
 async fn send_requests(
     req: HttpReq,
-    client: Arc<Client<HttpConnector, Body>>,
+    client: Arc<Client<HttpsConnector<HttpConnector>>>,
     count: i32,
     job_id: String,
 ) {
@@ -303,7 +305,7 @@ async fn send_requests(
 
 async fn send_multiple_requests(
     requests: Vec<HttpReq>,
-    client: Arc<Client<HttpConnector, Body>>,
+    client: Arc<Client<HttpsConnector<HttpConnector>>>,
     count: u32,
     job_id: String,
 ) {
@@ -374,6 +376,18 @@ pub(crate) async fn get_job_status(offset: usize, limit: usize) -> HashMap<Strin
         }
     }
     job_status
+}
+
+fn build_client() -> Client<HttpsConnector<HttpConnector>> {
+    let tls = TlsConnector::builder()
+        .danger_accept_invalid_hostnames(true)
+        .danger_accept_invalid_certs(true)
+        .build()
+        .unwrap();
+    let mut http_connector = HttpConnector::new();
+    http_connector.enforce_http(false);
+    let connector = HttpsConnector::from((http_connector, tls.into()));
+    Client::builder().build(connector)
 }
 
 #[cfg(test)]
