@@ -29,7 +29,7 @@ pub struct RequestGenerator {
     total: u32,
     // requests generated so far, initially 0
     current_count: u32,
-    // http_util requests
+    // http requests
     requests: Vec<HttpReq>,
     qps_scheme: Box<dyn QPSScheme + Send>,
 }
@@ -104,7 +104,6 @@ impl RequestGenerator {
 }
 
 impl Stream for RequestGenerator {
-    // impl<Q> Stream for RequestGenerator<Q> {
     type Item = (u32, Vec<HttpReq>);
 
     fn poll_next(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {

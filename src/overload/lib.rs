@@ -7,9 +7,9 @@ pub mod http_util;
 use http::Method;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
-use std::fmt::Display;
 use std::fmt;
+use std::fmt::Display;
+use std::hash::{Hash, Hasher};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HttpReq {
@@ -89,16 +89,6 @@ pub struct Response {
 impl Response {
     pub fn new(job_id: String, status: JobStatus) -> Self {
         Response { job_id, status }
-    }
-}
-
-#[macro_export]
-macro_rules! cfg_cluster {
-    ($($item:item)*) => {
-        $(
-            #[cfg(feature = "cluster")]
-            $item
-        )*
     }
 }
 

@@ -17,15 +17,7 @@ use hyper::{Error, Request};
 
 use lazy_static::lazy_static;
 use prometheus::{
-    // labels,
-    linear_buckets,
-    // opts, register_counter, register_gauge_vec,
-    register_histogram_vec,
-    register_int_counter_vec,
-    // TextEncoder,
-    // Counter, Encoder, exponential_buckets, GaugeVec,
-    HistogramVec,
-    IntCounterVec,
+    linear_buckets, register_histogram_vec, register_int_counter_vec, HistogramVec, IntCounterVec,
 };
 
 use tokio::sync::RwLock;
@@ -289,18 +281,6 @@ async fn send_requests(
     while let Some(_resp) = request_futures.next().await {
         trace!("Request completed");
     }
-    // loop {
-    //     let option = request_futures.next().await;
-    //     if option.is_some(){
-    //         debug!("Request completed");
-    //         // break;
-    //     }else {
-    //         debug!("Request returned None");
-    //         break;
-    //     }
-    // }
-    // while request_futures.next().await.is_some() {}
-    // request_futures.next().await;
 }
 
 async fn send_multiple_requests(
@@ -411,6 +391,5 @@ mod test {
         let generator = RequestGenerator::new(3, Vec::new(), Box::new(ConstantQPS { qps: 3 }));
         let stream = request_generator_stream(generator);
         tokio::pin!(stream);
-        // execute_request_generator_stream(stream);
     }
 }

@@ -5,7 +5,6 @@ use crate::HttpReq;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
-// #[serde(tag = "type", content = "spec", rename_all = "camelCase")]
 pub(crate) enum QPSSpec {
     ConstantQPS(ConstantQPS),
     Linear(Linear),
@@ -115,7 +114,6 @@ mod test {
 
     fn sample_request() -> Request {
         Request {
-            // req: ReqSpecType::SingleReqSpec { req: HttpReq { body: None, url: "example.com".to_string(), method: ReqMethod::GET } },
             req: vec![HttpReq {
                 id: Uuid::new_v4().to_string(),
                 body: None,

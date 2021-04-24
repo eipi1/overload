@@ -66,7 +66,6 @@ async fn forward_test_request(
     cluster: Arc<Cluster>,
     client: Client<HttpConnector>,
 ) -> anyhow::Result<Response> {
-    // let primaries = cluster.primaries().await.iter().next();
     let primaries = cluster
         .primaries()
         .await

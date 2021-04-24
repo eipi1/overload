@@ -173,12 +173,9 @@ fn calculate_req_per_secondary(
     let mut qps_reminders = vec![];
     let mut req_to_secondaries = HashSet::new();
 
-    // let mut  req_reminders = vec![];
     for (qps, requests) in requests {
         let q = qps / n_secondary as u32;
         let r = qps % n_secondary as u32;
-        // let q_req = requests.len() / n_secondary;
-        // let r_req = requests.len() % n_secondary;
         qps_to_secondaries.push(q);
         qps_reminders.push(r);
         req_to_secondaries.extend(requests);
