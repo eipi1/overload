@@ -1,3 +1,5 @@
+#![allow(clippy::upper_case_acronyms)]
+
 #[cfg(feature = "cluster")]
 pub mod cluster;
 
@@ -11,31 +13,28 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 
 use hyper::client::{Client, HttpConnector, ResponseFuture};
-use hyper::{Body, Error, Method, Request};
+use hyper::{Error, Request};
 
 use lazy_static::lazy_static;
 use prometheus::{
-    // labels,
-    linear_buckets,
-    // opts, register_counter, register_gauge_vec,
-    register_histogram_vec,
-    register_int_counter_vec,
-    // TextEncoder,
-    // Counter, Encoder, exponential_buckets, GaugeVec,
-    HistogramVec,
-    IntCounterVec,
+    linear_buckets, register_histogram_vec, register_int_counter_vec, HistogramVec, IntCounterVec,
 };
 
 use tokio::sync::RwLock;
 use tokio_stream::StreamExt;
 use tracing::{error, info, trace};
 
-use super::{HttpReq, ReqMethod};
+use super::HttpReq;
 use crate::generator::{request_generator_stream, RequestGenerator};
 use crate::JobStatus;
 use futures_util::future::BoxFuture;
 use futures_util::stream::FuturesUnordered;
 use futures_util::FutureExt;
+use http::header::HeaderName;
+use http::HeaderValue;
+use hyper_tls::HttpsConnector;
+use native_tls::TlsConnector;
+use std::str::FromStr;
 
 #[allow(dead_code)]
 enum HttpRequestState {
@@ -110,8 +109,9 @@ impl Future for HttpRequestFuture<'_> {
                         self.status = Some(response.status().to_string());
                         let elapsed = self.timer.unwrap().elapsed().as_millis() as f64;
                         trace!(
-                            "HttpRequestFuture [{}] - request - Ready - Ok, elapsed={}",
+                            "HttpRequestFuture [{}] - request - Ready - Ok, status: {:?}, elapsed={}",
                             &self.job_id,
+                            &self.status,
                             &elapsed
                         );
                         //todo move outside
@@ -140,15 +140,6 @@ impl Future for HttpRequestFuture<'_> {
                     }
                 }
             }
-        }
-    }
-}
-
-impl Into<Method> for ReqMethod {
-    fn into(self) -> Method {
-        match self {
-            ReqMethod::POST => Method::POST,
-            _ => Method::GET,
         }
     }
 }
@@ -213,7 +204,7 @@ pub async fn init() {
 pub async fn execute_request_generator(request: RequestGenerator, job_id: String) {
     let stream = request_generator_stream(request);
     tokio::pin!(stream);
-    let client = Arc::new(Client::new());
+    let client = Arc::new(build_client());
     {
         let mut write_guard = JOB_STATUS.write().await;
         write_guard.insert(job_id.clone(), JobStatus::InProgress);
@@ -248,7 +239,7 @@ pub async fn execute_request_generator(request: RequestGenerator, job_id: String
 
 async fn send_requests(
     req: HttpReq,
-    client: Arc<Client<HttpConnector, Body>>,
+    client: Arc<Client<HttpsConnector<HttpConnector>>>,
     count: i32,
     job_id: String,
 ) {
@@ -261,11 +252,17 @@ async fn send_requests(
     let mut request_futures = FuturesUnordered::new();
     for _ in 1..=count {
         //todo remove unwrap
-        let request = Request::builder()
+        let mut request = Request::builder()
             .uri(req.url.as_str())
-            .method(req.method.clone())
-            .body(body.clone().into())
-            .unwrap();
+            .method(req.method.clone());
+        let headers = request.headers_mut().unwrap();
+        for (k, v) in req.headers.iter() {
+            headers.insert(
+                HeaderName::from_str(k.clone().as_str()).unwrap(),
+                HeaderValue::from_str(v.clone().as_str()).unwrap(),
+            );
+        }
+        let request = request.body(body.clone().into()).unwrap();
         let request = client.request(request);
         // request_futures.push(request);
         request_futures.push(HttpRequestFuture {
@@ -284,23 +281,11 @@ async fn send_requests(
     while let Some(_resp) = request_futures.next().await {
         trace!("Request completed");
     }
-    // loop {
-    //     let option = request_futures.next().await;
-    //     if option.is_some(){
-    //         debug!("Request completed");
-    //         // break;
-    //     }else {
-    //         debug!("Request returned None");
-    //         break;
-    //     }
-    // }
-    // while request_futures.next().await.is_some() {}
-    // request_futures.next().await;
 }
 
 async fn send_multiple_requests(
     requests: Vec<HttpReq>,
-    client: Arc<Client<HttpConnector, Body>>,
+    client: Arc<Client<HttpsConnector<HttpConnector>>>,
     count: u32,
     job_id: String,
 ) {
@@ -373,6 +358,18 @@ pub(crate) async fn get_job_status(offset: usize, limit: usize) -> HashMap<Strin
     job_status
 }
 
+fn build_client() -> Client<HttpsConnector<HttpConnector>> {
+    let tls = TlsConnector::builder()
+        .danger_accept_invalid_hostnames(true)
+        .danger_accept_invalid_certs(true)
+        .build()
+        .unwrap();
+    let mut http_connector = HttpConnector::new();
+    http_connector.enforce_http(false);
+    let connector = HttpsConnector::from((http_connector, tls.into()));
+    Client::builder().build(connector)
+}
+
 #[cfg(test)]
 mod test {
     #![allow(unused_imports)]
@@ -394,6 +391,5 @@ mod test {
         let generator = RequestGenerator::new(3, Vec::new(), Box::new(ConstantQPS { qps: 3 }));
         let stream = request_generator_stream(generator);
         tokio::pin!(stream);
-        // execute_request_generator_stream(stream);
     }
 }

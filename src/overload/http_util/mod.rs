@@ -3,10 +3,10 @@ pub mod request;
 #[cfg(feature = "cluster")]
 use crate::executor::cluster;
 use crate::executor::{execute_request_generator, get_job_status, send_stop_signal};
-use crate::http::request::Request;
-use crate::{JobStatus, Response};
+use crate::http_util::request::Request;
 #[cfg(feature = "cluster")]
 use crate::ErrorCode;
+use crate::{JobStatus, Response};
 #[cfg(feature = "cluster")]
 use cluster_mode::Cluster;
 #[cfg(feature = "cluster")]
@@ -14,14 +14,14 @@ use hyper::client::HttpConnector;
 #[cfg(feature = "cluster")]
 use hyper::{Body, Client};
 #[cfg(feature = "cluster")]
-use log::{trace, error};
+use log::{error, trace};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::hash_map::RandomState;
 use std::collections::HashMap;
 #[cfg(feature = "cluster")]
 use std::sync::Arc;
 use uuid::Uuid;
-use regex::Regex;
 
 pub async fn handle_request(request: Request) -> Response {
     let job_id = job_id(&request);
@@ -47,12 +47,17 @@ pub async fn handle_request_cluster(request: Request, cluster: Arc<Cluster>) -> 
     } else {
         //forward request to primary
         let client = Client::new();
-        let job_id = request.name.clone().unwrap_or_else(|| "unknown_job".to_string());
+        let job_id = request
+            .name
+            .clone()
+            .unwrap_or_else(|| "unknown_job".to_string());
         match forward_test_request(request, cluster, client).await {
-            Ok(resp) => {resp}
-            Err(err) => {error!("{}", err);unknown_error_resp(job_id)}
+            Ok(resp) => resp,
+            Err(err) => {
+                error!("{}", err);
+                unknown_error_resp(job_id)
+            }
         }
-
     }
 }
 #[cfg(feature = "cluster")]
@@ -61,7 +66,6 @@ async fn forward_test_request(
     cluster: Arc<Cluster>,
     client: Client<HttpConnector>,
 ) -> anyhow::Result<Response> {
-    // let primaries = cluster.primaries().await.iter().next();
     let primaries = cluster
         .primaries()
         .await
@@ -98,10 +102,13 @@ fn job_id(request: &Request) -> String {
         .name
         .clone()
         .map_or(Uuid::new_v4().to_string(), |n| {
-            let uuid = Regex::new(r"\b[0-9a-f]{8}\b-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-\b[0-9a-f]{12}\b$").unwrap();
+            let uuid = Regex::new(
+                r"\b[0-9a-f]{8}\b-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-\b[0-9a-f]{12}\b$",
+            )
+            .unwrap();
             if uuid.is_match(&n) {
                 n
-            }else {
+            } else {
                 let mut name = n;
                 name.push('-');
                 name.push_str(Uuid::new_v4().to_string().as_str());

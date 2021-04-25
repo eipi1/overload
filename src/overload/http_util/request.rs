@@ -1,9 +1,10 @@
+#![allow(clippy::upper_case_acronyms)]
+
 use crate::generator::{ArrayQPS, ConstantQPS, Linear, RequestGenerator};
 use crate::HttpReq;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
-// #[serde(tag = "type", content = "spec", rename_all = "camelCase")]
 pub(crate) enum QPSSpec {
     ConstantQPS(ConstantQPS),
     Linear(Linear),
@@ -65,8 +66,9 @@ pub struct PagerOptions {
 #[cfg(test)]
 mod test {
     use crate::generator::{request_generator_stream, ConstantQPS, RequestGenerator};
-    use crate::http::request::{QPSSpec, Request};
-    use crate::{HttpReq, ReqMethod};
+    use crate::http_util::request::{QPSSpec, Request};
+    use crate::HttpReq;
+    use std::collections::HashMap;
     use uuid::Uuid;
 
     #[test]
@@ -112,12 +114,12 @@ mod test {
 
     fn sample_request() -> Request {
         Request {
-            // req: ReqSpecType::SingleReqSpec { req: HttpReq { body: None, url: "example.com".to_string(), method: ReqMethod::GET } },
             req: vec![HttpReq {
                 id: Uuid::new_v4().to_string(),
                 body: None,
                 url: "example.com".to_string(),
-                method: ReqMethod::GET,
+                method: http::Method::GET,
+                headers: HashMap::new(),
             }],
             qps: QPSSpec::ConstantQPS(ConstantQPS { qps: 1 }),
             duration: 1,

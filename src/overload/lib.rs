@@ -1,25 +1,38 @@
+#![allow(clippy::upper_case_acronyms)]
+
 pub mod executor;
 pub mod generator;
-pub mod http;
+pub mod http_util;
 
+use http::Method;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Display;
 use std::hash::{Hash, Hasher};
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub enum ReqMethod {
-    GET,
-    POST,
-}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HttpReq {
     #[serde(default = "uuid")]
     pub id: String,
-    pub method: ReqMethod,
+    #[serde(with = "http_serde::method")]
+    pub method: Method,
     pub url: String,
     pub body: Option<Vec<u8>>,
+    #[serde(default = "HashMap::new")]
+    pub headers: HashMap<String, String>,
+}
+
+impl HttpReq {
+    pub fn new(url: String) -> Self {
+        HttpReq {
+            id: uuid(),
+            method: http::Method::GET,
+            url,
+            body: None,
+            headers: HashMap::new(),
+        }
+    }
 }
 
 impl Display for HttpReq {
@@ -76,16 +89,6 @@ pub struct Response {
 impl Response {
     pub fn new(job_id: String, status: JobStatus) -> Self {
         Response { job_id, status }
-    }
-}
-
-#[macro_export]
-macro_rules! cfg_cluster {
-    ($($item:item)*) => {
-        $(
-            #[cfg(feature = "cluster")]
-            $item
-        )*
     }
 }
 
