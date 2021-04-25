@@ -1,5 +1,5 @@
 # Overload
-A load testing tool written in Rust
+A distributed load testing utility written in Rust
 
 ## Usage
 Overload support two modes - cluster & standalone
@@ -143,3 +143,52 @@ Enum stating the current status of the test
 | Completed | Job Done |
 | Failed | Some error happened, Couldn't finish executing the job |
 | Error(ErrorCode) | Other error |
+
+### Get Job Status
+Returns status of all jobs.
+
+**Limitation -**
+* Keep status only for 10 minutes, will be cleaned up after that
+* No way to get status by job id
+* Doesn't maintain any kind of sorting
+
+#### Request
+|Spec| Value |
+| --- | -----------
+| Path | /test/status |
+| Method | GET |
+
+#### Query Params
+| field | Description | data type
+| --- | ----------- | ---------
+| offset | start of the page | uint32 |
+| limit | size of the page | uint32 |
+
+#### Response
+| field | Description | data type
+| --- | ----------- | ---------
+| {job_id} | Test job identifier received when test was submitted | string |
+| {status} | current status of the test job | [JobStatus](#jobstatus)
+
+#### Example
+```http request
+GET /test/status?offset=1&limit =1 HTTP/1.1
+Host: localhost:3030
+```
+```json
+{
+    "60de342e-b18c-4837-80d2-a2c71c1985f8": "Completed"
+}
+```
+
+### Stop a job
+#### Request
+|Spec| Value |
+| --- | -----------
+| Path | /test/status/{job_id} |
+| Method | GET |
+
+#### Request Params
+| field | Description | data type
+| --- | ----------- | ---------
+| job_id | id of the test job to be stopped | string |
