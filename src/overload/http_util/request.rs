@@ -1,14 +1,21 @@
 #![allow(clippy::upper_case_acronyms)]
 
-use crate::generator::{ArrayQPS, ConstantQPS, Linear, RequestGenerator};
+use crate::generator::{ArrayQPS, ConstantQPS, Linear, RequestGenerator, RequestSpec, QPSScheme, RequestList, RequestFile};
 use crate::HttpReq;
 use serde::{Deserialize, Serialize};
+use std::fmt::Debug;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) enum QPSSpec {
     ConstantQPS(ConstantQPS),
     Linear(Linear),
     ArrayQPS(ArrayQPS),
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) enum RequestSpecEnum {
+    RequestList(RequestList),
+    RequestFile(RequestFile),
 }
 
 /// Describe the request, for example
@@ -43,17 +50,28 @@ pub struct Request {
     pub(crate) qps: QPSSpec,
 }
 
-impl Into<RequestGenerator> for Request {
+#[derive(Deserialize)]
+pub struct RequestGeneric {
+    pub name: Option<String>,
+    pub(crate) duration: u32,
+    // #[serde(bound = "T: crate::generator::RequestSpec+ serde::Deserialize<'de>")]
+    // pub(crate) req: Box<dyn RequestSpec>,
+    pub(crate) req: RequestSpecEnum,
+    pub(crate) qps: QPSSpec,
+}
+
+impl Into<RequestGenerator> for RequestGeneric {
     fn into(self) -> RequestGenerator {
-        match self.qps {
-            QPSSpec::ConstantQPS(_qps) => {
-                RequestGenerator::new(self.duration, self.req, Box::new(_qps))
-            }
-            QPSSpec::Linear(_qps) => RequestGenerator::new(self.duration, self.req, Box::new(_qps)),
-            QPSSpec::ArrayQPS(_qps) => {
-                RequestGenerator::new(self.duration, self.req, Box::new(_qps))
-            }
-        }
+        let x:Box<dyn QPSScheme+Send> = match self.qps {
+            QPSSpec::ConstantQPS(qps) => { Box::new(qps) }
+            QPSSpec::Linear(qps) => { Box::new(qps) }
+            QPSSpec::ArrayQPS(qps) => { Box::new(qps) }
+        };
+        let req:Box<dyn RequestSpec+Send> = match self.req {
+            RequestSpecEnum::RequestList(req) => { Box::new(req) }
+            RequestSpecEnum::RequestFile(req) => { Box::new(req) }
+        };
+        RequestGenerator::new(self.duration, req , x)
     }
 }
 
@@ -65,8 +83,8 @@ pub struct PagerOptions {
 
 #[cfg(test)]
 mod test {
-    use crate::generator::{request_generator_stream, ConstantQPS, RequestGenerator};
-    use crate::http_util::request::{QPSSpec, Request};
+    use crate::generator::{request_generator_stream, ConstantQPS, RequestGenerator, RequestSpec};
+    use crate::http_util::request::{QPSSpec, Request, RequestGeneric};
     use crate::HttpReq;
     use std::collections::HashMap;
     use uuid::Uuid;
@@ -95,7 +113,34 @@ mod test {
   }
         "#;
         let result = serde_json::from_str::<Request>(req);
+        // let result = serde_json::from_str::<RequestGeneric>(req);
         assert!(result.is_ok())
+    }
+
+    #[test]
+    fn deserialize_str() {
+        let req = r#"
+          {
+            "name": null,
+            "duration": 1,
+            "req":
+            {"RequestList":{
+            "data": [{
+                  "method": "GET",
+                  "url": "example.com",
+                  "body": null
+                }
+            ]
+            }}
+            ,
+            "qps": {
+              "ConstantQPS": {
+                "qps": 1
+              }
+            }
+          }
+        "#;
+        let result:RequestGeneric = serde_json::from_str(req).unwrap();
     }
 
     #[tokio::test]

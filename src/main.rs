@@ -1,12 +1,3 @@
-use std::convert::Infallible;
-use std::env;
-
-use hyper::header::CONTENT_TYPE;
-use hyper::{Body, Response};
-use lazy_static::lazy_static;
-use prometheus::{opts, register_counter, Counter, Encoder, TextEncoder};
-use warp::{Filter, Reply};
-
 use cfg_if::cfg_if;
 #[cfg(feature = "cluster")]
 use cloud_discovery_kubernetes::KubernetesDiscoverService;
@@ -14,17 +5,28 @@ use cloud_discovery_kubernetes::KubernetesDiscoverService;
 use cluster_mode::{get_cluster_info, Cluster};
 #[cfg(feature = "cluster")]
 use http::StatusCode;
+use hyper::header::CONTENT_TYPE;
+use hyper::{Body, Response};
+use lazy_static::lazy_static;
 use log::{info, trace};
+use overload::http_util;
 use overload::http_util::handle_history_all;
 use overload::http_util::request::{PagerOptions, Request};
+use prometheus::{opts, register_counter, Counter, Encoder, TextEncoder};
 #[cfg(feature = "cluster")]
 use rust_cloud_discovery::DiscoveryClient;
 #[cfg(feature = "cluster")]
 use serde_json::Value;
+use std::convert::Infallible;
+use std::env;
+use std::fmt::Debug;
 #[cfg(feature = "cluster")]
 use std::sync::Arc;
+use warp::multipart::FormData;
+use warp::reject::Reject;
 #[cfg(feature = "cluster")]
 use warp::reply::{Json, WithStatus};
+use warp::{Filter, Rejection, Reply};
 
 lazy_static! {
     static ref HTTP_COUNTER: Counter = register_counter!(opts!(
@@ -131,6 +133,15 @@ async fn main() {
             }
         });
 
+    let upload_req_file = warp::post()
+        .and(
+            warp::path("test")
+                .and(warp::path("requests"))
+                .and(warp::path::end()),
+        )
+        .and(warp::multipart::form().max_length(20 * 1024 * 1024))
+        .and_then(upload_req_file);
+
     let stop_req = warp::path!("test" / "stop" / String)
         .and_then(|job_id: String| async move { stop(job_id).await });
 
@@ -185,7 +196,11 @@ async fn main() {
             async move { cluster_heartbeat(tmp, true, leader_node, term).await }
         });
 
-    let routes = prometheus_metric.or(overload_req).or(stop_req).or(history);
+    let routes = prometheus_metric
+        .or(overload_req)
+        .or(stop_req)
+        .or(history)
+        .or(upload_req_file);
     #[cfg(feature = "cluster")]
     let routes = routes
         .or(info)
@@ -238,6 +253,17 @@ async fn all_job(option: PagerOptions) -> Result<impl Reply, Infallible> {
     let status = handle_history_all(option.offset.unwrap_or(0), option.limit.unwrap_or(20)).await;
     trace!("resp: all_job: {:?}", &status);
     Ok(warp::reply::json(&status))
+}
+
+async fn upload_req_file(form: FormData) -> Result<impl Reply, Rejection> {
+    trace!("req: upload_req_file");
+    let result = http_util::upload_file(form).await;
+    match result {
+        Ok(resp) => {
+            Ok(warp::reply::json(&resp))
+        }
+        Err(e) => Err(warp::reject::custom(Rejectable{err:e})),
+    }
 }
 
 // #[cfg(not(feature = "cluster"))]
@@ -349,3 +375,9 @@ fn no_cluster_err() -> WithStatus<Json> {
     let error_msg: Value = serde_json::from_str("{\"error\":\"Cluster is not running\"}").unwrap();
     warp::reply::with_status(warp::reply::json(&error_msg), StatusCode::NOT_FOUND)
 }
+
+#[derive(Debug)]
+struct Rejectable<T> {
+    err: T,
+}
+impl<T: Debug + Sync + Send + 'static> Reject for Rejectable<T> {}

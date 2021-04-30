@@ -1,23 +1,33 @@
 #![allow(clippy::upper_case_acronyms)]
 
+use crate::HttpReq;
+use async_trait::async_trait;
+use futures_util::future::BoxFuture;
+use futures_util::stream::Stream;
+
+
+use rand::Rng;
+use serde::{Deserialize, Serialize};
 use std::cmp::min;
+
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Duration;
-
-use pin_project::pin_project;
-use rand::Rng;
-use serde::{Deserialize, Serialize};
-
-use crate::HttpReq;
-use futures_util::stream::Stream;
 use tokio_stream::StreamExt;
+
 
 const MAX_REQ_RET_SIZE: usize = 10;
 
+pub enum ProviderOrFuture {
+    Provider(Box<dyn RequestSpec + Send>),
+    Future(BoxFuture<'static, (Box<dyn RequestSpec + Send>,Option<Vec<HttpReq>>)>),
+    Dummy,
+}
+
 /// Based on the QPS policy, generate requests to be sent to the application that's being tested.
-#[pin_project]
+// #[pin_project]
 #[must_use = "futures do nothing unless polled"]
+// pub struct RequestGenerator {
 pub struct RequestGenerator {
     // for how long test should run
     duration: u32,
@@ -30,8 +40,13 @@ pub struct RequestGenerator {
     // requests generated so far, initially 0
     current_count: u32,
     // http requests
-    requests: Vec<HttpReq>,
+    requests: Box<dyn RequestSpec + Send>,
+    // requests: Box<dyn RequestSpec + Send +'a>,
+    // requests: RequestSpecStruct,
+    // requests: RequestSpecStruct,
     qps_scheme: Box<dyn QPSScheme + Send>,
+    // get_req_future: Option<BoxFuture<'a,Option<Vec<HttpReq>>>>,
+    provider_or_future: ProviderOrFuture,
 }
 
 impl RequestGenerator {
@@ -81,13 +96,95 @@ impl QPSScheme for ArrayQPS {
     }
 }
 
+#[async_trait]
+#[typetag::serde]
+pub trait RequestSpec {
+    async fn get_mut_n(&mut self, n: usize) -> Option<Vec<HttpReq>> {
+        unimplemented!()
+    }
+    /// Return 1 request, be it chosen randomly or in any other way, entirely depends on implementations
+    async fn get_one(&self) -> Option<HttpReq>;
+    // async fn get_one(&self) -> Option<HttpReq> {
+    //     self.get_n(1).await
+    //         .and_then(|mut v| v.pop())
+    // }
+    /// Return `n` requests, be it chosen randomly or in any other way, entirely depends on implementations
+    async fn get_n(&self, n: usize) -> Option<Vec<HttpReq>>;
+    /// number of requests
+    fn size_hint(&self) -> usize;
+}
+
+pub struct RequestSpecStruct {}
+impl RequestSpecStruct {
+    /// Return 1 request, be it chosen randomly or in any other way, entirely depends on implementations
+    pub async fn get_one(&self) -> Option<HttpReq> {
+        unimplemented!()
+    }
+    // async fn get_one(&self) -> Option<HttpReq> {
+    //     self.get_n(1).await
+    //         .and_then(|mut v| v.pop())
+    // }
+    /// Return `n` requests, be it chosen randomly or in any other way, entirely depends on implementations
+    async fn get_n(&self, n: usize) -> Option<Vec<HttpReq>> {
+        unimplemented!()
+    }
+    /// number of requests
+    fn size_hint(&self) -> usize {
+        unimplemented!()
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RequestList {
+    data: Vec<HttpReq>,
+}
+
+#[async_trait]
+#[typetag::serde]
+impl RequestSpec for RequestList {
+    async fn get_one(&self) -> Option<HttpReq> {
+        let i = rand::thread_rng().gen_range(0..self.data.len());
+        self.data.get(i).cloned()
+    }
+
+    async fn get_n(&self, n: usize) -> Option<Vec<HttpReq>> {
+        todo!()
+    }
+
+    fn size_hint(&self) -> usize {
+        self.data.len()
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RequestFile {
+    file_name: String,
+}
+
+#[async_trait]
+#[typetag::serde]
+impl RequestSpec for RequestFile {
+    async fn get_one(&self) -> Option<HttpReq> {
+        todo!()
+    }
+
+    async fn get_n(&self, n: usize) -> Option<Vec<HttpReq>> {
+        todo!()
+    }
+
+    fn size_hint(&self) -> usize {
+        todo!()
+    }
+}
+
 //todo use failure rate for adaptive qps control
 //https://micrometer.io/docs/concepts#rate-aggregation
 
 impl RequestGenerator {
     pub fn new(
         duration: u32,
-        requests: Vec<HttpReq>,
+        requests: Box<dyn RequestSpec + Send>,
+        // requests: RequestSpecStruct,
         qps_scheme: Box<dyn QPSScheme + Send>,
     ) -> Self {
         let time_scale: u8 = 1;
@@ -99,32 +196,47 @@ impl RequestGenerator {
             requests,
             qps_scheme,
             current_count: 0,
+            // get_req_future: None,
+            provider_or_future: ProviderOrFuture::Dummy,
         }
     }
 }
 
+// impl<'a> Stream for RequestGenerator<'a> {
 impl Stream for RequestGenerator {
     type Item = (u32, Vec<HttpReq>);
 
-    fn poll_next(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let me = self.project();
-        if me.current_count >= me.total {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if self.current_count >= self.total {
             Poll::Ready(None)
         } else {
-            let qps = me.qps_scheme.next(*me.current_count, None);
-            *me.current_count += 1;
-            let len = me.requests.len();
-            let req_size = min(qps as usize, min(len, MAX_REQ_RET_SIZE));
-            let mut rng = rand::thread_rng();
-            let reqs = (0..req_size)
-                .map(|_| {
-                    let idx = rng.gen_range(0..len);
-                    me.requests.get(idx)
-                })
-                .filter(|req| req.is_some())
-                .map(|req| req.unwrap().clone())
-                .collect::<Vec<_>>();
-            Poll::Ready(Some((qps, reqs)))
+            let provider_or_future =
+                std::mem::replace(&mut self.provider_or_future, ProviderOrFuture::Dummy);
+            match provider_or_future {
+                ProviderOrFuture::Provider(mut provider) => {
+                    let qps = self.qps_scheme.next(self.current_count, None);
+                    let len = self.requests.size_hint();
+                    let req_size = min(qps as usize, min(len, MAX_REQ_RET_SIZE));
+                    self.current_count += 1;
+                    let provider_and_fut = async move {
+                        let requests = provider.get_mut_n(req_size).await;
+                        (provider, requests)
+                    };
+                    self.provider_or_future = ProviderOrFuture::Future(Box::pin(provider_and_fut));
+                    self.poll_next(cx)
+                }
+                ProviderOrFuture::Future(mut future) => {
+                    match future.as_mut().poll(cx) {
+                        Poll::Ready((provider,result)) => {
+                            self.provider_or_future = ProviderOrFuture::Provider(provider);
+                            let result = result.unwrap_or_default();
+                            Poll::Ready(Some((0,result)))
+                        }
+                        Poll::Pending => Poll::Pending
+                    }
+                }
+                ProviderOrFuture::Dummy => panic!("Something went wrong :(")
+            }
         }
     }
 
@@ -137,6 +249,7 @@ impl Stream for RequestGenerator {
 pub fn request_generator_stream(
     generator: RequestGenerator,
 ) -> impl Stream<Item = (u32, Vec<HttpReq>)> {
+    // ) -> impl Stream<Item = (u32, Vec<HttpReq>)> + '_ {
     //todo impl throttled stream function according to time_scale
     let scale = generator.time_scale;
     let throttle = generator.throttle(Duration::from_millis(1000 / scale as u64));

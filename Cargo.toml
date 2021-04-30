@@ -42,7 +42,7 @@ version = "1.0"
 
 [dependencies.tokio]
 version = "1.4"
-features = ["rt-multi-thread", "macros"]
+features = ["rt-multi-thread", "macros", "fs", "io-util"]
 
 [dependencies.tokio-stream]
 version = "0.1"
@@ -63,6 +63,9 @@ version = "0.5"
 [dependencies.warp]
 version = "0.3"
 
+[dependencies.async-trait]
+version = "0.1"
+
 [dependencies.regex]
 version = "1.4"
 
@@ -72,6 +75,9 @@ features = ["derive"]
 
 [dependencies.serde_json]
 version = "1.0"
+
+[dependencies.typetag]
+version = "0.1"
 
 [dependencies.http-serde]
 version = "1.0"
