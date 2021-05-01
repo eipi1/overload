@@ -4,30 +4,27 @@ use crate::HttpReq;
 use async_trait::async_trait;
 use futures_util::future::BoxFuture;
 use futures_util::stream::Stream;
-
-
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::cmp::min;
-
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Duration;
 use tokio_stream::StreamExt;
 
-
 const MAX_REQ_RET_SIZE: usize = 10;
 
+type ReqProvider = Box<dyn RequestProvider + Send>;
+
 pub enum ProviderOrFuture {
-    Provider(Box<dyn RequestSpec + Send>),
-    Future(BoxFuture<'static, (Box<dyn RequestSpec + Send>,Option<Vec<HttpReq>>)>),
+    Provider(ReqProvider),
+    Future(BoxFuture<'static, (ReqProvider, Option<Vec<HttpReq>>)>),
     Dummy,
 }
 
 /// Based on the QPS policy, generate requests to be sent to the application that's being tested.
-// #[pin_project]
 #[must_use = "futures do nothing unless polled"]
-// pub struct RequestGenerator {
+#[allow(dead_code)]
 pub struct RequestGenerator {
     // for how long test should run
     duration: u32,
@@ -39,14 +36,9 @@ pub struct RequestGenerator {
     total: u32,
     // requests generated so far, initially 0
     current_count: u32,
-    // http requests
-    requests: Box<dyn RequestSpec + Send>,
-    // requests: Box<dyn RequestSpec + Send +'a>,
-    // requests: RequestSpecStruct,
-    // requests: RequestSpecStruct,
-    qps_scheme: Box<dyn QPSScheme + Send>,
-    // get_req_future: Option<BoxFuture<'a,Option<Vec<HttpReq>>>>,
+    current_qps: u32,
     provider_or_future: ProviderOrFuture,
+    qps_scheme: Box<dyn QPSScheme + Send>,
 }
 
 impl RequestGenerator {
@@ -97,62 +89,50 @@ impl QPSScheme for ArrayQPS {
 }
 
 #[async_trait]
-#[typetag::serde]
-pub trait RequestSpec {
-    async fn get_mut_n(&mut self, n: usize) -> Option<Vec<HttpReq>> {
-        unimplemented!()
-    }
+pub trait RequestProvider {
+    async fn get_mut_n(&mut self, n: usize) -> Option<Vec<HttpReq>>;
     /// Return 1 request, be it chosen randomly or in any other way, entirely depends on implementations
     async fn get_one(&self) -> Option<HttpReq>;
-    // async fn get_one(&self) -> Option<HttpReq> {
-    //     self.get_n(1).await
-    //         .and_then(|mut v| v.pop())
-    // }
     /// Return `n` requests, be it chosen randomly or in any other way, entirely depends on implementations
     async fn get_n(&self, n: usize) -> Option<Vec<HttpReq>>;
     /// number of requests
     fn size_hint(&self) -> usize;
 }
 
-pub struct RequestSpecStruct {}
-impl RequestSpecStruct {
-    /// Return 1 request, be it chosen randomly or in any other way, entirely depends on implementations
-    pub async fn get_one(&self) -> Option<HttpReq> {
-        unimplemented!()
-    }
-    // async fn get_one(&self) -> Option<HttpReq> {
-    //     self.get_n(1).await
-    //         .and_then(|mut v| v.pop())
-    // }
-    /// Return `n` requests, be it chosen randomly or in any other way, entirely depends on implementations
-    async fn get_n(&self, n: usize) -> Option<Vec<HttpReq>> {
-        unimplemented!()
-    }
-    /// number of requests
-    fn size_hint(&self) -> usize {
-        unimplemented!()
-    }
-}
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RequestList {
-    data: Vec<HttpReq>,
+    pub(crate) data: Vec<HttpReq>,
 }
 
 #[async_trait]
-#[typetag::serde]
-impl RequestSpec for RequestList {
+impl RequestProvider for RequestList {
+    async fn get_mut_n(&mut self, n: usize) -> Option<Vec<HttpReq>> {
+        self.get_n(n).await
+    }
+
     async fn get_one(&self) -> Option<HttpReq> {
         let i = rand::thread_rng().gen_range(0..self.data.len());
         self.data.get(i).cloned()
     }
 
     async fn get_n(&self, n: usize) -> Option<Vec<HttpReq>> {
-        todo!()
+        if n == 0 {
+            return Some(vec![]);
+        }
+        let mut chunks = self.data.chunks(min(n, self.data.len()));
+        chunks.next().map(|r| r.to_vec())
     }
 
     fn size_hint(&self) -> usize {
         self.data.len()
+    }
+}
+
+impl From<Vec<HttpReq>> for RequestList {
+    fn from(data: Vec<HttpReq>) -> Self {
+        RequestList{
+            data
+        }
     }
 }
 
@@ -162,13 +142,16 @@ pub struct RequestFile {
 }
 
 #[async_trait]
-#[typetag::serde]
-impl RequestSpec for RequestFile {
+impl RequestProvider for RequestFile {
+    async fn get_mut_n(&mut self, _n: usize) -> Option<Vec<HttpReq>> {
+        todo!()
+    }
+
     async fn get_one(&self) -> Option<HttpReq> {
         todo!()
     }
 
-    async fn get_n(&self, n: usize) -> Option<Vec<HttpReq>> {
+    async fn get_n(&self, _n: usize) -> Option<Vec<HttpReq>> {
         todo!()
     }
 
@@ -183,8 +166,7 @@ impl RequestSpec for RequestFile {
 impl RequestGenerator {
     pub fn new(
         duration: u32,
-        requests: Box<dyn RequestSpec + Send>,
-        // requests: RequestSpecStruct,
+        requests: ReqProvider,
         qps_scheme: Box<dyn QPSScheme + Send>,
     ) -> Self {
         let time_scale: u8 = 1;
@@ -193,16 +175,14 @@ impl RequestGenerator {
             duration,
             time_scale,
             total,
-            requests,
+            current_qps: 0,
+            provider_or_future: ProviderOrFuture::Provider(requests),
             qps_scheme,
             current_count: 0,
-            // get_req_future: None,
-            provider_or_future: ProviderOrFuture::Dummy,
         }
     }
 }
 
-// impl<'a> Stream for RequestGenerator<'a> {
 impl Stream for RequestGenerator {
     type Item = (u32, Vec<HttpReq>);
 
@@ -215,27 +195,28 @@ impl Stream for RequestGenerator {
             match provider_or_future {
                 ProviderOrFuture::Provider(mut provider) => {
                     let qps = self.qps_scheme.next(self.current_count, None);
-                    let len = self.requests.size_hint();
+                    let len = provider.size_hint();
                     let req_size = min(qps as usize, min(len, MAX_REQ_RET_SIZE));
-                    self.current_count += 1;
                     let provider_and_fut = async move {
                         let requests = provider.get_mut_n(req_size).await;
                         (provider, requests)
                     };
                     self.provider_or_future = ProviderOrFuture::Future(Box::pin(provider_and_fut));
+                    self.current_qps = qps;
                     self.poll_next(cx)
                 }
-                ProviderOrFuture::Future(mut future) => {
-                    match future.as_mut().poll(cx) {
-                        Poll::Ready((provider,result)) => {
-                            self.provider_or_future = ProviderOrFuture::Provider(provider);
-                            let result = result.unwrap_or_default();
-                            Poll::Ready(Some((0,result)))
-                        }
-                        Poll::Pending => Poll::Pending
+                ProviderOrFuture::Future(mut future) => match future.as_mut().poll(cx) {
+                    Poll::Ready((provider, result)) => {
+                        let qps = self.current_qps;
+                        self.current_qps = 0;
+                        self.current_count += 1;
+                        self.provider_or_future = ProviderOrFuture::Provider(provider);
+                        let result = result.unwrap_or_default();
+                        Poll::Ready(Some((qps, result)))
                     }
-                }
-                ProviderOrFuture::Dummy => panic!("Something went wrong :(")
+                    Poll::Pending => Poll::Pending,
+                },
+                ProviderOrFuture::Dummy => panic!("Something went wrong :("),
             }
         }
     }
@@ -249,7 +230,6 @@ impl Stream for RequestGenerator {
 pub fn request_generator_stream(
     generator: RequestGenerator,
 ) -> impl Stream<Item = (u32, Vec<HttpReq>)> {
-    // ) -> impl Stream<Item = (u32, Vec<HttpReq>)> + '_ {
     //todo impl throttled stream function according to time_scale
     let scale = generator.time_scale;
     let throttle = generator.throttle(Duration::from_millis(1000 / scale as u64));
@@ -273,7 +253,7 @@ impl QPSScheme for Linear {
 }
 
 #[cfg(test)]
-mod test {
+pub(crate) mod test {
     use std::time::Duration;
 
     use tokio::time;
@@ -281,7 +261,7 @@ mod test {
     use tokio_test::{assert_pending, assert_ready, task};
 
     use crate::generator::{
-        request_generator_stream, ConstantQPS, RequestGenerator, MAX_REQ_RET_SIZE,
+        request_generator_stream, ConstantQPS, RequestGenerator, RequestList, MAX_REQ_RET_SIZE,
     };
     use crate::HttpReq;
     use std::collections::HashMap;
@@ -289,7 +269,11 @@ mod test {
 
     #[tokio::test]
     async fn test_request_generator_empty_req() {
-        let mut generator = RequestGenerator::new(3, Vec::new(), Box::new(ConstantQPS { qps: 3 }));
+        let mut generator = RequestGenerator::new(
+            3,
+            Box::new(req_list_with_n_req(0)),
+            Box::new(ConstantQPS { qps: 3 }),
+        );
         let ret = generator.next().await;
         if let Some(arg) = ret {
             assert_eq!(arg.0, 3);
@@ -305,9 +289,11 @@ mod test {
 
     #[tokio::test]
     async fn test_request_generator_req_lt_qps() {
-        let mut vec = Vec::new();
-        vec.push(test_http_req());
-        let mut generator = RequestGenerator::new(3, vec, Box::new(ConstantQPS { qps: 3 }));
+        let mut generator = RequestGenerator::new(
+            3,
+            Box::new(req_list_with_n_req(1)),
+            Box::new(ConstantQPS { qps: 3 }),
+        );
         let ret = generator.next().await;
         if let Some(arg) = ret {
             assert_eq!(arg.0, 3);
@@ -322,11 +308,11 @@ mod test {
 
     #[tokio::test]
     async fn test_request_generator_req_eq_qps() {
-        let mut vec = Vec::new();
-        vec.push(test_http_req());
-        vec.push(test_http_req());
-        vec.push(test_http_req());
-        let mut generator = RequestGenerator::new(3, vec, Box::new(ConstantQPS { qps: 3 }));
+        let mut generator = RequestGenerator::new(
+            3,
+            Box::new(req_list_with_n_req(4)),
+            Box::new(ConstantQPS { qps: 3 }),
+        );
         let ret = generator.next().await;
         if let Some(arg) = ret {
             assert_eq!(arg.0, 3);
@@ -338,8 +324,11 @@ mod test {
 
     #[tokio::test]
     async fn test_request_generator_req_gt_max() {
-        let vec = (0..12).map(|_| test_http_req()).collect();
-        let mut generator = RequestGenerator::new(3, vec, Box::new(ConstantQPS { qps: 15 }));
+        let mut generator = RequestGenerator::new(
+            3,
+            Box::new(req_list_with_n_req(12)),
+            Box::new(ConstantQPS { qps: 15 }),
+        );
         let ret = generator.next().await;
         if let Some(arg) = ret {
             assert_eq!(arg.0, 15);
@@ -353,13 +342,13 @@ mod test {
     #[tokio::test]
     async fn test_request_generator_stream() {
         time::pause();
-        let mut vec = Vec::new();
-        vec.push(test_http_req());
-        let generator = RequestGenerator::new(3, vec, Box::new(ConstantQPS { qps: 3 }));
+        let generator = RequestGenerator::new(
+            3,
+            Box::new(req_list_with_n_req(1)),
+            Box::new(ConstantQPS { qps: 3 }),
+        );
         let throttle = request_generator_stream(generator);
-        // let throttle = generator.throttle(Duration::from_secs(1));
         let mut throttle = task::spawn(throttle);
-        // tokio::pin!(throttle);
         let ret = throttle.poll_next();
         assert_ready!(ret);
         assert_pending!(throttle.poll_next());
@@ -367,13 +356,19 @@ mod test {
         assert_ready!(throttle.poll_next());
     }
 
-    fn test_http_req() -> HttpReq {
-        HttpReq {
-            id: Uuid::new_v4().to_string(),
-            method: http::Method::GET,
-            url: "http://example.com".to_string(),
-            body: None,
-            headers: HashMap::new(),
-        }
+    pub fn req_list_with_n_req(n: usize) -> RequestList {
+        let data = (0..n)
+            .map(|_| {
+                let r = rand::random::<u8>();
+                HttpReq {
+                    id: Uuid::new_v4().to_string(),
+                    body: None,
+                    url: format!("https://httpbin.org/anything/{}", r),
+                    method: http::Method::GET,
+                    headers: HashMap::new(),
+                }
+            })
+            .collect::<Vec<_>>();
+        RequestList { data }
     }
 }

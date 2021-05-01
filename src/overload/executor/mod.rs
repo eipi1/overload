@@ -369,27 +369,3 @@ fn build_client() -> Client<HttpsConnector<HttpConnector>> {
     let connector = HttpsConnector::from((http_connector, tls.into()));
     Client::builder().build(connector)
 }
-
-#[cfg(test)]
-mod test {
-    #![allow(unused_imports)]
-
-    use std::future::Future;
-    use std::pin::Pin;
-    use std::task::{Context, Poll};
-
-    use futures_util::stream::Stream;
-    use tokio::time::timeout;
-
-    // use futures_util::core_reexport::time::Duration;
-    use crate::executor::execute_request_generator;
-    use crate::generator::{request_generator_stream, ConstantQPS, RequestGenerator};
-
-    #[tokio::test]
-    #[ignore]
-    async fn test_execute_gen_req() {
-        let generator = RequestGenerator::new(3, Vec::new(), Box::new(ConstantQPS { qps: 3 }));
-        let stream = request_generator_stream(generator);
-        tokio::pin!(stream);
-    }
-}

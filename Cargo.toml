@@ -76,9 +76,6 @@ features = ["derive"]
 [dependencies.serde_json]
 version = "1.0"
 
-[dependencies.typetag]
-version = "0.1"
-
 [dependencies.http-serde]
 version = "1.0"
 

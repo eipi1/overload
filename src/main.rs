@@ -259,10 +259,8 @@ async fn upload_req_file(form: FormData) -> Result<impl Reply, Rejection> {
     trace!("req: upload_req_file");
     let result = http_util::upload_file(form).await;
     match result {
-        Ok(resp) => {
-            Ok(warp::reply::json(&resp))
-        }
-        Err(e) => Err(warp::reject::custom(Rejectable{err:e})),
+        Ok(resp) => Ok(warp::reply::json(&resp)),
+        Err(e) => Err(warp::reject::custom(Rejectable { err: e })),
     }
 }
 

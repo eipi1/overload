@@ -10,7 +10,7 @@ use tokio_stream::StreamExt;
 
 use super::HttpReq;
 use crate::generator::{request_generator_stream, ArrayQPS, RequestGenerator};
-use crate::http_util::request::QPSSpec;
+use crate::http_util::request::{QPSSpec, RequestSpecEnum};
 use crate::JobStatus;
 use cluster_mode::{Cluster, RestClusterNode};
 use futures_util::stream::FuturesUnordered;
@@ -133,7 +133,7 @@ async fn send_requests_to_secondary(
 ) -> anyhow::Result<()> {
     let instance = node.service_instance();
     let uri = instance.uri().clone().expect("No uri");
-    let request = to_test_request(qps, requests, job_id);
+    let request = to_test_request(qps, requests.into(), job_id);
     let request = serde_json::to_vec(&request)?;
     let request = Request::builder()
         .uri(format!("{}{}", uri, PATH_REQ_TO_SECONDARY))
@@ -146,7 +146,7 @@ async fn send_requests_to_secondary(
 // fn to_test_request(qps: &[u32], requests: &HashSet<&HttpReq>) {
 fn to_test_request(
     qps: &[u32],
-    req: Vec<HttpReq>,
+    req: RequestSpecEnum,
     job_id: String,
 ) -> crate::http_util::request::Request {
     let duration = qps.len() as u32;
@@ -195,6 +195,7 @@ mod test {
     use std::collections::{HashMap, HashSet};
     use std::sync::Arc;
     use uuid::Uuid;
+    use crate::generator::test::req_list_with_n_req;
 
     #[tokio::test]
     async fn test_cluster_execute_request_generator() {
@@ -203,7 +204,7 @@ mod test {
             requests.push(http_req_random());
         }
         let qps = ConstantQPS { qps: 3 };
-        let rg = RequestGenerator::new(3, requests, Box::new(qps));
+        let rg = RequestGenerator::new(3, Box::new(req_list_with_n_req(3)), Box::new(qps));
         let job_id = "test_job".to_string();
         let instance = ServiceInstance::new(
             None,

@@ -3,7 +3,7 @@ pub mod request;
 #[cfg(feature = "cluster")]
 use crate::executor::cluster;
 use crate::executor::{execute_request_generator, get_job_status, send_stop_signal};
-use crate::http_util::request::{Request, RequestGeneric};
+use crate::http_util::request::Request;
 #[cfg(feature = "cluster")]
 use crate::ErrorCode;
 use crate::{JobStatus, Response};
@@ -21,6 +21,8 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::hash_map::RandomState;
 use std::collections::HashMap;
+use std::fmt;
+use std::fmt::{Debug, Display, Formatter};
 #[cfg(feature = "cluster")]
 use std::sync::Arc;
 use tokio::fs::File;
@@ -28,21 +30,13 @@ use tokio::io::AsyncWriteExt;
 use tokio_stream::StreamExt;
 use uuid::Uuid;
 use warp::multipart::{FormData, Part};
-use std::fmt::{Display, Formatter, Debug};
-use std::fmt;
 
 pub async fn handle_request(request: Request) -> Response {
     let job_id = job_id(&request);
-    // let generator = request.into();
-    let request = req_to_req_gen(request);
     let generator = request.into();
 
     tokio::spawn(execute_request_generator(generator, job_id.clone()));
     Response::new(job_id, JobStatus::Starting)
-}
-
-fn req_to_req_gen(request: Request) -> RequestGeneric{
-    todo!()
 }
 
 #[cfg(feature = "cluster")]
@@ -207,7 +201,7 @@ pub struct GenericError {
 
 impl Default for GenericError {
     fn default() -> Self {
-        GenericError{
+        GenericError {
             error_code: u16::MAX,
             message: String::new(),
             data: HashMap::new(),
@@ -216,6 +210,12 @@ impl Default for GenericError {
 }
 impl Display for GenericError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "({}, {}, {})", self.error_code, self.message, self.data.len())
+        write!(
+            f,
+            "({}, {}, {})",
+            self.error_code,
+            self.message,
+            self.data.len()
+        )
     }
 }
