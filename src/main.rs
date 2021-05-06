@@ -1,17 +1,18 @@
+use bytes::Buf;
 use cfg_if::cfg_if;
 #[cfg(feature = "cluster")]
 use cloud_discovery_kubernetes::KubernetesDiscoverService;
 #[cfg(feature = "cluster")]
 use cluster_mode::{get_cluster_info, Cluster};
-#[cfg(feature = "cluster")]
+use futures_util::Stream;
 use http::StatusCode;
 use hyper::header::CONTENT_TYPE;
 use hyper::{Body, Response};
 use lazy_static::lazy_static;
 use log::{info, trace};
-use overload::http_util;
 use overload::http_util::handle_history_all;
 use overload::http_util::request::{PagerOptions, Request};
+use overload::{http_util, DEFAULT_DATA_DIR};
 use prometheus::{opts, register_counter, Counter, Encoder, TextEncoder};
 #[cfg(feature = "cluster")]
 use rust_cloud_discovery::DiscoveryClient;
@@ -22,11 +23,10 @@ use std::env;
 use std::fmt::Debug;
 #[cfg(feature = "cluster")]
 use std::sync::Arc;
-use warp::multipart::FormData;
 use warp::reject::Reject;
 #[cfg(feature = "cluster")]
 use warp::reply::{Json, WithStatus};
-use warp::{Filter, Rejection, Reply};
+use warp::{Filter, Reply};
 
 lazy_static! {
     static ref HTTP_COUNTER: Counter = register_counter!(opts!(
@@ -41,7 +41,7 @@ lazy_static! {
     static ref CLUSTER: Arc<Cluster> = Arc::new(Cluster::new(10 * 1000));
 }
 
-#[tokio::main(flavor = "current_thread")]
+#[tokio::main]
 async fn main() {
     //init logging
     let log_level = env::var_os("log.level")
@@ -57,12 +57,9 @@ async fn main() {
         .unwrap();
     info!("log level: {}", &log_level);
 
-    // for var in env::vars() {
-    //     info!("var:{:?}", var);
-    // }
-    // for var in env::vars_os() {
-    //     info!("var_os:{:?}", var);
-    // }
+    for var in env::vars() {
+        info!("env var: {:?}", var);
+    }
 
     //todo get from k8s itself
     #[cfg(feature = "cluster")]
@@ -133,14 +130,15 @@ async fn main() {
             }
         });
 
-    let upload_req_file = warp::post()
+    let upload_binary_file = warp::post()
         .and(
             warp::path("test")
-                .and(warp::path("requests"))
+                .and(warp::path("requests-bin"))
                 .and(warp::path::end()),
         )
-        .and(warp::multipart::form().max_length(20 * 1024 * 1024))
-        .and_then(upload_req_file);
+        .and(warp::body::content_length_limit(1024 * 1024 * 32))
+        .and(warp::body::stream())
+        .and_then(|s| upload_binary_file(s, DEFAULT_DATA_DIR));
 
     let stop_req = warp::path!("test" / "stop" / String)
         .and_then(|job_id: String| async move { stop(job_id).await });
@@ -200,7 +198,7 @@ async fn main() {
         .or(overload_req)
         .or(stop_req)
         .or(history)
-        .or(upload_req_file);
+        .or(upload_binary_file);
     #[cfg(feature = "cluster")]
     let routes = routes
         .or(info)
@@ -255,12 +253,21 @@ async fn all_job(option: PagerOptions) -> Result<impl Reply, Infallible> {
     Ok(warp::reply::json(&status))
 }
 
-async fn upload_req_file(form: FormData) -> Result<impl Reply, Rejection> {
-    trace!("req: upload_req_file");
-    let result = http_util::upload_file(form).await;
+async fn upload_binary_file<S, B>(data: S, data_dir: &str) -> Result<impl Reply, Infallible>
+where
+    S: Stream<Item = Result<B, warp::Error>> + Unpin + Send + Sync,
+    B: Buf + Send + Sync,
+{
+    let result = http_util::csv_stream_to_sqlite(data, data_dir).await;
     match result {
-        Ok(resp) => Ok(warp::reply::json(&resp)),
-        Err(e) => Err(warp::reject::custom(Rejectable { err: e })),
+        Ok(r) => Ok(warp::reply::with_status(
+            warp::reply::json(&r),
+            StatusCode::OK,
+        )),
+        Err(e) => Ok(warp::reply::with_status(
+            warp::reply::json(&e),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        )),
     }
 }
 
