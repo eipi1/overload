@@ -1,19 +1,20 @@
 //noinspection Duplicates
 #![allow(dead_code)]
 
+use super::HttpReq;
+use crate::executor::{set_job_status, should_stop};
+use crate::generator::{request_generator_stream, ArrayQPS, RequestGenerator};
+use crate::http_util::request::{QPSSpec, RequestSpecEnum};
+use crate::{ErrorCode, JobStatus};
+use cluster_mode::{Cluster, RestClusterNode};
+use futures_util::stream::FuturesUnordered;
 use http::Request;
 use hyper::client::{Client, HttpConnector};
 use log::{error, trace};
 use std::collections::HashSet;
+use std::convert::TryInto;
 use std::sync::Arc;
 use tokio_stream::StreamExt;
-
-use super::HttpReq;
-use crate::generator::{request_generator_stream, ArrayQPS, RequestGenerator};
-use crate::http_util::request::{QPSSpec, RequestSpecEnum};
-use crate::JobStatus;
-use cluster_mode::{Cluster, RestClusterNode};
-use futures_util::stream::FuturesUnordered;
 
 //noinspection Duplicates
 pub async fn cluster_execute_request_generator(
@@ -22,9 +23,11 @@ pub async fn cluster_execute_request_generator(
     cluster: Arc<Cluster>,
 ) {
     let time_scale = request.time_scale() as usize;
+    let shared_request_provider = request.shared_provider();
+    let provider = request.request_provider();
+    let provider: Option<RequestSpecEnum> = provider.try_into().ok();
     let stream = request_generator_stream(request);
     tokio::pin!(stream);
-    // let client = Arc::new(Client::new());
     let client = Client::new();
     {
         let mut write_guard = super::JOB_STATUS.write().await;
@@ -36,19 +39,32 @@ pub async fn cluster_execute_request_generator(
     if cluster.is_primary().await {
         loop {
             //should we stop?
-            let stop = {
-                let read_guard = super::JOB_STATUS.read().await;
-                matches!(read_guard.get(&job_id), Some(JobStatus::Stopped))
-            };
-            if stop {
+            if should_stop(&job_id).await {
                 break;
             }
             let mut bundle = vec![];
             while let Some((qps, requests)) = stream.next().await {
-                bundle.push((qps, requests));
-                if bundle.len() == bundle_size {
-                    break;
-                }
+                match requests {
+                    Ok(result) => {
+                        bundle.push((qps, result));
+                        if bundle.len() == bundle_size {
+                            break;
+                        }
+                    }
+                    Err(err) => {
+                        if let Some(sqlx::Error::Database(_)) = err.downcast_ref::<sqlx::Error>() {
+                            error!(
+                                "sqlx::Error::Database: {}. Unrecoverable error; stopping the job.",
+                                &err.to_string()
+                            );
+                            // no need to exit the parent `loop` due to the error, `if bundle_len == 0 { break;}`
+                            // will do the work and terminate executor
+                            set_job_status(&job_id, JobStatus::Error(ErrorCode::SqliteOpenFailed))
+                                .await;
+                            break;
+                        }
+                    }
+                };
             }
             let bundle_len = bundle.len();
             if bundle_len == 0 {
@@ -70,11 +86,16 @@ pub async fn cluster_execute_request_generator(
                 let requests = requests.drain().cloned().collect::<Vec<HttpReq>>();
                 // let requests = requests.
                 for secondary in secondaries.iter() {
+                    let request_enum: RequestSpecEnum = if shared_request_provider {
+                        provider.clone().unwrap_or_else(|| requests.clone().into())
+                    } else {
+                        requests.clone().into()
+                    };
                     let to_secondary = send_requests_to_secondary(
                         &client,
                         secondary,
                         &qps,
-                        requests.clone(),
+                        request_enum,
                         job_id.clone(),
                     );
                     to_secondaries.push(to_secondary);
@@ -83,11 +104,16 @@ pub async fn cluster_execute_request_generator(
                 if has_reminder {
                     if let Some(secondary) = secondaries.iter().next() {
                         trace!("sending reminders to secondary: {:?}", &secondary);
+                        let request_enum: RequestSpecEnum = if shared_request_provider {
+                            provider.clone().unwrap_or_else(|| requests.clone().into())
+                        } else {
+                            requests.clone().into()
+                        };
                         let to_secondary = send_requests_to_secondary(
                             &client,
                             &secondary,
                             &reminder,
-                            requests,
+                            request_enum,
                             job_id.clone(),
                         );
                         to_secondaries.push(to_secondary);
@@ -107,33 +133,19 @@ pub async fn cluster_execute_request_generator(
     } else {
         error!("Node is in secondary mode.");
     }
-    {
-        let mut write_guard = super::JOB_STATUS.write().await;
-        if let Some(status) = write_guard.get(&job_id) {
-            let job_finished = matches!(
-                status,
-                JobStatus::Stopped | JobStatus::Failed | JobStatus::Completed
-            );
-            if !job_finished {
-                write_guard.insert(job_id.clone(), JobStatus::Completed);
-            }
-        } else {
-            error!("Job Status should be present")
-        }
-    }
+    set_job_status(&job_id, JobStatus::Completed).await;
 }
 
 async fn send_requests_to_secondary(
     client: &Client<HttpConnector>,
     node: &RestClusterNode,
     qps: &[u32],
-    // requests: &HashSet<&HttpReq>,
-    requests: Vec<HttpReq>,
+    requests: RequestSpecEnum,
     job_id: String,
 ) -> anyhow::Result<()> {
     let instance = node.service_instance();
     let uri = instance.uri().clone().expect("No uri");
-    let request = to_test_request(qps, requests.into(), job_id);
+    let request = to_test_request(qps, requests, job_id);
     let request = serde_json::to_vec(&request)?;
     let request = Request::builder()
         .uri(format!("{}{}", uri, PATH_REQ_TO_SECONDARY))
@@ -188,6 +200,7 @@ mod test {
     use crate::executor::cluster::{
         calculate_req_per_secondary, cluster_execute_request_generator,
     };
+    use crate::generator::test::req_list_with_n_req;
     use crate::generator::{ConstantQPS, RequestGenerator};
     use crate::HttpReq;
     use cluster_mode::{Cluster, InstanceMode, RestClusterNode};
@@ -195,7 +208,6 @@ mod test {
     use std::collections::{HashMap, HashSet};
     use std::sync::Arc;
     use uuid::Uuid;
-    use crate::generator::test::req_list_with_n_req;
 
     #[tokio::test]
     async fn test_cluster_execute_request_generator() {

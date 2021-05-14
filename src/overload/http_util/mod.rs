@@ -197,7 +197,7 @@ where
         r#"CREATE TABLE IF NOT EXISTS http_req (
             url TEXT NOT NULL,
             method TEXT NOT NULL,
-            body TEXT,
+            body BLOB,
             headers TEXT
            );"#,
     )
@@ -386,10 +386,16 @@ mod test {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_csv_to_sqlite() {
-        setup();
+        // setup();
+        let csv_data = r#""url","method","body","headers"
+"http://httpbin.org/anything/11","GET","","{}"
+"http://httpbin.org/anything/13","GET","","{}"
+"http://httpbin.org/anything","POST","{\"some\":\"random data\",\"second-key\":\"more data\"}","{\"Authorization\":\"Bearer 123\"}"
+"http://httpbin.org/bearer","GET","","{\"Authorization\":\"Bearer 123\"}"
+"#;
         let reader = AsyncReaderBuilder::new()
             .escape(Some(b'\\'))
-            .create_deserializer(File::open("requests.csv").await.unwrap());
+            .create_deserializer(csv_data.as_bytes());
         let to_sqlite = csv_reader_to_sqlite(reader, "requests.sqlite".to_string()).await;
         log_error!(to_sqlite);
     }

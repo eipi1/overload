@@ -4,8 +4,9 @@ use crate::generator::{
     ArrayQPS, ConstantQPS, Linear, QPSScheme, RequestFile, RequestGenerator, RequestList,
     RequestProvider,
 };
-use crate::HttpReq;
+use crate::{data_dir, HttpReq};
 use serde::{Deserialize, Serialize};
+use std::convert::TryFrom;
 use std::fmt::Debug;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -15,8 +16,9 @@ pub(crate) enum QPSSpec {
     ArrayQPS(ArrayQPS),
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub(crate) enum RequestSpecEnum {
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub enum RequestSpecEnum {
     RequestList(RequestList),
     RequestFile(RequestFile),
 }
@@ -24,6 +26,14 @@ pub(crate) enum RequestSpecEnum {
 impl From<Vec<HttpReq>> for RequestSpecEnum {
     fn from(req: Vec<HttpReq>) -> Self {
         RequestSpecEnum::RequestList(RequestList { data: req })
+    }
+}
+
+impl TryFrom<&String> for RequestSpecEnum {
+    type Error = serde_json::Error;
+
+    fn try_from(value: &String) -> Result<Self, Self::Error> {
+        serde_json::from_str(&*value)
     }
 }
 
@@ -73,7 +83,11 @@ impl Into<RequestGenerator> for Request {
         };
         let req: Box<dyn RequestProvider + Send> = match self.req {
             RequestSpecEnum::RequestList(req) => Box::new(req),
-            RequestSpecEnum::RequestFile(req) => Box::new(req),
+            RequestSpecEnum::RequestFile(mut req) => {
+                //todo why rename here?
+                req.file_name = format!("{}/{}.sqlite", data_dir(), &req.file_name);
+                Box::new(req)
+            }
         };
         RequestGenerator::new(self.duration, req, qps)
     }
@@ -94,25 +108,26 @@ mod test {
     #[test]
     fn deserialize_str() {
         let req = r#"
-          {
-            "name": null,
-            "duration": 1,
-            "req":
-            {"RequestList":{
-            "data": [{
-                  "method": "GET",
-                  "url": "example.com",
-                  "body": null
+            {
+              "duration": 1,
+              "name": null,
+              "qps": {
+                "ConstantQPS": {
+                  "qps": 1
                 }
-            ]
-            }}
-            ,
-            "qps": {
-              "ConstantQPS": {
-                "qps": 1
+              },
+              "req": {
+                "RequestList": {
+                  "data": [
+                    {
+                      "body": null,
+                      "method": "GET",
+                      "url": "example.com"
+                    }
+                  ]
+                }
               }
             }
-          }
         "#;
         let result = serde_json::from_str::<Request>(req);
         assert!(result.is_ok());

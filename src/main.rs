@@ -12,7 +12,7 @@ use lazy_static::lazy_static;
 use log::{info, trace};
 use overload::http_util::handle_history_all;
 use overload::http_util::request::{PagerOptions, Request};
-use overload::{http_util, DEFAULT_DATA_DIR};
+use overload::{http_util, data_dir};
 use prometheus::{opts, register_counter, Counter, Encoder, TextEncoder};
 #[cfg(feature = "cluster")]
 use rust_cloud_discovery::DiscoveryClient;
@@ -50,12 +50,14 @@ async fn main() {
         .unwrap_or_else(|| "trace".to_string());
     tracing_subscriber::fmt()
         .with_env_filter(format!(
-            "overload={},rust_cloud_discovery={},cloud_discovery_kubernetes={},cluster_mode={},almost_raft={}",
-            &log_level, &log_level, &log_level, &log_level, &log_level
+            "overload={},rust_cloud_discovery={},cloud_discovery_kubernetes={},cluster_mode={},\
+            almost_raft={},sqlx={}",
+            &log_level, &log_level, &log_level, &log_level, &log_level, &log_level
         ))
         .try_init()
         .unwrap();
     info!("log level: {}", &log_level);
+    info!("data directory: {}", data_dir());
 
     for var in env::vars() {
         info!("env var: {:?}", var);
@@ -138,7 +140,7 @@ async fn main() {
         )
         .and(warp::body::content_length_limit(1024 * 1024 * 32))
         .and(warp::body::stream())
-        .and_then(|s| upload_binary_file(s, DEFAULT_DATA_DIR));
+        .and_then(upload_binary_file);
 
     let stop_req = warp::path!("test" / "stop" / String)
         .and_then(|job_id: String| async move { stop(job_id).await });
@@ -253,12 +255,13 @@ async fn all_job(option: PagerOptions) -> Result<impl Reply, Infallible> {
     Ok(warp::reply::json(&status))
 }
 
-async fn upload_binary_file<S, B>(data: S, data_dir: &str) -> Result<impl Reply, Infallible>
+async fn upload_binary_file<S, B>(data: S) -> Result<impl Reply, Infallible>
 where
     S: Stream<Item = Result<B, warp::Error>> + Unpin + Send + Sync,
     B: Buf + Send + Sync,
 {
-    let result = http_util::csv_stream_to_sqlite(data, data_dir).await;
+    let data_dir = data_dir();
+    let result = http_util::csv_stream_to_sqlite(data, &*data_dir).await;
     match result {
         Ok(r) => Ok(warp::reply::with_status(
             warp::reply::json(&r),
