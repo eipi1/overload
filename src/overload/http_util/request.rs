@@ -1,8 +1,13 @@
 #![allow(clippy::upper_case_acronyms)]
 
-use crate::generator::{ArrayQPS, ConstantQPS, Linear, RequestGenerator};
-use crate::HttpReq;
+use crate::generator::{
+    ArrayQPS, ConstantQPS, Linear, QPSScheme, RequestFile, RequestGenerator, RequestList,
+    RequestProvider,
+};
+use crate::{data_dir, HttpReq};
 use serde::{Deserialize, Serialize};
+use std::convert::TryFrom;
+use std::fmt::Debug;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) enum QPSSpec {
@@ -11,49 +16,80 @@ pub(crate) enum QPSSpec {
     ArrayQPS(ArrayQPS),
 }
 
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub enum RequestSpecEnum {
+    RequestList(RequestList),
+    RequestFile(RequestFile),
+}
+
+impl From<Vec<HttpReq>> for RequestSpecEnum {
+    fn from(req: Vec<HttpReq>) -> Self {
+        RequestSpecEnum::RequestList(RequestList { data: req })
+    }
+}
+
+impl TryFrom<&String> for RequestSpecEnum {
+    type Error = serde_json::Error;
+
+    fn try_from(value: &String) -> Result<Self, Self::Error> {
+        serde_json::from_str(&*value)
+    }
+}
+
 /// Describe the request, for example
-/// ```JSON
+/// ```
+/// # use overload::http_util::request::Request;
+/// # fn main() {
+///     # let req = r#"
 /// {
-///     "name": null,
-///     "duration": 2,
-///     "req": [{
-///           "method": "GET",
-///           "url": "http://localhost:8080/random",
-///           "body": null
-///         },
+///   "name": null,
+///   "duration": 1,
+///   "req": {
+///     "RequestList": {
+///       "data": [
 ///         {
 ///           "method": "GET",
-///           "url": "http://example.com",
+///           "url": "example.com",
 ///           "body": null
 ///         }
-///
-///     ],
-///     "qps": {
-///       "ConstantQPS": {
-///         "qps": 3
-///       }
+///       ]
+///     }
+///   },
+///   "qps": {
+///     "ConstantQPS": {
+///       "qps": 1
 ///     }
 ///   }
+/// # "#;
+/// #     let result = serde_json::from_str::<Request>(req);
+/// # }
 /// ```
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Request {
     pub name: Option<String>,
     pub(crate) duration: u32,
-    pub(crate) req: Vec<HttpReq>,
+    pub(crate) req: RequestSpecEnum,
     pub(crate) qps: QPSSpec,
 }
 
+#[allow(clippy::from_over_into)]
 impl Into<RequestGenerator> for Request {
     fn into(self) -> RequestGenerator {
-        match self.qps {
-            QPSSpec::ConstantQPS(_qps) => {
-                RequestGenerator::new(self.duration, self.req, Box::new(_qps))
+        let qps: Box<dyn QPSScheme + Send> = match self.qps {
+            QPSSpec::ConstantQPS(qps) => Box::new(qps),
+            QPSSpec::Linear(qps) => Box::new(qps),
+            QPSSpec::ArrayQPS(qps) => Box::new(qps),
+        };
+        let req: Box<dyn RequestProvider + Send> = match self.req {
+            RequestSpecEnum::RequestList(req) => Box::new(req),
+            RequestSpecEnum::RequestFile(mut req) => {
+                //todo why rename here?
+                req.file_name = format!("{}/{}.sqlite", data_dir(), &req.file_name);
+                Box::new(req)
             }
-            QPSSpec::Linear(_qps) => RequestGenerator::new(self.duration, self.req, Box::new(_qps)),
-            QPSSpec::ArrayQPS(_qps) => {
-                RequestGenerator::new(self.duration, self.req, Box::new(_qps))
-            }
-        }
+        };
+        RequestGenerator::new(self.duration, req, qps)
     }
 }
 
@@ -65,65 +101,46 @@ pub struct PagerOptions {
 
 #[cfg(test)]
 mod test {
+    use crate::generator::test::req_list_with_n_req;
     use crate::generator::{request_generator_stream, ConstantQPS, RequestGenerator};
-    use crate::http_util::request::{QPSSpec, Request};
-    use crate::HttpReq;
-    use std::collections::HashMap;
-    use uuid::Uuid;
+    use crate::http_util::request::Request;
 
     #[test]
-    fn test_enum_serde() {
-        let req = sample_request();
-        let req = serde_json::to_string(&req);
-        assert!(req.is_ok());
-
+    fn deserialize_str() {
         let req = r#"
-  {
-    "name": null,
-    "duration": 1,
-    "req": [{
-          "method": "GET",
-          "url": "example.com",
-          "body": null
-        }
-    ],
-    "qps": {
-      "ConstantQPS": {
-        "qps": 1
-      }
-    }
-  }
+            {
+              "duration": 1,
+              "name": null,
+              "qps": {
+                "ConstantQPS": {
+                  "qps": 1
+                }
+              },
+              "req": {
+                "RequestList": {
+                  "data": [
+                    {
+                      "body": null,
+                      "method": "GET",
+                      "url": "example.com"
+                    }
+                  ]
+                }
+              }
+            }
         "#;
         let result = serde_json::from_str::<Request>(req);
-        assert!(result.is_ok())
+        assert!(result.is_ok());
     }
 
     #[tokio::test]
     #[allow(unused_must_use)]
     async fn test_req_param() {
-        let req = sample_request();
-        let mut qps = 0;
-        if let QPSSpec::ConstantQPS(_qps) = req.qps {
-            qps = _qps.qps;
-        }
-
-        let generator =
-            RequestGenerator::new(3, req.req, Box::new(ConstantQPS { qps: qps as u32 }));
+        let generator = RequestGenerator::new(
+            3,
+            Box::new(req_list_with_n_req(1)),
+            Box::new(ConstantQPS { qps: 1 }),
+        );
         request_generator_stream(generator);
-    }
-
-    fn sample_request() -> Request {
-        Request {
-            req: vec![HttpReq {
-                id: Uuid::new_v4().to_string(),
-                body: None,
-                url: "example.com".to_string(),
-                method: http::Method::GET,
-                headers: HashMap::new(),
-            }],
-            qps: QPSSpec::ConstantQPS(ConstantQPS { qps: 1 }),
-            duration: 1,
-            name: None,
-        }
     }
 }

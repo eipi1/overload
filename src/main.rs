@@ -1,30 +1,32 @@
-use std::convert::Infallible;
-use std::env;
-
-use hyper::header::CONTENT_TYPE;
-use hyper::{Body, Response};
-use lazy_static::lazy_static;
-use prometheus::{opts, register_counter, Counter, Encoder, TextEncoder};
-use warp::{Filter, Reply};
-
+use bytes::Buf;
 use cfg_if::cfg_if;
 #[cfg(feature = "cluster")]
 use cloud_discovery_kubernetes::KubernetesDiscoverService;
 #[cfg(feature = "cluster")]
 use cluster_mode::{get_cluster_info, Cluster};
-#[cfg(feature = "cluster")]
+use futures_util::Stream;
 use http::StatusCode;
+use hyper::header::CONTENT_TYPE;
+use hyper::{Body, Response};
+use lazy_static::lazy_static;
 use log::{info, trace};
 use overload::http_util::handle_history_all;
 use overload::http_util::request::{PagerOptions, Request};
+use overload::{http_util, data_dir};
+use prometheus::{opts, register_counter, Counter, Encoder, TextEncoder};
 #[cfg(feature = "cluster")]
 use rust_cloud_discovery::DiscoveryClient;
 #[cfg(feature = "cluster")]
 use serde_json::Value;
+use std::convert::Infallible;
+use std::env;
+use std::fmt::Debug;
 #[cfg(feature = "cluster")]
 use std::sync::Arc;
+use warp::reject::Reject;
 #[cfg(feature = "cluster")]
 use warp::reply::{Json, WithStatus};
+use warp::{Filter, Reply};
 
 lazy_static! {
     static ref HTTP_COUNTER: Counter = register_counter!(opts!(
@@ -39,7 +41,7 @@ lazy_static! {
     static ref CLUSTER: Arc<Cluster> = Arc::new(Cluster::new(10 * 1000));
 }
 
-#[tokio::main(flavor = "current_thread")]
+#[tokio::main]
 async fn main() {
     //init logging
     let log_level = env::var_os("log.level")
@@ -48,19 +50,18 @@ async fn main() {
         .unwrap_or_else(|| "trace".to_string());
     tracing_subscriber::fmt()
         .with_env_filter(format!(
-            "overload={},rust_cloud_discovery={},cloud_discovery_kubernetes={},cluster_mode={},almost_raft={}",
-            &log_level, &log_level, &log_level, &log_level, &log_level
+            "overload={},rust_cloud_discovery={},cloud_discovery_kubernetes={},cluster_mode={},\
+            almost_raft={},sqlx={}",
+            &log_level, &log_level, &log_level, &log_level, &log_level, &log_level
         ))
         .try_init()
         .unwrap();
     info!("log level: {}", &log_level);
+    info!("data directory: {}", data_dir());
 
-    // for var in env::vars() {
-    //     info!("var:{:?}", var);
-    // }
-    // for var in env::vars_os() {
-    //     info!("var_os:{:?}", var);
-    // }
+    for var in env::vars() {
+        info!("env var: {:?}", var);
+    }
 
     //todo get from k8s itself
     #[cfg(feature = "cluster")]
@@ -131,6 +132,16 @@ async fn main() {
             }
         });
 
+    let upload_binary_file = warp::post()
+        .and(
+            warp::path("test")
+                .and(warp::path("requests-bin"))
+                .and(warp::path::end()),
+        )
+        .and(warp::body::content_length_limit(1024 * 1024 * 32))
+        .and(warp::body::stream())
+        .and_then(upload_binary_file);
+
     let stop_req = warp::path!("test" / "stop" / String)
         .and_then(|job_id: String| async move { stop(job_id).await });
 
@@ -185,7 +196,11 @@ async fn main() {
             async move { cluster_heartbeat(tmp, true, leader_node, term).await }
         });
 
-    let routes = prometheus_metric.or(overload_req).or(stop_req).or(history);
+    let routes = prometheus_metric
+        .or(overload_req)
+        .or(stop_req)
+        .or(history)
+        .or(upload_binary_file);
     #[cfg(feature = "cluster")]
     let routes = routes
         .or(info)
@@ -238,6 +253,25 @@ async fn all_job(option: PagerOptions) -> Result<impl Reply, Infallible> {
     let status = handle_history_all(option.offset.unwrap_or(0), option.limit.unwrap_or(20)).await;
     trace!("resp: all_job: {:?}", &status);
     Ok(warp::reply::json(&status))
+}
+
+async fn upload_binary_file<S, B>(data: S) -> Result<impl Reply, Infallible>
+where
+    S: Stream<Item = Result<B, warp::Error>> + Unpin + Send + Sync,
+    B: Buf + Send + Sync,
+{
+    let data_dir = data_dir();
+    let result = http_util::csv_stream_to_sqlite(data, &*data_dir).await;
+    match result {
+        Ok(r) => Ok(warp::reply::with_status(
+            warp::reply::json(&r),
+            StatusCode::OK,
+        )),
+        Err(e) => Ok(warp::reply::with_status(
+            warp::reply::json(&e),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        )),
+    }
 }
 
 // #[cfg(not(feature = "cluster"))]
@@ -349,3 +383,9 @@ fn no_cluster_err() -> WithStatus<Json> {
     let error_msg: Value = serde_json::from_str("{\"error\":\"Cluster is not running\"}").unwrap();
     warp::reply::with_status(warp::reply::json(&error_msg), StatusCode::NOT_FOUND)
 }
+
+#[derive(Debug)]
+struct Rejectable<T> {
+    err: T,
+}
+impl<T: Debug + Sync + Send + 'static> Reject for Rejectable<T> {}

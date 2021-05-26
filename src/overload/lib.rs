@@ -7,9 +7,19 @@ pub mod http_util;
 use http::Method;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fmt;
+use std::{fmt, env};
 use std::fmt::Display;
 use std::hash::{Hash, Hasher};
+use sqlx::sqlite::SqliteRow;
+use sqlx::Row;
+use std::convert::TryInto;
+
+pub const DEFAULT_DATA_DIR: &str = "/tmp";
+
+pub fn data_dir() -> String {
+    env::var("DATA_DIR")
+        .unwrap_or_else(|_| DEFAULT_DATA_DIR.to_string())
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HttpReq {
@@ -17,6 +27,7 @@ pub struct HttpReq {
     pub id: String,
     #[serde(with = "http_serde::method")]
     pub method: Method,
+    //todo as a http::Uri
     pub url: String,
     pub body: Option<Vec<u8>>,
     #[serde(default = "HashMap::new")]
@@ -60,6 +71,25 @@ impl Hash for HttpReq {
     }
 }
 
+impl<'a> sqlx::FromRow<'a, SqliteRow> for HttpReq {
+    fn from_row(row: &'a SqliteRow) -> Result<Self, sqlx::Error> {
+        let id: i64 = row.get("rowid");
+        let method:String = row.get("method");
+        let url:String = row.get("url");
+        let body:Option<Vec<u8>> = row.get("body");
+        let headers:String = row.get("headers");
+
+        let req = HttpReq {
+        id: id.to_string(),
+            method: method.as_str().try_into().unwrap(),
+            url,
+            body,
+            headers: serde_json::from_str(headers.as_str()).unwrap_or_default()
+        };
+        Ok(req)
+    }
+}
+
 fn uuid() -> String {
     uuid::Uuid::new_v4().to_string()
 }
@@ -77,6 +107,7 @@ pub enum JobStatus {
 #[derive(Debug, Serialize, Deserialize, Copy, Clone)]
 pub enum ErrorCode {
     InactiveCluster,
+    SqliteOpenFailed,
     Others,
 }
 

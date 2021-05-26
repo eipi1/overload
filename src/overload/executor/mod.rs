@@ -3,38 +3,33 @@
 #[cfg(feature = "cluster")]
 pub mod cluster;
 
-use std::collections::HashMap;
-use std::future::Future;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::task::{Context, Poll};
-use std::time::{Duration, Instant};
-
-use bytes::Bytes;
-
-use hyper::client::{Client, HttpConnector, ResponseFuture};
-use hyper::{Error, Request};
-
-use lazy_static::lazy_static;
-use prometheus::{
-    linear_buckets, register_histogram_vec, register_int_counter_vec, HistogramVec, IntCounterVec,
-};
-
-use tokio::sync::RwLock;
-use tokio_stream::StreamExt;
-use tracing::{error, info, trace};
-
 use super::HttpReq;
 use crate::generator::{request_generator_stream, RequestGenerator};
-use crate::JobStatus;
+use crate::{ErrorCode, JobStatus};
+use bytes::Bytes;
 use futures_util::future::BoxFuture;
 use futures_util::stream::FuturesUnordered;
 use futures_util::FutureExt;
 use http::header::HeaderName;
 use http::HeaderValue;
+use hyper::client::{Client, HttpConnector, ResponseFuture};
+use hyper::{Error, Request};
 use hyper_tls::HttpsConnector;
+use lazy_static::lazy_static;
 use native_tls::TlsConnector;
+use prometheus::{
+    linear_buckets, register_histogram_vec, register_int_counter_vec, HistogramVec, IntCounterVec,
+};
+use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::str::FromStr;
+use std::sync::Arc;
+use std::task::{Context, Poll};
+use std::time::{Duration, Instant};
+use tokio::sync::RwLock;
+use tokio_stream::StreamExt;
+use tracing::{error, info, trace};
 
 #[allow(dead_code)]
 enum HttpRequestState {
@@ -210,30 +205,49 @@ pub async fn execute_request_generator(request: RequestGenerator, job_id: String
         write_guard.insert(job_id.clone(), JobStatus::InProgress);
     }
     while let Some((qps, requests)) = stream.next().await {
-        let stop = {
-            let read_guard = JOB_STATUS.read().await;
-            matches!(read_guard.get(&job_id), Some(JobStatus::Stopped))
-        };
+        let stop = should_stop(&job_id).await;
         if stop {
             break;
         }
-        if qps != 0 {
-            send_multiple_requests(requests, client.clone(), qps, job_id.clone()).await;
-        }
-    }
-    {
-        let mut write_guard = JOB_STATUS.write().await;
-        if let Some(status) = write_guard.get(&job_id) {
-            let job_finished = matches!(
-                status,
-                JobStatus::Stopped | JobStatus::Failed | JobStatus::Completed
-            );
-            if !job_finished {
-                write_guard.insert(job_id.clone(), JobStatus::Completed);
+        match requests {
+            Ok(result) => {
+                send_multiple_requests(result, client.clone(), qps, job_id.clone()).await;
             }
-        } else {
-            error!("Job Status should be present")
+            Err(err) => {
+                if let Some(sqlx::Error::Database(_)) = err.downcast_ref::<sqlx::Error>() {
+                    error!(
+                        "sqlx::Error::Database: {}. Unrecoverable error; stopping the job.",
+                        &err.to_string()
+                    );
+                    set_job_status(&job_id, JobStatus::Error(ErrorCode::SqliteOpenFailed)).await;
+                    break;
+                }
+            }
+        };
+    }
+    set_job_status(&job_id, JobStatus::Completed).await;
+}
+
+async fn should_stop(job_id: &str) -> bool {
+    let read_guard = JOB_STATUS.read().await;
+    matches!(
+        read_guard.get(job_id),
+        Some(JobStatus::Stopped) | Some(JobStatus::Error(_))
+    )
+}
+
+async fn set_job_status(job_id: &str, new_status: JobStatus) {
+    let mut write_guard = JOB_STATUS.write().await;
+    if let Some(status) = write_guard.get(job_id) {
+        let job_finished = matches!(
+            status,
+            JobStatus::Stopped | JobStatus::Failed | JobStatus::Completed | JobStatus::Error(_)
+        );
+        if !job_finished {
+            write_guard.insert(job_id.to_string(), new_status);
         }
+    } else {
+        error!("Job Status should be present")
     }
 }
 
@@ -290,6 +304,14 @@ async fn send_multiple_requests(
     job_id: String,
 ) {
     let n_req = requests.len();
+    if count == 0 || n_req == 0 {
+        trace!(
+            "no requests are sent, either qps({}) or request size({}) is zero",
+            count,
+            n_req
+        );
+        return;
+    }
     let qps_per_req = count / n_req as u32;
     let remainder = count % n_req as u32;
 
@@ -368,28 +390,4 @@ fn build_client() -> Client<HttpsConnector<HttpConnector>> {
     http_connector.enforce_http(false);
     let connector = HttpsConnector::from((http_connector, tls.into()));
     Client::builder().build(connector)
-}
-
-#[cfg(test)]
-mod test {
-    #![allow(unused_imports)]
-
-    use std::future::Future;
-    use std::pin::Pin;
-    use std::task::{Context, Poll};
-
-    use futures_util::stream::Stream;
-    use tokio::time::timeout;
-
-    // use futures_util::core_reexport::time::Duration;
-    use crate::executor::execute_request_generator;
-    use crate::generator::{request_generator_stream, ConstantQPS, RequestGenerator};
-
-    #[tokio::test]
-    #[ignore]
-    async fn test_execute_gen_req() {
-        let generator = RequestGenerator::new(3, Vec::new(), Box::new(ConstantQPS { qps: 3 }));
-        let stream = request_generator_stream(generator);
-        tokio::pin!(stream);
-    }
 }

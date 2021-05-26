@@ -34,6 +34,9 @@ version = "1.0"
 [dependencies.lazy_static]
 version = "1.4"
 
+[dependencies.futures-core]
+version = "0.3"
+
 [dependencies.futures-util]
 version = "0.3"
 
@@ -42,10 +45,13 @@ version = "1.0"
 
 [dependencies.tokio]
 version = "1.4"
-features = ["rt-multi-thread", "macros"]
+features = ["rt-multi-thread", "macros", "fs", "io-util"]
 
 [dependencies.tokio-stream]
 version = "0.1"
+
+[dependencies.tokio-util]
+version = "0.6"
 
 [dependencies.native-tls]
 version = "0.2"
@@ -63,6 +69,18 @@ version = "0.5"
 [dependencies.warp]
 version = "0.3"
 
+[dependencies.async-trait]
+version = "0.1"
+
+[dependencies.csv-async]
+version = "1.2"
+features = ["tokio"]
+
+[dependencies.sqlx]
+version = "0.5"
+default-features = false
+features = ["sqlite", "runtime-tokio-native-tls"]
+
 [dependencies.regex]
 version = "1.4"
 
@@ -79,6 +97,9 @@ version = "1.0"
 [dependencies.uuid]
 version = "0.8"
 features = ["v4"]
+
+[dependencies.fastrand]
+version = "1.4"
 
 [dependencies.rand]
 version = "0.8"
@@ -103,6 +124,9 @@ version = "0.2"
 
 [dev-dependencies.tokio-test]
 version = "0.4"
+
+[dev-dependencies.base64]
+version = "0.13"
 
 [features]
 default = ["debug"]
