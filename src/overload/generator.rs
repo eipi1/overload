@@ -395,7 +395,6 @@ pub(crate) mod test {
     }
 
     #[tokio::test]
-    #[should_panic]
     async fn test_request_generator_empty_req() {
         let mut generator = RequestGenerator::new(
             3,
@@ -405,7 +404,7 @@ pub(crate) mod test {
         let ret = generator.next().await;
         if let Some(arg) = ret {
             assert_eq!(arg.0, 3);
-            assert_eq!(arg.1.len(), 0);
+            assert_eq!(arg.1.unwrap().len(), 0);
         } else {
             panic!("fails");
         }
@@ -424,9 +423,10 @@ pub(crate) mod test {
         );
         let ret = generator.next().await;
         if let Some(arg) = ret {
+            let requests = arg.1.unwrap();
             assert_eq!(arg.0, 3);
-            assert_eq!(arg.1.len(), 1);
-            if let Some(req) = arg.1.get(0) {
+            assert_eq!(requests.len(), 1);
+            if let Some(req) = requests.get(0) {
                 assert_eq!(req.method, http::Method::GET);
             }
         } else {
@@ -444,7 +444,7 @@ pub(crate) mod test {
         let ret = generator.next().await;
         if let Some(arg) = ret {
             assert_eq!(arg.0, 3);
-            assert_eq!(arg.1.len(), 3);
+            assert_eq!(arg.1.unwrap().len(), 3);
         } else {
             panic!()
         }
@@ -460,7 +460,7 @@ pub(crate) mod test {
         let ret = generator.next().await;
         if let Some(arg) = ret {
             assert_eq!(arg.0, 15);
-            assert_eq!(arg.1.len(), MAX_REQ_RET_SIZE);
+            assert_eq!(arg.1.unwrap().len(), MAX_REQ_RET_SIZE);
         } else {
             panic!()
         }

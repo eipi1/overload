@@ -400,8 +400,6 @@ mod test {
         log_error!(to_sqlite);
     }
 
-    #[tokio::test]
-    #[ignore]
     async fn create_csv() {
         setup();
         let mut wri =
