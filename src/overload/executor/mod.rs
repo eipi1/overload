@@ -340,12 +340,12 @@ async fn send_multiple_requests(
     }
 }
 
-pub(crate) async fn send_stop_signal(job_id: String) -> String {
-    info!("Stopping the job {}", &job_id);
+pub(crate) async fn send_stop_signal(job_id: &str) -> String {
+    info!("Stopping the job {}", job_id);
     //todo don't stop if already done
     let current_status = {
         let mut guard = JOB_STATUS.write().await;
-        guard.insert(job_id.clone(), JobStatus::Stopped)
+        guard.insert(job_id.to_string(), JobStatus::Stopped)
     };
     if let Some(status) = current_status {
         match status {
@@ -354,7 +354,7 @@ pub(crate) async fn send_stop_signal(job_id: String) -> String {
             JobStatus::Completed => "Job already completed",
             JobStatus::Failed => "Job failed",
             _ => {
-                error!("Invalid job status for job: {}", &job_id);
+                error!("Invalid job status for job: {}", job_id);
                 "Invalid job status"
             }
         }
