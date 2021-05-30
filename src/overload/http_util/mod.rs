@@ -1,12 +1,26 @@
+#[cfg(feature = "cluster")]
+mod cluster;
 pub mod request;
+mod standalone;
 
 #[cfg(feature = "cluster")]
-use crate::executor::cluster;
-use crate::executor::{execute_request_generator, get_job_status, send_stop_signal};
+pub use cluster::handle_history_all;
+#[cfg(not(feature = "cluster"))]
+pub use standalone::handle_history_all;
+
+#[cfg(feature = "cluster")]
+pub use cluster::stop;
+#[cfg(not(feature = "cluster"))]
+pub use standalone::stop;
+
+#[cfg(feature = "cluster")]
+use crate::executor::cluster::cluster_execute_request_generator;
+use crate::executor::execute_request_generator;
 use crate::http_util::request::Request;
 #[cfg(feature = "cluster")]
 use crate::ErrorCode;
 use crate::{HttpReq, JobStatus, Response};
+use anyhow::Error as AnyError;
 use bytes::Buf;
 #[cfg(feature = "cluster")]
 use cluster_mode::Cluster;
@@ -24,8 +38,8 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::ConnectOptions;
-use std::collections::hash_map::RandomState;
 use std::collections::HashMap;
+use std::convert::{TryFrom, TryInto};
 use std::error::Error as StdError;
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
@@ -40,8 +54,6 @@ use tokio::io::AsyncRead;
 use tokio_stream::StreamExt;
 use tokio_util::io::StreamReader;
 use uuid::Uuid;
-use std::convert::{TryInto, TryFrom};
-use anyhow::Error as AnyError;
 
 pub async fn handle_request(request: Request) -> Response {
     let job_id = job_id(&request);
@@ -58,7 +70,7 @@ pub async fn handle_request_cluster(request: Request, cluster: Arc<Cluster>) -> 
         Response::new(job_id, JobStatus::Error(ErrorCode::InactiveCluster))
     } else if cluster.is_primary().await {
         let generator = request.into();
-        tokio::spawn(cluster::cluster_execute_request_generator(
+        tokio::spawn(cluster_execute_request_generator(
             generator,
             job_id.clone(),
             cluster,
@@ -138,25 +150,10 @@ fn job_id(request: &Request) -> String {
         })
 }
 
-pub async fn stop(job_id: String) -> TestJobResponse {
-    let result = send_stop_signal(job_id.clone()).await;
-    TestJobResponse {
-        job_id,
-        message: result,
-    }
-}
-
-pub async fn handle_history_all(
-    offset: usize,
-    limit: usize,
-) -> HashMap<String, JobStatus, RandomState> {
-    get_job_status(offset, limit).await
-}
-
 pub async fn csv_stream_to_sqlite<S, B>(
     http_stream: S,
     data_dir: &str,
-) -> Result<GenericResponse, GenericError>
+) -> Result<GenericResponse<String>, GenericError>
 where
     S: Stream<Item = Result<B, warp::Error>> + Unpin + Send + Sync,
     B: Buf + Send + Sync,
@@ -183,7 +180,7 @@ where
 async fn csv_reader_to_sqlite<R>(
     mut reader: AsyncDeserializer<R>,
     dest_file: String,
-) -> anyhow::Result<GenericResponse>
+) -> anyhow::Result<GenericResponse<String>>
 where
     R: AsyncRead + Unpin + Send + Sync,
 {
@@ -203,7 +200,7 @@ where
     )
     .execute(&mut connection)
     .await?;
-    let mut success:usize = 0;
+    let mut success: usize = 0;
     while let Some(req) = reader.next().await {
         match req {
             Ok(csv_req) => {
@@ -212,7 +209,7 @@ where
                 let req: Result<HttpReq, AnyError> = csv_req.try_into();
                 match req {
                     Ok(req) => {
-                        success+=1;
+                        success += 1;
                         sqlx::query("insert into http_req values(?,?,?,?)")
                             .bind(&req.url)
                             .bind(&req.method.to_string())
@@ -225,7 +222,6 @@ where
                         error!("failed to parse data: {}", e);
                     }
                 }
-
             }
             Err(e) => {
                 error!("error while reading csv: {:?}", &e)
@@ -233,7 +229,9 @@ where
         }
     }
     let mut response = GenericResponse::default();
-    response.data.insert("valid_count".into(),success.to_string());
+    response
+        .data
+        .insert("valid_count".into(), success.to_string());
     Ok(response)
 }
 
@@ -244,12 +242,12 @@ pub struct TestJobResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct GenericResponse {
+pub struct GenericResponse<T: Serialize> {
     #[serde(flatten)]
-    pub data: HashMap<String, String>,
+    pub data: HashMap<String, T>,
 }
 
-impl Default for GenericResponse {
+impl<T: Serialize> Default for GenericResponse<T> {
     fn default() -> Self {
         GenericResponse {
             data: HashMap::with_capacity(2),
@@ -264,6 +262,48 @@ pub struct GenericError {
     #[serde(flatten)]
     pub data: HashMap<String, String>,
 }
+
+impl GenericError {
+    pub fn internal_500(msg: &str) -> GenericError {
+        GenericError {
+            error_code: 500,
+            message: msg.to_string(),
+            ..Default::default()
+        }
+    }
+
+    pub fn error_unknown() -> GenericError {
+        Self::internal_500("Unknown error")
+    }
+}
+
+impl From<http::Error> for GenericError {
+    fn from(e: http::Error) -> Self {
+        GenericError {
+            error_code: 400,
+            message: e.to_string(),
+            ..Default::default()
+        }
+    }
+}
+
+macro_rules! from_error {
+    ($t:ty) => {
+        impl From<$t> for GenericError {
+            fn from(e: $t) -> Self {
+                GenericError {
+                    error_code: 500,
+                    message: e.to_string(),
+                    ..Default::default()
+                }
+            }
+        }
+    };
+}
+
+from_error!(hyper::Error);
+from_error!(AnyError);
+from_error!(serde_json::Error);
 
 impl Default for GenericError {
     fn default() -> Self {
@@ -308,12 +348,12 @@ impl TryInto<HttpReq> for HttpReqCsvHelper {
         Uri::try_from(&self.url)?;
         let method = Method::try_from(self.method.as_str())?;
         let headers = serde_json::from_str::<HashMap<String, String>>(&self.headers.as_str())?;
-        Ok(HttpReq{
+        Ok(HttpReq {
             id: "".to_string(),
             method,
             url: self.url,
             body: self.body.map(|s| s.into_bytes()),
-            headers
+            headers,
         })
     }
 }
@@ -362,6 +402,9 @@ impl Into<StdIoError> for WarpStdIoError {
         std::io::Error::new(ErrorKind::Other, self.inner.to_string())
     }
 }
+
+pub const PATH_JOB_STATUS: &str = "/test/status";
+pub const PATH_STOP_JOB: &str = "/test/stop";
 
 #[cfg(test)]
 mod test {

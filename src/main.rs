@@ -10,9 +10,9 @@ use hyper::header::CONTENT_TYPE;
 use hyper::{Body, Response};
 use lazy_static::lazy_static;
 use log::{info, trace};
-use overload::http_util::handle_history_all;
+use overload::http_util::{handle_history_all, GenericResponse, GenericError};
 use overload::http_util::request::{PagerOptions, Request};
-use overload::{http_util, data_dir};
+use overload::{data_dir, http_util};
 use prometheus::{opts, register_counter, Counter, Encoder, TextEncoder};
 #[cfg(feature = "cluster")]
 use rust_cloud_discovery::DiscoveryClient;
@@ -26,7 +26,8 @@ use std::sync::Arc;
 use warp::reject::Reject;
 #[cfg(feature = "cluster")]
 use warp::reply::{Json, WithStatus};
-use warp::{Filter, Reply};
+use warp::{reply, Filter, Reply};
+use serde::Serialize;
 
 lazy_static! {
     static ref HTTP_COUNTER: Counter = register_counter!(opts!(
@@ -250,11 +251,26 @@ async fn main() {
 
 async fn all_job(option: PagerOptions) -> Result<impl Reply, Infallible> {
     trace!("req: all_job: {:?}", &option);
-    let status = handle_history_all(option.offset.unwrap_or(0), option.limit.unwrap_or(20)).await;
+    let status = {
+        #[cfg(feature = "cluster")]
+        {
+            handle_history_all(
+                option.offset.unwrap_or(0),
+                option.limit.unwrap_or(20),
+                CLUSTER.clone(),
+            )
+        }
+        #[cfg(not(feature = "cluster"))]
+        {
+            handle_history_all(option.offset.unwrap_or(0), option.limit.unwrap_or(20))
+        }
+    }
+    .await;
     trace!("resp: all_job: {:?}", &status);
-    Ok(warp::reply::json(&status))
+    Ok(generic_result_to_reply_with_status(status))
 }
 
+/// should use shared storage, no need to forward upload request
 async fn upload_binary_file<S, B>(data: S) -> Result<impl Reply, Infallible>
 where
     S: Stream<Item = Result<B, warp::Error>> + Unpin + Send + Sync,
@@ -263,12 +279,9 @@ where
     let data_dir = data_dir();
     let result = http_util::csv_stream_to_sqlite(data, &*data_dir).await;
     match result {
-        Ok(r) => Ok(warp::reply::with_status(
-            warp::reply::json(&r),
-            StatusCode::OK,
-        )),
-        Err(e) => Ok(warp::reply::with_status(
-            warp::reply::json(&e),
+        Ok(r) => Ok(reply::with_status(reply::json(&r), StatusCode::OK)),
+        Err(e) => Ok(reply::with_status(
+            reply::json(&e),
             StatusCode::INTERNAL_SERVER_ERROR,
         )),
     }
@@ -278,7 +291,7 @@ where
 async fn execute(request: Request) -> Result<impl Reply, Infallible> {
     trace!("req: execute: {:?}", &request);
     let response = overload::http_util::handle_request(request).await;
-    let json = warp::reply::json(&response);
+    let json = reply::json(&response);
     trace!("resp: execute: {:?}", &response);
     Ok(json)
 }
@@ -287,15 +300,25 @@ async fn execute(request: Request) -> Result<impl Reply, Infallible> {
 async fn execute_cluster(request: Request) -> Result<impl Reply, Infallible> {
     trace!("req: execute_cluster: {:?}", &request);
     let response = overload::http_util::handle_request_cluster(request, CLUSTER.clone()).await;
-    let json = warp::reply::json(&response);
+    let json = reply::json(&response);
     trace!("resp: execute_cluster: {:?}", &response);
     Ok(json)
 }
 
 async fn stop(job_id: String) -> Result<impl Reply, Infallible> {
-    let resp = overload::http_util::stop(job_id).await;
-    let json = warp::reply::json(&resp);
-    Ok(json)
+    let resp = {
+        #[cfg(not(feature = "cluster"))]
+        {
+            overload::http_util::stop(job_id)
+        }
+        #[cfg(feature = "cluster")]
+        {
+            overload::http_util::stop(job_id, CLUSTER.clone())
+        }
+    }
+    .await;
+    trace!("resp: stop: {:?}", &resp);
+    Ok(generic_result_to_reply_with_status(resp))
 }
 #[cfg(feature = "cluster")]
 async fn cluster_info(cluster: Arc<Cluster>, cluster_mode: bool) -> Result<impl Reply, Infallible> {
@@ -304,8 +327,7 @@ async fn cluster_info(cluster: Arc<Cluster>, cluster_mode: bool) -> Result<impl 
         Ok(err)
     } else {
         let info = get_cluster_info(cluster).await;
-        // let json = warp::reply::json(&info);
-        let json = warp::reply::with_status(warp::reply::json(&info), StatusCode::OK);
+        let json = reply::with_status(reply::json(&info), StatusCode::OK);
         Ok(json)
     }
 }
@@ -329,7 +351,7 @@ async fn cluster_request_vote(
         cluster
             .accept_raft_request_vote(requester_node_id, term)
             .await;
-        let json = warp::reply::with_status(warp::reply::json(&Value::Null), StatusCode::OK);
+        let json = reply::with_status(reply::json(&Value::Null), StatusCode::OK);
         Ok(json)
     }
 }
@@ -351,7 +373,7 @@ async fn cluster_request_vote_response(
         Ok(err)
     } else {
         cluster.accept_raft_request_vote_resp(term, vote).await;
-        let json = warp::reply::with_status(warp::reply::json(&Value::Null), StatusCode::OK);
+        let json = reply::with_status(reply::json(&Value::Null), StatusCode::OK);
         Ok(json)
     }
 }
@@ -373,15 +395,28 @@ async fn cluster_heartbeat(
         Ok(err)
     } else {
         cluster.accept_raft_heartbeat(leader_node_id, term).await;
-        let json = warp::reply::with_status(warp::reply::json(&Value::Null), StatusCode::OK);
+        let json = reply::with_status(reply::json(&Value::Null), StatusCode::OK);
         Ok(json)
+    }
+}
+
+fn generic_result_to_reply_with_status<T:Serialize>(status: Result<GenericResponse<T>, GenericError>) -> reply::WithStatus<reply::Json> {
+    match status {
+        Ok(resp) => reply::with_status(reply::json(&resp), StatusCode::OK),
+        Err(err) => {
+            let status_code = err.error_code;
+            reply::with_status(
+                reply::json(&err),
+                StatusCode::from_u16(status_code).unwrap(),
+            )
+        }
     }
 }
 
 #[cfg(feature = "cluster")]
 fn no_cluster_err() -> WithStatus<Json> {
     let error_msg: Value = serde_json::from_str("{\"error\":\"Cluster is not running\"}").unwrap();
-    warp::reply::with_status(warp::reply::json(&error_msg), StatusCode::NOT_FOUND)
+    reply::with_status(reply::json(&error_msg), StatusCode::NOT_FOUND)
 }
 
 #[derive(Debug)]
