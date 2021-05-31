@@ -1,3 +1,4 @@
+use crate::http_util::request::JobStatusQueryParams;
 use crate::http_util::{GenericError, GenericResponse, PATH_JOB_STATUS, PATH_STOP_JOB};
 use crate::{ErrorCode, JobStatus};
 use bytes::Buf;
@@ -14,23 +15,19 @@ use std::sync::Arc;
 type GenericResult<T> = Result<GenericResponse<T>, GenericError>;
 
 pub async fn handle_history_all(
-    offset: usize,
-    limit: usize,
+    params: JobStatusQueryParams,
     cluster: Arc<Cluster>,
 ) -> GenericResult<JobStatus> {
     if !cluster.is_active().await {
         Err(inactive_cluster_error())
     } else if cluster.is_primary().await {
-        super::standalone::handle_history_all(offset, limit).await
+        super::standalone::handle_history_all(params).await
     } else {
         // forward request to primary
         let client = Client::new();
         if let Ok(uri) = primary_uri(&cluster.primaries().await).await {
             let request = hyper::Request::builder()
-                .uri(format!(
-                    "{}{}?offset={}&limit={}",
-                    &uri, PATH_JOB_STATUS, offset, limit
-                ))
+                .uri(format!("{}{}?{}", &uri, PATH_JOB_STATUS, params))
                 .method("GET")
                 .body(Body::empty())?;
             forward_test_request::<JobStatus>(request, cluster, client).await

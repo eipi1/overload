@@ -20,8 +20,9 @@ use native_tls::TlsConnector;
 use prometheus::{
     linear_buckets, register_histogram_vec, register_int_counter_vec, HistogramVec, IntCounterVec,
 };
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
+use std::option::Option::Some;
 use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -165,7 +166,7 @@ lazy_static! {
     // )
     .unwrap();
 
-    pub static ref JOB_STATUS:RwLock<HashMap<String, JobStatus>> = RwLock::new(HashMap::new());
+    pub static ref JOB_STATUS:RwLock<BTreeMap<String, JobStatus>> = RwLock::new(BTreeMap::new());
 }
 
 pub async fn init() {
@@ -364,16 +365,35 @@ pub(crate) async fn send_stop_signal(job_id: &str) -> String {
     }
 }
 
-pub(crate) async fn get_job_status(offset: usize, limit: usize) -> HashMap<String, JobStatus> {
+/// return status of test jobs.
+/// job_id has higher priority and will return status of the the job. Otherwise will
+/// return status of `limit` jobs, starting at `offset`
+pub(crate) async fn get_job_status(
+    job_id: Option<String>,
+    offset: usize,
+    limit: usize,
+) -> HashMap<String, JobStatus> {
     let mut job_status = HashMap::new();
     let guard = JOB_STATUS.read().await;
+
+    if let Some(job_id) = job_id {
+        if let Some(status) = guard.get(&job_id) {
+            job_status.insert(job_id, *status);
+        }
+        return job_status;
+    }
+
     let mut count = 0;
+    let len = guard.len();
     for (id, status) in guard.iter() {
-        count += 1;
-        if count - offset > limit {
+        if count > len {
             break;
         }
-        if count >= offset {
+        count += 1;
+        if count > offset && count - offset > limit {
+            break;
+        }
+        if count > offset {
             job_status.insert(id.clone(), *status);
         }
     }

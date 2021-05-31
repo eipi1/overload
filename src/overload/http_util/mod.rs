@@ -275,6 +275,18 @@ impl GenericError {
     pub fn error_unknown() -> GenericError {
         Self::internal_500("Unknown error")
     }
+
+    pub fn new(msg: &str, code: u16) -> Self {
+        Self {
+            error_code: code,
+            message: msg.to_string(),
+            ..Default::default()
+        }
+    }
+
+    pub fn from_error<E: StdError>(code: u16, err: E) -> GenericError {
+        Self::new(&*err.to_string(),code)
+    }
 }
 
 impl From<http::Error> for GenericError {

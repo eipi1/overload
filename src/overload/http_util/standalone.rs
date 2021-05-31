@@ -2,12 +2,17 @@ use crate::executor::{get_job_status, send_stop_signal};
 use crate::http_util::{GenericError, GenericResponse};
 use crate::JobStatus;
 use std::collections::HashMap;
+use crate::http_util::request::JobStatusQueryParams;
 
-pub async fn handle_history_all(
-    offset: usize,
-    limit: usize,
-) -> Result<GenericResponse<JobStatus>, GenericError> {
-    let status = get_job_status(offset, limit).await;
+pub async fn handle_history_all(params: JobStatusQueryParams) -> Result<GenericResponse<JobStatus>, GenericError> {
+    let status = match params {
+        JobStatusQueryParams::JobId { job_id } => {
+            get_job_status(Some(job_id), 0, 0)
+        }
+        JobStatusQueryParams::PagerOptions { offset,limit } => {
+            get_job_status(None, offset, limit)
+        }
+    }.await;
     Ok(GenericResponse { data: status })
 }
 
