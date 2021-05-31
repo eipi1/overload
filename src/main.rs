@@ -10,15 +10,17 @@ use hyper::header::CONTENT_TYPE;
 use hyper::{Body, Response};
 use lazy_static::lazy_static;
 use log::{info, trace};
-use overload::http_util::{handle_history_all, GenericResponse, GenericError};
-use overload::http_util::request::{PagerOptions, Request};
+use overload::http_util::request::{JobStatusQueryParams, Request};
+use overload::http_util::{handle_history_all, GenericError, GenericResponse};
 use overload::{data_dir, http_util};
 use prometheus::{opts, register_counter, Counter, Encoder, TextEncoder};
 #[cfg(feature = "cluster")]
 use rust_cloud_discovery::DiscoveryClient;
+use serde::Serialize;
 #[cfg(feature = "cluster")]
 use serde_json::Value;
-use std::convert::Infallible;
+use std::collections::HashMap;
+use std::convert::{Infallible, TryFrom};
 use std::env;
 use std::fmt::Debug;
 #[cfg(feature = "cluster")]
@@ -27,7 +29,6 @@ use warp::reject::Reject;
 #[cfg(feature = "cluster")]
 use warp::reply::{Json, WithStatus};
 use warp::{reply, Filter, Reply};
-use serde::Serialize;
 
 lazy_static! {
     static ref HTTP_COUNTER: Counter = register_counter!(opts!(
@@ -147,8 +148,10 @@ async fn main() {
         .and_then(|job_id: String| async move { stop(job_id).await });
 
     let history = warp::path!("test" / "status")
-        .and(warp::query::<PagerOptions>())
-        .and_then(|pager_option: PagerOptions| async move {
+        // should replace with untagged enum JobStatusQueryParams, but doesn't work due to
+        // https://github.com/nox/serde_urlencoded/issues/66
+        .and(warp::query::<HashMap<String, String>>())
+        .and_then(|pager_option: HashMap<String, String>| async move {
             all_job(pager_option).await
             // ()
         });
@@ -249,25 +252,27 @@ async fn main() {
 //     println!("{:?}", &zc);
 // }
 
-async fn all_job(option: PagerOptions) -> Result<impl Reply, Infallible> {
-    trace!("req: all_job: {:?}", &option);
-    let status = {
-        #[cfg(feature = "cluster")]
-        {
-            handle_history_all(
-                option.offset.unwrap_or(0),
-                option.limit.unwrap_or(20),
-                CLUSTER.clone(),
-            )
+async fn all_job(option: HashMap<String, String>) -> Result<impl Reply, Infallible> {
+    let option = JobStatusQueryParams::try_from(option);
+    match option {
+        Ok(option) => {
+            trace!("req: all_job: {:?}", &option);
+            let status = {
+                #[cfg(feature = "cluster")]
+                {
+                    handle_history_all(option, CLUSTER.clone())
+                }
+                #[cfg(not(feature = "cluster"))]
+                {
+                    handle_history_all(option)
+                }
+            }
+            .await;
+            trace!("resp: all_job: {:?}", &status);
+            Ok(generic_result_to_reply_with_status(status))
         }
-        #[cfg(not(feature = "cluster"))]
-        {
-            handle_history_all(option.offset.unwrap_or(0), option.limit.unwrap_or(20))
-        }
+        Err(e) => Ok(generic_error_to_reply_with_status(e)),
     }
-    .await;
-    trace!("resp: all_job: {:?}", &status);
-    Ok(generic_result_to_reply_with_status(status))
 }
 
 /// should use shared storage, no need to forward upload request
@@ -400,17 +405,21 @@ async fn cluster_heartbeat(
     }
 }
 
-fn generic_result_to_reply_with_status<T:Serialize>(status: Result<GenericResponse<T>, GenericError>) -> reply::WithStatus<reply::Json> {
+fn generic_result_to_reply_with_status<T: Serialize>(
+    status: Result<GenericResponse<T>, GenericError>,
+) -> reply::WithStatus<reply::Json> {
     match status {
         Ok(resp) => reply::with_status(reply::json(&resp), StatusCode::OK),
-        Err(err) => {
-            let status_code = err.error_code;
-            reply::with_status(
-                reply::json(&err),
-                StatusCode::from_u16(status_code).unwrap(),
-            )
-        }
+        Err(err) => generic_error_to_reply_with_status(err),
     }
+}
+
+fn generic_error_to_reply_with_status(err: GenericError) -> reply::WithStatus<reply::Json> {
+    let status_code = err.error_code;
+    reply::with_status(
+        reply::json(&err),
+        StatusCode::from_u16(status_code).unwrap(),
+    )
 }
 
 #[cfg(feature = "cluster")]
