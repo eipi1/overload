@@ -20,7 +20,7 @@ jobs:
       run: cargo test --verbose
     - name: Rust metadata
       id: rust-meta
-      run: echo "::set-output name=pkg-version::$(cargo pkgid | cut -d# -f2 | cut -d: -f2)"
+      run: echo "::set-output name=pkg-version::$(cargo pkgid | cut -d# -f2)"
     - name: Login to DockerHub
       uses: docker/login-action@v1
       with:
