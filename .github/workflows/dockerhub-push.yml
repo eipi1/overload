@@ -1,0 +1,36 @@
+name: Rust
+
+on:
+  push:
+    branches: [ master ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v2
+    - name: Build
+      run: cargo build --features "cluster" --release
+    - name: Run tests
+      run: cargo test --verbose
+    - name: Rust metadata
+      id: rust-meta
+      run: echo "::set-output name=pkg-version::$(cargo pkgid | cut -d# -f2 | cut -d: -f2)"
+    - name: Login to DockerHub
+      uses: docker/login-action@v1
+      with:
+        username: ${{ secrets.DOCKER_HUB_USERNAME }}
+        password: ${{ secrets.DOCKER_HUB_TOKEN }}
+    - name: Build cluster image
+      uses: docker/build-push-action@v2.5.0
+      with:
+        push: true
+        tags: mdsarowar/overload:${{ steps.rust-meta.outputs.pkg-version }}-cluster-snapshot
+        
+        
+      
