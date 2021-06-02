@@ -16,7 +16,7 @@ jobs:
     steps:
     - uses: actions/checkout@v2
     - name: Build
-      run: cargo build --bin --features "cluster" --release
+      run: cargo build --bins --features "cluster" --release
     - name: Run tests
       run: cargo test --verbose
     - name: Login to DockerHub
@@ -31,7 +31,7 @@ jobs:
         push: true
         tags: mdsarowar/overload:latest-cluster-snapshot
     - name: Build standalone
-      run: cargo build --bin --release
+      run: cargo build --bins --release
     - name: Build & push standalone image
       uses: docker/build-push-action@v2.5.0
       with:
