@@ -64,7 +64,7 @@ spec:
               value: "1"
             - name: K8S_ENDPOINT_NAME
               value: "overload"
-            - name: K8S_SERVICE_NAME
+            - name: K8S_NAMESPACE_NAME
               value: "default"
 ---
 apiVersion: v1

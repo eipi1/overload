@@ -69,7 +69,7 @@ async fn main() {
             .ok()
             .unwrap_or_else(|| "overload".to_string());
         #[cfg(feature = "cluster")]
-        let namespace = env::var("K8S_SERVICE_NAME")
+        let namespace = env::var("K8S_NAMESPACE_NAME")
             .ok()
             .unwrap_or_else(|| "default".to_string());
 
