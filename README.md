@@ -1,11 +1,14 @@
 ![Rust](https://github.com/eipi1/overload/actions/workflows/rust.yml/badge.svg)
 [![Docker hub][dockerhub-badge]][dockerhub-url]
 [![MIT licensed][mit-badge]][mit-url]
+[![Github][github-badge]][github-rep]
 
 [dockerhub-badge]: https://github.com/eipi1/overload/actions/workflows/dockerhub-push.yml/badge.svg
 [dockerhub-url]: https://hub.docker.com/r/mdsarowar/overload
 [mit-badge]: https://img.shields.io/badge/license-MIT-blue.svg
 [mit-url]: https://github.com/tokio-rs/tokio/blob/master/LICENSE
+[github-badge]: https://img.shields.io/badge/github-eipi1/overload-brightgreen
+[github-rep]: https://github.com/eipi1/overload
 
 # Overload
 A distributed load testing utility written in Rust
@@ -23,7 +26,7 @@ There are a few constraints/limitations is in place -
 * Maximum nodes: 20
 * Requires container image tagged as *{version}-cluster*
 
-Repository provides a sample *[deployment.yaml](deployment-yaml)* file.
+Repository provides a sample *[deployment.yaml][deployment-yaml]* file.
 
 ### Standalone
 Runs the application in simple single instance mode. Requires container images tagged as *{version}-standalone. 
@@ -38,7 +41,7 @@ variable|desc|default
 ---|---|---
 LOG_LEVEL| application log level |info
 DATA_DIR| path to store uploaded CSV, should be shared among all instance in cluster mode| /tmp
-K8S_ENDPOINT_NAME| name of the [endpoints](endpoint-api) (cluster mode only)| overload
+K8S_ENDPOINT_NAME| name of the [endpoints][endpoint-api] (cluster mode only)| overload
 K8S_NAMESPACE_NAME| kubernetes namespace | default 
 
 ## APIs
