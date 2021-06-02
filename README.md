@@ -1,3 +1,12 @@
+![Rust](https://github.com/eipi1/overload/actions/workflows/rust.yml/badge.svg)
+[![Docker hub][dockerhub-badge]][dockerhub-url]
+[![MIT licensed][mit-badge]][mit-url]
+
+[dockerhub-badge]: https://github.com/eipi1/overload/actions/workflows/dockerhub-push.yml/badge.svg
+[dockerhub-url]: https://hub.docker.com/r/mdsarowar/overload
+[mit-badge]: https://img.shields.io/badge/license-MIT-blue.svg
+[mit-url]: https://github.com/tokio-rs/tokio/blob/master/LICENSE
+
 # Overload
 A distributed load testing utility written in Rust
 
@@ -5,24 +14,32 @@ A distributed load testing utility written in Rust
 Overload support two modes - cluster & standalone
 
 ### Cluster
+Cluster mode allows the application run in primary/secondary mode, but all the complexity should be transparent to the users.
 Currently, only supported on Kubernetes.
 
-To run in cluster mode, the `cluster` feature needs to be enabled during the build.
-```shell
-cargo build --release --features cluster
-```
-Sample Dockerfile and deployment configurations are provided to build the docker image and deploy it on
-Kubernetes
+There are a few constraints/limitations is in place - 
+* Shared storage between all nodes for tests using csv to work properly
+* Minimum required node: 3
+* Maximum nodes: 20
+* Requires container image tagged as *{version}-cluster*
 
-The application will handle clustering related stuff like consensus/leader election, forwarding API call
-by itself. Scaling up will add newly created nodes to the cluster or scaling down will remove nodes
-automatically.
+Repository provides a sample *[deployment.yaml](deployment-yaml)* file.
 
 ### Standalone
-Build and run a single instance of the application.
+Runs the application in simple single instance mode. Requires container images tagged as *{version}-standalone. 
+
+For example to run the latest snapshot 
 ```shell
-cargo run
+docker run mdsarowar/overload:latest-standalone-snapshot
 ```
+
+## Environment variables
+variable|desc|default
+---|---|---
+LOG_LEVEL| application log level |info
+DATA_DIR| path to store uploaded CSV, should be shared among all instance in cluster mode| /tmp
+K8S_ENDPOINT_NAME| name of the [endpoints](endpoint-api) (cluster mode only)| overload
+K8S_NAMESPACE_NAME| kubernetes namespace | default 
 
 ## APIs
 
@@ -33,20 +50,24 @@ Host: localhost:3030
 Content-Type: application/json
 
 {
-    "duration": 120,
-    "req": [
+  "duration": 120,
+  "req": {
+    "RequestList": {
+      "data": [
         {
-            "method": "GET",
-            "url": "http://httpbin.org/",
+          "method": "GET",
+          "url": "http://httpbin.org/"
         }
-    ],
-    "qps": {
-        "Linear": {
-            "a": 0.5,
-            "b": 1,
-            "max":120
-        }
+      ]
     }
+  },
+  "qps": {
+    "Linear": {
+      "a": 0.5,
+      "b": 1,
+      "max": 120
+    }
+  }
 }
 ```
 This will run the test for 120 seconds with a linear increase in request per seconds(RPS).
@@ -54,7 +75,7 @@ This will run the test for 120 seconds with a linear increase in request per sec
 | field | Description | data type
 | --- | ----------- | ---------
 | duration | Test duration | uint32
-| req | Array of HttpReq | [HttpReq](#httpreq)
+| req | Request provider Spec | [RequestProvider](#requestprovider)
 | qps | RPS specification | [QPSSpec](#qpsspec)
 
 #### Response
@@ -70,7 +91,45 @@ This will run the test for 120 seconds with a linear increase in request per sec
 }
 ```
 
-### HttpReq
+### RequestProvider
+Currently, supports the following providers
+
+#### RequestList
+An unordered set of [HttpReq](#httpreq)
+
+| field | Description | data type
+| --- | ----------- | ---------
+| data | Array of HttpReq | [[HttpReq](#httpreq)]
+
+#### RequestFile
+Get request data from a file. File have to be [uploaded](#upload-request-data-file) before the test.
+
+| field | Description | data type
+| --- | ----------- | ---------
+| file_name | ID of the uploaded file | UUID
+
+#### Example
+<details>
+  <summary>Example Request</summary>
+
+```json
+{
+  "duration": 3,
+  "req": {
+    "RequestFile": {
+      "file_name": "4e1d1b32-0f1e-4b31-92dd-66f51c5acf9a"
+    }
+  },
+  "qps": {
+    "ConstantQPS": {
+      "qps": 8
+    }
+  }
+}
+```
+</details>
+
+#### HttpReq
 
 | field | Description | data type
 | --- | ----------- | ---------
@@ -132,6 +191,42 @@ If a test runs for 10 seconds, generated RPS will be 1 on the first second, 4 on
 the end of the array,
 so on the 7th seconds, QPS will go down back to 1 and 4, 6, 10 on 8, 9, 10th seconds, respectively.
 
+### Upload Request Data File
+Currently, supports CSV file only.
+
+```
+POST /test/requests-bin HTTP/1.1
+Host: overload.host:3030
+Content-Type: text/csv
+Content-Length: 22
+
+"<file contents here>"
+```
+
+Curl sample
+```shell
+curl --location --request POST 'overload.host:3030/test/requests-bin' \
+--header 'Content-Type: text/csv' \
+--data-binary '@/path/to/requests.csv'
+```
+#### CSV format
+```
+"url","method","body","headers"
+"http://httpbin.org/anything/11","GET","","{}"
+"http://httpbin.org/anything/13","GET","","{}"
+"http://httpbin.org/anything","POST","{\"some\":\"random data\",\"second-key\":\"more data\"}","{\"Authorization\":\"Bearer 123\"}"
+"http://httpbin.org/bearer","GET","","{\"Authorization\":\"Bearer 123\"}"
+```
+
+#### Response
+API returns valid count, i.e. count of requests that has been parsed successfully and a file ID. File ID will be
+required to for testing.
+
+| field | Description | data type
+| --- | ----------- | ---------
+| valid_count | number of valid requests in file | uint32
+| file | ID of the file | UUID
+
 ### JobStatus
 Enum stating the current status of the test
 
@@ -192,3 +287,25 @@ Host: localhost:3030
 | field | Description | data type
 | --- | ----------- | ---------
 | job_id | id of the test job to be stopped | string |
+
+## Build yourself
+### Cluster
+To run in cluster mode, the `cluster` feature needs to be enabled during the build.
+```shell
+cargo build --release --features cluster
+```
+Sample Dockerfile and deployment configurations are provided to build the docker image and deploy it on
+Kubernetes
+
+The application will handle clustering related stuff like consensus/leader election, forwarding API call
+by itself. Scaling up will add newly created nodes to the cluster or scaling down will remove nodes
+automatically.
+
+### Standalone
+Build and run a single instance of the application.
+```shell
+cargo run
+```
+
+[deployment-yaml]: https://github.com/eipi1/overload/blob/master/deployment.yaml
+[endpoint-api]: https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.19/#read-endpoints-v1-core
