@@ -46,39 +46,36 @@ lazy_static! {
 #[tokio::main]
 async fn main() {
     //init logging
-    let log_level = env::var_os("log.level")
-        .map(|v| v.into_string().ok())
-        .flatten()
-        .unwrap_or_else(|| "trace".to_string());
+    let log_level = env::var("LOG_LEVEL").unwrap_or_else(|_| "info".to_string());
     tracing_subscriber::fmt()
         .with_env_filter(format!(
             "overload={},rust_cloud_discovery={},cloud_discovery_kubernetes={},cluster_mode={},\
-            almost_raft={},sqlx={}",
-            &log_level, &log_level, &log_level, &log_level, &log_level, &log_level
+            almost_raft={}",
+            &log_level, &log_level, &log_level, &log_level, &log_level
         ))
         .try_init()
         .unwrap();
     info!("log level: {}", &log_level);
     info!("data directory: {}", data_dir());
 
-    for var in env::vars() {
-        info!("env var: {:?}", var);
-    }
-
-    //todo get from k8s itself
-    #[cfg(feature = "cluster")]
-    let service = env::var("app.k8s.service")
-        .ok()
-        .unwrap_or_else(|| "overload".to_string());
-    #[cfg(feature = "cluster")]
-    let namespace = env::var("app.k8s.namespace")
-        .ok()
-        .unwrap_or_else(|| "default".to_string());
-
     let mut _cluster_up = true;
     #[cfg(feature = "cluster")]
     {
         info!("Running in cluster mode");
+
+        //todo get from k8s itself
+        #[cfg(feature = "cluster")]
+        let service = env::var("K8S_ENDPOINT_NAME")
+            .ok()
+            .unwrap_or_else(|| "overload".to_string());
+        #[cfg(feature = "cluster")]
+        let namespace = env::var("K8S_SERVICE_NAME")
+            .ok()
+            .unwrap_or_else(|| "default".to_string());
+
+        info!("k8s endpoint name: {}", &service);
+        info!("k8s namespace: {}", namespace);
+
         // initialize cluster
         // init discovery service
         let k8s = KubernetesDiscoverService::init(service, namespace).await;
@@ -212,45 +209,8 @@ async fn main() {
         .or(request_vote_response)
         .or(heartbeat)
         .or(overload_req_secondary);
-
-    // let test_zero_copy = warp::post()
-    //     .and(
-    //         warp::path("zero")
-    //             .and(warp::path("copy"))
-    //             .and(warp::path::end()),
-    //     )
-    //     .and(warp::body::bytes())
-    //     .and_then(|zc: Bytes| async move { zero_copy_async(zc).await });
-    // .map(|zc: Bytes| {
-    //     let zc= serde_json::from_slice::<ZC>(zc.as_ref());
-    //     format!("ACK: {:?}", zc)
-    // });
-
     warp::serve(routes).run(([0, 0, 0, 0], 3030)).await;
 }
-
-// #[derive(Debug, serde::Deserialize, serde::Serialize)]
-// struct ZC<'a> {
-//     #[serde(borrow)]
-//     pub id: &'a str,
-//     // pub id: Cow<'a, str>,
-//     #[serde(borrow)]
-//     // pub other: Cow<'a, [u8]>,-features
-//     pub other: &'a [u8],
-// }
-//
-// async fn zero_copy_async(option: Bytes) -> Result<impl Reply, Infallible> {
-//     // option.as_ref().to_owned();
-//     // let zc = serde_json::from_slice::<ZC>(&option.as_ref().to_owned()).unwrap();
-//     // format!("ACK: {:?}", zc)
-//     tokio::spawn(some_shit(option));
-//     Ok(warp::reply::json(&"{}"))
-// }
-
-// async fn some_shit(zc: Bytes) {
-//     let zc = serde_json::from_slice::<ZC>(zc.as_ref()).unwrap();
-//     println!("{:?}", &zc);
-// }
 
 async fn all_job(option: HashMap<String, String>) -> Result<impl Reply, Infallible> {
     let option = JobStatusQueryParams::try_from(option);

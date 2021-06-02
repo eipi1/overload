@@ -47,7 +47,7 @@ spec:
           persistentVolumeClaim:
             claimName: overload-vol-claim
       containers:
-        - image: 10.1.64.1:5000/overload-cluster
+        - image: mdsarowar/overload:latest-cluster-snapshot
           imagePullPolicy: "Always"
           name: overload
           ports:
@@ -56,12 +56,16 @@ spec:
             - mountPath: "/data"
               name: overload-data-storage
           env:
-            - name: log.level
-              value: "trace"
+            - name: LOG_LEVEL
+              value: "info"
             - name: DATA_DIR
               value: "/data"
             - name: RUST_BACKTRACE
               value: "1"
+            - name: K8S_ENDPOINT_NAME
+              value: "overload"
+            - name: K8S_SERVICE_NAME
+              value: "default"
 ---
 apiVersion: v1
 kind: Service
