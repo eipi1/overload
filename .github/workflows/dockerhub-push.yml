@@ -3,6 +3,8 @@ name: Dockerhub
 on:
   push:
     branches: [ master ]
+  release:
+    types: [published]
   workflow_dispatch:
 
 env:
@@ -19,6 +21,19 @@ jobs:
       run: cargo build --bins --features "cluster" --release
     - name: Run tests
       run: cargo test --verbose
+    - name: Get version
+      run: |
+        if [[ ${{ github.event_name }} == 'release' ]]; then
+            PKG_VERSION=$(cargo pkgid | cut -d# -f2)
+            TAG_VERSION=${GITHUB_REF:1}
+            if [[ $PKG_VERSION != $TAG_VERSION ]]; then
+                echo "::error::version mismatch: pkg=$PKG_VERSION, tag=$TAG_VERSION"
+                exit 1
+            fi
+            echo "version=$PKG_VERSION" >> "$GITHUB_ENV"
+        else
+            echo "version=latest" >> "$GITHUB_ENV"
+        fi
     - name: Login to DockerHub
       uses: docker/login-action@v1
       with:
@@ -29,7 +44,7 @@ jobs:
       with:
         context: .
         push: true
-        tags: mdsarowar/overload:latest-cluster-snapshot
+        tags: mdsarowar/overload:${{ env.version }}-cluster-snapshot
     - name: Build standalone
       run: cargo build --bins --release
     - name: Build & push standalone image
@@ -37,4 +52,4 @@ jobs:
       with:
         context: .
         push: true
-        tags: mdsarowar/overload:latest-standalone-snapshot
+        tags: mdsarowar/overload:${{ env.version }}-standalone-snapshot
