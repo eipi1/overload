@@ -29,8 +29,10 @@ jobs:
                 exit 1
             fi
             echo "version=$PKG_VERSION" >> "$GITHUB_ENV"
+            echo "suffix=" >> "$GITHUB_ENV"
         else
             echo "version=latest" >> "$GITHUB_ENV"
+            echo "suffix=-snapshot" >> "$GITHUB_ENV"
         fi
     - name: Build cluster
       run: cargo build --bins --features "cluster" --release
@@ -44,7 +46,7 @@ jobs:
       with:
         context: .
         push: true
-        tags: mdsarowar/overload:${{ env.version }}-cluster-snapshot
+        tags: mdsarowar/overload:${{ env.version }}-cluster${{ env.suffix }}
     - name: Run standalone tests
       run: cargo test --verbose
     - name: Build standalone
@@ -54,4 +56,4 @@ jobs:
       with:
         context: .
         push: true
-        tags: mdsarowar/overload:${{ env.version }}-standalone-snapshot
+        tags: mdsarowar/overload:${{ env.version }}-standalone${{ env.suffix }}
