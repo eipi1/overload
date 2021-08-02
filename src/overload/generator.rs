@@ -328,7 +328,7 @@ impl RequestProvider for RandomDataRequest {
             let mut url = self.url.clone();
             if let Some(schema) = &self.uri_param_schema {
                 if let Some(positions) = &self.url_param_pos {
-                    let data = generate_data(&schema);
+                    let data = generate_data(schema);
                     RandomDataRequest::substitute_param_with_data(&mut url, positions, data)
                 }
             }

@@ -11,16 +11,21 @@ use futures_util::stream::FuturesUnordered;
 use http::Request;
 use hyper::client::{Client, HttpConnector};
 use log::{error, trace};
+use smallvec::SmallVec;
 use std::collections::HashSet;
 use std::convert::TryInto;
 use std::sync::Arc;
 use tokio_stream::StreamExt;
 
+/// Run tests in cluster mode.
+/// Requires `buckets` specification as it needs to be forwarded to
+/// secondaries
 //noinspection Duplicates
 pub async fn cluster_execute_request_generator(
     request: RequestGenerator,
     job_id: String,
     cluster: Arc<Cluster>,
+    buckets: SmallVec<[f64; 6]>,
 ) {
     let time_scale = request.time_scale() as usize;
     let shared_request_provider = request.shared_provider();
@@ -97,6 +102,7 @@ pub async fn cluster_execute_request_generator(
                         &qps,
                         request_enum,
                         job_id.clone(),
+                        &buckets,
                     );
                     to_secondaries.push(to_secondary);
                 }
@@ -111,10 +117,11 @@ pub async fn cluster_execute_request_generator(
                         };
                         let to_secondary = send_requests_to_secondary(
                             &client,
-                            &secondary,
+                            secondary,
                             &reminder,
                             request_enum,
                             job_id.clone(),
+                            &buckets,
                         );
                         to_secondaries.push(to_secondary);
                     }
@@ -142,10 +149,11 @@ async fn send_requests_to_secondary(
     qps: &[u32],
     requests: RequestSpecEnum,
     job_id: String,
+    buckets: &SmallVec<[f64; 6]>,
 ) -> anyhow::Result<()> {
     let instance = node.service_instance();
     let uri = instance.uri().clone().expect("No uri");
-    let request = to_test_request(qps, requests, job_id);
+    let request = to_test_request(qps, requests, job_id, buckets);
     let request = serde_json::to_vec(&request)?;
     let request = Request::builder()
         .uri(format!("{}{}", uri, PATH_REQ_TO_SECONDARY))
@@ -160,6 +168,7 @@ fn to_test_request(
     qps: &[u32],
     req: RequestSpecEnum,
     job_id: String,
+    buckets: &SmallVec<[f64; 6]>,
 ) -> crate::http_util::request::Request {
     let duration = qps.len() as u32;
     let qps = ArrayQPS::new(Vec::from(qps));
@@ -170,6 +179,7 @@ fn to_test_request(
         duration,
         req,
         qps,
+        histogram_buckets: buckets.clone(),
     }
 }
 
@@ -234,10 +244,17 @@ mod test {
             secondaries.insert(node);
         }
         let cluster = Arc::new(Cluster::_new(InstanceMode::Primary, secondaries));
-        cluster_execute_request_generator(rg, job_id, cluster).await;
+        cluster_execute_request_generator(
+            rg,
+            job_id,
+            cluster,
+            crate::metrics::default_histogram_bucket(),
+        )
+        .await;
     }
 
     #[test]
+    #[allow(clippy::vec_init_then_push)]
     fn test_calculate_req_per_secondary() {
         let mut requests = vec![];
         for _ in 0..3 {

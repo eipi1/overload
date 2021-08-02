@@ -7,6 +7,7 @@ use crate::generator::{
 use crate::http_util::GenericError;
 use crate::{data_dir, fmt, HttpReq};
 use serde::{Deserialize, Serialize};
+use smallvec::SmallVec;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fmt::{Debug, Display, Formatter};
@@ -74,6 +75,8 @@ pub struct Request {
     pub(crate) duration: u32,
     pub(crate) req: RequestSpecEnum,
     pub(crate) qps: QPSSpec,
+    #[serde(default = "crate::metrics::default_histogram_bucket")]
+    pub(crate) histogram_buckets: SmallVec<[f64; 6]>,
 }
 
 #[allow(clippy::from_over_into)]

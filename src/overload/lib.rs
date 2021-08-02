@@ -4,6 +4,7 @@ mod datagen;
 pub mod executor;
 pub mod generator;
 pub mod http_util;
+pub mod metrics;
 
 use http::Method;
 use serde::{Deserialize, Serialize};
