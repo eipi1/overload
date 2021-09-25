@@ -1,8 +1,8 @@
 #![allow(clippy::upper_case_acronyms)]
 
 use crate::generator::{
-    ArrayQPS, ConstantQPS, Linear, QPSScheme, RequestFile, RequestGenerator, RequestList,
-    RequestProvider,
+    ArrayQPS, ConstantQPS, Linear, QPSScheme, RandomDataRequest, RequestFile, RequestGenerator,
+    RequestList, RequestProvider,
 };
 use crate::http_util::GenericError;
 use crate::{data_dir, fmt, HttpReq};
@@ -23,6 +23,7 @@ pub(crate) enum QPSSpec {
 pub enum RequestSpecEnum {
     RequestList(RequestList),
     RequestFile(RequestFile),
+    RandomDataRequest(RandomDataRequest),
 }
 
 impl From<Vec<HttpReq>> for RequestSpecEnum {
@@ -90,6 +91,7 @@ impl Into<RequestGenerator> for Request {
                 req.file_name = format!("{}/{}.sqlite", data_dir(), &req.file_name);
                 Box::new(req)
             }
+            RequestSpecEnum::RandomDataRequest(req) => Box::new(req),
         };
         RequestGenerator::new(self.duration, req, qps)
     }
@@ -144,10 +146,7 @@ impl TryFrom<HashMap<String, String>> for JobStatusQueryParams {
             if limit < 1 {
                 return Err(GenericError::new("limit can't be less than 1", 400));
             }
-            JobStatusQueryParams::PagerOptions {
-                offset,
-                limit,
-            }
+            JobStatusQueryParams::PagerOptions { offset, limit }
         };
         //after removing params, map should be empty
         if value.is_empty() {
@@ -219,14 +218,14 @@ mod test {
                 limit: 20
             }
         ));
-        assert_eq!("offset=0&limit=20",format!("{}",result));
+        assert_eq!("offset=0&limit=20", format!("{}", result));
 
         query = HashMap::new();
         query.insert("job_id".to_string(), "some-job-id".to_string());
         let result: JobStatusQueryParams = query.try_into().unwrap();
         println!("{:?}", &result);
         assert!(matches!(result, JobStatusQueryParams::JobId { job_id: _ }));
-        assert_eq!("job_id=some-job-id",format!("{}",result));
+        assert_eq!("job_id=some-job-id", format!("{}", result));
 
         query = HashMap::new();
         query.insert("offset".to_string(), "0".to_string());

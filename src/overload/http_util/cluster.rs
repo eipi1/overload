@@ -77,7 +77,7 @@ async fn forward_test_request<'d, T: Serialize + DeserializeOwned>(
     let resp = client.request(req).await?;
     let bytes = hyper::body::to_bytes(resp.into_body()).await?.reader();
     let resp: GenericResponse<T> = serde_json::from_reader(bytes)?;
-    return Ok(resp);
+    Ok(resp)
 }
 
 fn inactive_cluster_error() -> GenericError {
