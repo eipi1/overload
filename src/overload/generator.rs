@@ -523,7 +523,7 @@ pub(crate) mod test {
         //stream should generate 3 value
         assert!(generator.next().await.is_some());
         assert!(generator.next().await.is_some());
-        assert!(generator.next().await.is_some());
+        assert!(!generator.next().await.is_some());
     }
 
     #[tokio::test]
