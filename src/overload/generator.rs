@@ -1,16 +1,22 @@
 #![allow(clippy::upper_case_acronyms)]
 
+use super::datagen;
+use crate::datagen::{data_schema_from_value, generate_data, DataSchema};
 use crate::http_util::request::RequestSpecEnum;
 use crate::HttpReq;
 use anyhow::Result as AnyResult;
 use async_trait::async_trait;
 use futures_util::future::BoxFuture;
 use futures_util::stream::Stream;
+use http::Method;
 use log::trace;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{ConnectOptions, SqliteConnection};
 use std::cmp::min;
+use std::collections::HashMap;
 use std::iter::repeat_with;
 use std::pin::Pin;
 use std::str::FromStr;
@@ -144,13 +150,13 @@ impl RequestProvider for RequestList {
             return Err(anyhow::anyhow!("No Data Found"));
         }
 
-        let random_data = repeat_with(|| fastrand::usize(0..self.data.len()))
+        let randomly_selected_data = repeat_with(|| fastrand::usize(0..self.data.len()))
             .take(n)
             .map(|i| self.data.get(i))
             .map(|r| r.cloned())
             .map(Option::unwrap)
             .collect::<Vec<_>>();
-        Ok(random_data)
+        Ok(randomly_selected_data)
     }
 
     fn size_hint(&self) -> usize {
@@ -224,7 +230,7 @@ impl RequestProvider for RequestFile {
         let mut random_ids = repeat_with(|| fastrand::usize(1..=self.size))
             .take(n)
             .fold(String::new(), |acc, r| acc + &r.to_string() + ",");
-        random_ids.pop();
+        random_ids.pop(); //remove last comma
 
         let random_data: Vec<HttpReq> = sqlx::query_as(
             format!(
@@ -257,6 +263,109 @@ impl RequestProvider for RequestFile {
             .to_string();
         let spec_enum = RequestSpecEnum::RequestFile(RequestFile::new(file_name));
         serde_json::to_string(&spec_enum).unwrap()
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+#[allow(clippy::type_complexity)]
+pub struct RandomDataRequest {
+    #[serde(skip)]
+    #[serde(default)]
+    init: bool,
+    #[serde(with = "http_serde::method")]
+    pub method: Method,
+    #[serde(skip)]
+    body_data_schema: Option<DataSchema>,
+    //todo as a http::Uri
+    pub url: String,
+    #[serde(skip)]
+    url_param_data_schema_with_pos: Option<(DataSchema, HashMap<String, (usize, usize)>)>,
+    #[serde(default = "HashMap::new")]
+    pub headers: HashMap<String, String>,
+    body_schema: Option<Value>,
+    uri_param_schema: Option<Value>,
+}
+
+#[async_trait]
+impl RequestProvider for RandomDataRequest {
+    async fn get_n(&mut self, n: usize) -> AnyResult<Vec<HttpReq>> {
+        if !self.init {
+            self.init = true;
+            if let Some(schema) = &self.body_schema {
+                self.body_data_schema = Some(datagen::data_schema_from_value(schema)?);
+            }
+            if let Some(schema) = &self.uri_param_schema {
+                let uri_data_schema = data_schema_from_value(schema)?;
+                let re = Regex::new("\\{[a-zA-Z0-9_-]+}").unwrap();
+                let url_str = self.url.as_str();
+                let matches = re.find_iter(url_str);
+                let mut match_indices = HashMap::new();
+                for m in matches {
+                    match_indices.insert(
+                        String::from(&url_str[m.start() + 1..m.end() - 1]),
+                        (m.start(), m.end()),
+                    );
+                }
+                self.url_param_data_schema_with_pos = Some((uri_data_schema, match_indices));
+            }
+        }
+
+        let mut requests = Vec::with_capacity(n);
+        for _ in 0..n {
+            let mut body = Option::None;
+            let mut url = self.url.clone();
+            if let Some((schema, positions)) = &self.url_param_data_schema_with_pos {
+                let data = generate_data(&schema);
+                // replace will change the length, keep track of the len change
+                let mut additional: i16 = 0;
+                for (name, pos) in positions {
+                    if let Some(p_val) = data.get(name) {
+                        let val: String;
+                        if p_val.is_string() {
+                            val = String::from(p_val.as_str().unwrap())
+                        } else {
+                            val = p_val
+                                .as_i64()
+                                .map_or(String::from("unknown"), |t| t.to_string());
+                        };
+                        url.replace_range(
+                            (pos.0 as i16 + additional) as usize
+                                ..(pos.1 as i16 + additional) as usize,
+                            &val,
+                        );
+                        // calculate how much len changed
+                        additional += val.len() as i16 - (pos.1 - pos.0) as i16;
+                    }
+                }
+            }
+            if matches!(self.method, Method::POST) {
+                if let Some(schema) = &self.body_data_schema {
+                    body = Some(Vec::from(generate_data(schema).to_string().as_bytes()));
+                }
+            }
+            let req = HttpReq {
+                id: "".to_string(),
+                method: self.method.clone(),
+                url,
+                body,
+                headers: self.headers.clone(),
+            };
+            requests.push(req);
+        }
+        Ok(requests)
+    }
+
+    fn size_hint(&self) -> usize {
+        usize::MAX
+    }
+
+    fn shared(&self) -> bool {
+        true
+    }
+
+    fn to_json_str(&self) -> String {
+        serde_json::to_string(self).unwrap()
     }
 }
 
@@ -369,11 +478,14 @@ impl QPSScheme for Linear {
 #[cfg(test)]
 pub(crate) mod test {
     use crate::generator::{
-        request_generator_stream, ConstantQPS, RequestFile, RequestGenerator, RequestList,
-        RequestProvider, MAX_REQ_RET_SIZE,
+        request_generator_stream, ConstantQPS, RandomDataRequest, RequestFile, RequestGenerator,
+        RequestList, RequestProvider, MAX_REQ_RET_SIZE,
     };
     use crate::HttpReq;
+    use http::Method;
+    use serde_json::Value;
     use std::collections::HashMap;
+    use std::ops::Deref;
     use std::sync::Once;
     use std::time::Duration;
     use tokio::fs::File;
@@ -409,9 +521,9 @@ pub(crate) mod test {
             panic!("fails");
         }
         //stream should generate 3 value
-        assert_eq!(generator.next().await.is_some(), true);
-        assert_eq!(generator.next().await.is_some(), true);
-        assert_eq!(generator.next().await.is_some(), false);
+        assert!(generator.next().await.is_some());
+        assert!(generator.next().await.is_some());
+        assert!(!generator.next().await.is_some());
     }
 
     #[tokio::test]
@@ -534,6 +646,54 @@ pub(crate) mod test {
             let vec = request.get_n(2).await.unwrap();
             assert_ne!(0, vec.len());
         }
+    }
+
+    #[tokio::test]
+    async fn random_data_generator() {
+        setup();
+        let body_schema:Value = serde_json::from_str(
+            r#"{"$id":"https://example.com/person.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","title":"Person","type":"object","properties":{"firstName":{"type":"string","description":"The person's first name."},"lastName":{"type":"string","description":"The person's last name."},"age":{"description":"Age in years which must be equal to or greater than zero.","type":"integer","minimum":0,"maximum":100}}}"#
+        ).unwrap();
+        let url_schema: Value = serde_json::from_str(
+            r#"{"type":"object","properties":{"param1":{"type":"string","description":"The person's first name.","minLength":1,"maxLength":5},"p2":{"description":"Age in years which must be equal to or greater than zero.","type":"integer","minimum":0,"maximum":100}}}"#
+        ).unwrap();
+        let mut generator = RandomDataRequest {
+            init: false,
+            method: Method::POST,
+            body_data_schema: None,
+            url: "http://example.com/{param1}/{p2}".to_string(),
+            url_param_data_schema_with_pos: None,
+            headers: Default::default(),
+            body_schema: Some(body_schema),
+            uri_param_schema: Some(url_schema),
+        };
+        let requests = generator.get_n(5).await;
+        assert!(requests.is_ok());
+        for req in requests.unwrap().iter() {
+            let result: Value = serde_json::from_slice(req.body.as_ref().unwrap().deref()).unwrap();
+            let age = result.get("age").unwrap().as_i64().unwrap();
+            more_asserts::assert_le!(age, 100);
+            more_asserts::assert_ge!(age, 0);
+        }
+
+        let body_schema:Value = serde_json::from_str(
+            r#"{"$id":"https://example.com/person.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","title":"Person","type":"object","properties":{"firstName":{"type":"string","description":"The person's first name."},"lastName":{"type":"string","description":"The person's last name."},"age":{"description":"Age in years which must be equal to or greater than zero.","type":"integer","minimum":0,"maximum":100}}}"#
+        ).unwrap();
+        let url_schema = serde_json:: from_str(
+            r#"{"type":"object","properties":{"param1":{"type":"string","description":"The person's first name.","minLength":6,"maxLength":15},"p2":{"description":"Age in years which must be equal to or greater than zero.","type":"integer","minimum":1000000,"maximum":1100000}}}"#
+        ).unwrap();
+        let mut request = RandomDataRequest {
+            init: false,
+            method: Method::POST,
+            body_data_schema: None,
+            url: "http://example.com/{param1}/{p2}".to_string(),
+            url_param_data_schema_with_pos: None,
+            headers: Default::default(),
+            body_schema: Some(body_schema),
+            uri_param_schema: Some(url_schema),
+        };
+        let requests = request.get_n(5).await;
+        assert!(requests.is_ok());
     }
 
     async fn create_sqlite_file() -> anyhow::Result<()> {

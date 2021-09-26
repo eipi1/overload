@@ -285,7 +285,7 @@ impl GenericError {
     }
 
     pub fn from_error<E: StdError>(code: u16, err: E) -> GenericError {
-        Self::new(&*err.to_string(),code)
+        Self::new(&*err.to_string(), code)
     }
 }
 
@@ -419,6 +419,7 @@ pub const PATH_JOB_STATUS: &str = "/test/status";
 pub const PATH_STOP_JOB: &str = "/test/stop";
 
 #[cfg(test)]
+#[allow(dead_code)]
 mod test {
     use crate::http_util::{csv_reader_to_sqlite, HttpReqCsvHelper};
     use crate::log_error;
