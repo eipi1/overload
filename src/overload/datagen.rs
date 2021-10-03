@@ -1,9 +1,10 @@
 use crate::datagen::DataSchema::Empty;
 use anyhow::{Error as AnyError, Result as AnyResult};
-use log::error;
+use log::{error, trace};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
+use std::convert::TryFrom;
 
 #[derive(Debug, Serialize, Deserialize, Eq, PartialEq, Hash, Clone)]
 pub enum Keywords {
@@ -46,6 +47,7 @@ impl Constraints {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(try_from = "Value")]
 pub enum DataSchema {
     Empty,
     String(String, HashMap<Keywords, Constraints>),
@@ -69,15 +71,25 @@ impl Default for DataSchema {
     }
 }
 
+impl TryFrom<Value> for DataSchema {
+    type Error = AnyError;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        data_schema_from_value(&value)
+    }
+}
+
 pub fn data_schema_from_value(schema: &Value) -> AnyResult<DataSchema> {
-    log::trace!("generating DataSchema from: {:?}",schema);
-    schema
+    trace!("generating DataSchema from: {:?}", schema);
+    let data_schema = schema
         .get("properties")
         .and_then(|prop| prop.as_object())
         .ok_or("properties not found")
         .map_err(anyhow::Error::msg)
         .and_then(|properties| parse_properties(properties))
-        .map(|data_schema| DataSchema::Object(Option::None, data_schema))
+        .map(|data_schema| DataSchema::Object(Option::None, data_schema));
+    trace!("generated DataSchema: {:?}", &data_schema);
+    data_schema
 }
 
 fn parse_properties(properties: &Map<String, Value>) -> AnyResult<Vec<DataSchema>> {
@@ -213,7 +225,7 @@ fn generate_string_data(constraints: &HashMap<Keywords, Constraints>) -> String 
 #[cfg(test)]
 mod test {
     use crate::datagen::{data_schema_from_value, generate_data};
-    use serde_json::{ Value};
+    use serde_json::Value;
 
     #[test]
     fn test() {
