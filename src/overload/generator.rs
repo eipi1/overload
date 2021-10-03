@@ -1,7 +1,6 @@
 #![allow(clippy::upper_case_acronyms)]
 
-use super::datagen;
-use crate::datagen::{data_schema_from_value, generate_data, DataSchema};
+use crate::datagen::{generate_data, DataSchema};
 use crate::http_util::request::RequestSpecEnum;
 use crate::HttpReq;
 use anyhow::Result as AnyResult;
@@ -13,10 +12,11 @@ use log::trace;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use smol_str::SmolStr;
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{ConnectOptions, SqliteConnection};
-use std::cmp::min;
-use std::collections::HashMap;
+use std::cmp::{min, Ordering};
+use std::collections::{BinaryHeap, HashMap};
 use std::iter::repeat_with;
 use std::pin::Pin;
 use std::str::FromStr;
@@ -265,6 +265,32 @@ impl RequestProvider for RequestFile {
         serde_json::to_string(&spec_enum).unwrap()
     }
 }
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct UrlParam {
+    name: SmolStr,
+    start: usize,
+    end: usize,
+}
+
+impl Eq for UrlParam {}
+
+impl PartialEq<Self> for UrlParam {
+    fn eq(&self, other: &Self) -> bool {
+        self.start.eq(&other.start)
+    }
+}
+
+impl PartialOrd<Self> for UrlParam {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.start.partial_cmp(&other.start)
+    }
+}
+
+impl Ord for UrlParam {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.start.cmp(&other.start)
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -275,16 +301,14 @@ pub struct RandomDataRequest {
     init: bool,
     #[serde(with = "http_serde::method")]
     pub method: Method,
-    #[serde(skip)]
-    body_data_schema: Option<DataSchema>,
     //todo as a http::Uri
     pub url: String,
     #[serde(skip)]
-    url_param_data_schema_with_pos: Option<(DataSchema, HashMap<String, (usize, usize)>)>,
+    url_param_pos: Option<BinaryHeap<UrlParam>>,
     #[serde(default = "HashMap::new")]
     pub headers: HashMap<String, String>,
-    body_schema: Option<Value>,
-    uri_param_schema: Option<Value>,
+    body_schema: Option<DataSchema>,
+    uri_param_schema: Option<DataSchema>,
 }
 
 #[async_trait]
@@ -292,22 +316,9 @@ impl RequestProvider for RandomDataRequest {
     async fn get_n(&mut self, n: usize) -> AnyResult<Vec<HttpReq>> {
         if !self.init {
             self.init = true;
-            if let Some(schema) = &self.body_schema {
-                self.body_data_schema = Some(datagen::data_schema_from_value(schema)?);
-            }
-            if let Some(schema) = &self.uri_param_schema {
-                let uri_data_schema = data_schema_from_value(schema)?;
-                let re = Regex::new("\\{[a-zA-Z0-9_-]+}").unwrap();
-                let url_str = self.url.as_str();
-                let matches = re.find_iter(url_str);
-                let mut match_indices = HashMap::new();
-                for m in matches {
-                    match_indices.insert(
-                        String::from(&url_str[m.start() + 1..m.end() - 1]),
-                        (m.start(), m.end()),
-                    );
-                }
-                self.url_param_data_schema_with_pos = Some((uri_data_schema, match_indices));
+            if self.uri_param_schema.is_some() {
+                let match_indices = RandomDataRequest::find_param_positions(&self.url);
+                self.url_param_pos = Some(match_indices);
             }
         }
 
@@ -315,32 +326,14 @@ impl RequestProvider for RandomDataRequest {
         for _ in 0..n {
             let mut body = Option::None;
             let mut url = self.url.clone();
-            if let Some((schema, positions)) = &self.url_param_data_schema_with_pos {
-                let data = generate_data(&schema);
-                // replace will change the length, keep track of the len change
-                let mut additional: i16 = 0;
-                for (name, pos) in positions {
-                    if let Some(p_val) = data.get(name) {
-                        let val: String;
-                        if p_val.is_string() {
-                            val = String::from(p_val.as_str().unwrap())
-                        } else {
-                            val = p_val
-                                .as_i64()
-                                .map_or(String::from("unknown"), |t| t.to_string());
-                        };
-                        url.replace_range(
-                            (pos.0 as i16 + additional) as usize
-                                ..(pos.1 as i16 + additional) as usize,
-                            &val,
-                        );
-                        // calculate how much len changed
-                        additional += val.len() as i16 - (pos.1 - pos.0) as i16;
-                    }
+            if let Some(schema) = &self.uri_param_schema {
+                if let Some(positions) = &self.url_param_pos {
+                    let data = generate_data(&schema);
+                    RandomDataRequest::substitute_param_with_data(&mut url, positions, data)
                 }
             }
             if matches!(self.method, Method::POST) {
-                if let Some(schema) = &self.body_data_schema {
+                if let Some(schema) = &self.body_schema {
                     body = Some(Vec::from(generate_data(schema).to_string().as_bytes()));
                 }
             }
@@ -366,6 +359,39 @@ impl RequestProvider for RandomDataRequest {
 
     fn to_json_str(&self) -> String {
         serde_json::to_string(self).unwrap()
+    }
+}
+
+impl RandomDataRequest {
+    fn find_param_positions(url: &str) -> BinaryHeap<UrlParam> {
+        let re = Regex::new("\\{[a-zA-Z0-9_-]+}").unwrap();
+        // let url_str = url;
+        let matches = re.find_iter(url);
+        let mut match_indices = BinaryHeap::new();
+        for m in matches {
+            match_indices.push(UrlParam {
+                name: SmolStr::new(&url[m.start() + 1..m.end() - 1]),
+                start: m.start(),
+                end: m.end(),
+            });
+        }
+        match_indices
+    }
+
+    fn substitute_param_with_data(url: &mut String, positions: &BinaryHeap<UrlParam>, data: Value) {
+        for url_param in positions.iter() {
+            if let Some(p_val) = data.get(&url_param.name.as_str()) {
+                let val: String;
+                if p_val.is_string() {
+                    val = String::from(p_val.as_str().unwrap())
+                } else {
+                    val = p_val
+                        .as_i64()
+                        .map_or(String::from("unknown"), |t| t.to_string());
+                };
+                url.replace_range(url_param.start..url_param.end as usize, &val);
+            }
+        }
     }
 }
 
@@ -477,12 +503,14 @@ impl QPSScheme for Linear {
 
 #[cfg(test)]
 pub(crate) mod test {
+    use crate::datagen::{data_schema_from_value, generate_data};
     use crate::generator::{
         request_generator_stream, ConstantQPS, RandomDataRequest, RequestFile, RequestGenerator,
         RequestList, RequestProvider, MAX_REQ_RET_SIZE,
     };
     use crate::HttpReq;
     use http::Method;
+    use regex::Regex;
     use serde_json::Value;
     use std::collections::HashMap;
     use std::ops::Deref;
@@ -648,21 +676,68 @@ pub(crate) mod test {
         }
     }
 
+    #[test]
+    #[should_panic]
+    fn random_data_generator_json_test_invalid() {
+        setup();
+        //bodySchema.properties.age.maximum has invalid int value
+        serde_json::from_str::<RandomDataRequest>(r#"{"url":"http://localhost:2080/anything/{param1}/{param2}","method":"GET","bodySchema":{"$id":"https://example.com/person.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","title":"Person","type":"object","properties":{"firstName":{"type":"string","description":"The person's first name."},"lastName":{"type":"string","description":"The person's last name."},"age":{"description":"Age in years which must be equal to or greater than zero.","type":"integer","minimum":1,"maximum":"100"}}},"uriParamSchema":{"type":"object","properties":{"param1":{"type":"string","description":"The person's first name.","minLength":6,"maxLength":15},"param2":{"description":"Age in years which must be equal to or greater than zero.","type":"integer","minimum":1000000,"maximum":1100000}}}}"#
+        ).unwrap();
+    }
+
+    #[test]
+    fn random_data_generator_json_test() {
+        setup();
+        //valid, will not panic
+        serde_json::from_str::<RandomDataRequest>(r#"{"url":"http://localhost:2080/anything/{param1}/{param2}","method":"GET","bodySchema":{"$id":"https://example.com/person.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","title":"Person","type":"object","properties":{"firstName":{"type":"string","description":"The person's first name."},"lastName":{"type":"string","description":"The person's last name."},"age":{"description":"Age in years which must be equal to or greater than zero.","type":"integer","minimum":1,"maximum":100}}},"uriParamSchema":{"type":"object","properties":{"param1":{"type":"string","description":"The person's first name.","minLength":6,"maxLength":15},"param2":{"description":"Age in years which must be equal to or greater than zero.","type":"integer","minimum":1000000,"maximum":1100000}}}}"#
+        ).unwrap();
+    }
+
+    #[test]
+    fn find_param_positions_test() {
+        let url = String::from("http://localhost:2080/anything/{param1}/{param2}");
+        let params = RandomDataRequest::find_param_positions(&url);
+        assert_eq!(params.len(), 2);
+        for (i, param) in params.iter().enumerate() {
+            if i == 0 {
+                assert_eq!(param.start, 40);
+            } else {
+                assert_eq!(param.start, 31);
+            }
+        }
+    }
+
+    #[test]
+    fn substitution_param_test() {
+        let url = String::from("http://localhost:2080/anything/{param1}/{p2}");
+        let url_schema:Value = serde_json::from_str(
+            r#"{"type":"object","properties":{"param1":{"type":"string","description":"The person's first name.","minLength":1,"maxLength":10},"p2":{"description":"Age in years which must be equal to or greater than zero.","type":"integer","minimum":1,"maximum":1000}}}"#
+        ).unwrap();
+        let regex = Regex::new("http://localhost:2080/anything/[a-zA-Z]{1,10}/[0-9]{1,4}").unwrap();
+        let schema = data_schema_from_value(&url_schema).unwrap();
+        let params = RandomDataRequest::find_param_positions(&url);
+        for _ in 0..5 {
+            let mut url_ = url.clone();
+            let data = generate_data(&schema);
+            RandomDataRequest::substitute_param_with_data(&mut url_, &params, data);
+            assert!(regex.is_match(&url_));
+        }
+    }
+
     #[tokio::test]
     async fn random_data_generator() {
         setup();
-        let body_schema:Value = serde_json::from_str(
+        let body_schema = serde_json::from_str(
             r#"{"$id":"https://example.com/person.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","title":"Person","type":"object","properties":{"firstName":{"type":"string","description":"The person's first name."},"lastName":{"type":"string","description":"The person's last name."},"age":{"description":"Age in years which must be equal to or greater than zero.","type":"integer","minimum":0,"maximum":100}}}"#
         ).unwrap();
-        let url_schema: Value = serde_json::from_str(
+        let url_schema = serde_json::from_str(
             r#"{"type":"object","properties":{"param1":{"type":"string","description":"The person's first name.","minLength":1,"maxLength":5},"p2":{"description":"Age in years which must be equal to or greater than zero.","type":"integer","minimum":0,"maximum":100}}}"#
         ).unwrap();
         let mut generator = RandomDataRequest {
             init: false,
             method: Method::POST,
-            body_data_schema: None,
             url: "http://example.com/{param1}/{p2}".to_string(),
-            url_param_data_schema_with_pos: None,
+            url_param_pos: None,
             headers: Default::default(),
             body_schema: Some(body_schema),
             uri_param_schema: Some(url_schema),
@@ -676,7 +751,7 @@ pub(crate) mod test {
             more_asserts::assert_ge!(age, 0);
         }
 
-        let body_schema:Value = serde_json::from_str(
+        let body_schema = serde_json::from_str(
             r#"{"$id":"https://example.com/person.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","title":"Person","type":"object","properties":{"firstName":{"type":"string","description":"The person's first name."},"lastName":{"type":"string","description":"The person's last name."},"age":{"description":"Age in years which must be equal to or greater than zero.","type":"integer","minimum":0,"maximum":100}}}"#
         ).unwrap();
         let url_schema = serde_json:: from_str(
@@ -685,9 +760,8 @@ pub(crate) mod test {
         let mut request = RandomDataRequest {
             init: false,
             method: Method::POST,
-            body_data_schema: None,
             url: "http://example.com/{param1}/{p2}".to_string(),
-            url_param_data_schema_with_pos: None,
+            url_param_pos: None,
             headers: Default::default(),
             body_schema: Some(body_schema),
             uri_param_schema: Some(url_schema),
