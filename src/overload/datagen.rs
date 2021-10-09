@@ -1,10 +1,16 @@
 use crate::datagen::DataSchema::Empty;
 use anyhow::{Error as AnyError, Result as AnyResult};
 use log::{error, trace};
+use rand::thread_rng;
+use regex_generate::generate_from_hir;
+use regex_syntax::hir::Hir;
+use regex_syntax::Parser;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::convert::TryFrom;
+
+const PATTER_MAX_REPEAT: u32 = 10;
 
 #[derive(Debug, Serialize, Deserialize, Eq, PartialEq, Hash, Clone)]
 pub enum Keywords {
@@ -13,6 +19,7 @@ pub enum Keywords {
     Minimum,
     Maximum,
     Constant,
+    Pattern,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -23,6 +30,7 @@ pub enum Constraints {
     Maximum(i64),
     ConstantInt(i64),
     ConstantStr(String),
+    Pattern(String, #[serde(skip)] Option<Hir>),
 }
 
 #[allow(dead_code)]
@@ -41,6 +49,13 @@ impl Constraints {
     fn as_str(&self) -> Option<&str> {
         match *self {
             Constraints::ConstantStr(ref x) => Option::Some(x),
+            _ => None,
+        }
+    }
+
+    fn as_pattern(&self) -> Option<(&String, &Option<Hir>)> {
+        match *self {
+            Constraints::Pattern(ref pattern, ref hir) => Option::Some((pattern, hir)),
             _ => None,
         }
     }
@@ -144,6 +159,22 @@ fn get_constraints(property: &Value) -> Option<HashMap<Keywords, Constraints>> {
             "maxLength" => {
                 constraints.insert(Keywords::MaxLength, Constraints::MaxLength(v.as_i64()?));
             }
+            "constant" => {
+                let constraint = if let Some(val) = v.as_i64() {
+                    Constraints::ConstantInt(val)
+                } else {
+                    Constraints::ConstantStr(String::from(v.as_str()?))
+                };
+                constraints.insert(Keywords::Constant, constraint);
+            }
+            "pattern" => {
+                let pattern = v.as_str()?;
+                let hir = Parser::new().parse(pattern).ok()?;
+                constraints.insert(
+                    Keywords::Pattern,
+                    Constraints::Pattern(String::from(pattern), Some(hir)),
+                );
+            }
             _ => {}
         };
     }
@@ -195,6 +226,9 @@ fn generate_object_data(data: &[DataSchema]) -> Map<String, Value> {
 }
 
 fn generate_integer_data(constraints: &HashMap<Keywords, Constraints>) -> i64 {
+    if let Some(constraint) = constraints.get(&Keywords::Constant) {
+        return constraint.as_i64().unwrap_or(i64::MIN);
+    }
     let min = constraints
         .get(&Keywords::Minimum)
         .and_then(|constraint| constraint.as_i64())
@@ -207,6 +241,35 @@ fn generate_integer_data(constraints: &HashMap<Keywords, Constraints>) -> i64 {
 }
 
 fn generate_string_data(constraints: &HashMap<Keywords, Constraints>) -> String {
+    if let Some(constraint) = constraints.get(&Keywords::Constant) {
+        return constraint
+            .as_str()
+            .unwrap_or("Error: invalid constant constraint")
+            .into();
+    }
+    if let Some(constraint) = constraints.get(&Keywords::Pattern) {
+        if let Some((pattern, hir)) = constraint.as_pattern() {
+            let mut rng = thread_rng();
+            let mut buffer: Vec<u8> = vec![];
+            return match hir.as_ref() {
+                Some(hir) => generate_from_hir(&mut buffer, hir, &mut rng, PATTER_MAX_REPEAT)
+                    .ok()
+                    .and_then(|_| String::from_utf8(buffer).ok())
+                    .unwrap_or(format!("Couldn't generate string for: {}", pattern)),
+                None => {
+                    log::warn!("Hir not pre-generated for pattern constraint");
+                    Parser::new()
+                        .parse(pattern)
+                        .ok()
+                        .and_then(|ir| {
+                            generate_from_hir(&mut buffer, &ir, &mut rng, PATTER_MAX_REPEAT).ok()
+                        })
+                        .and_then(|_| String::from_utf8(buffer).ok())
+                        .unwrap_or(format!("Couldn't generate string for: {}", pattern))
+                }
+            };
+        }
+    }
     let min = constraints
         .get(&Keywords::MinLength)
         .and_then(|constraint| constraint.as_i64())
@@ -230,10 +293,6 @@ mod test {
     #[test]
     fn test() {
         let data = r#"{
-    "$id": "https://example.com/person.schema.json",
-    "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "title": "Person",
-    "type": "object",
     "properties":
     {
         "firstName":
@@ -259,8 +318,57 @@ mod test {
         let result = data_schema_from_value(&schema);
         assert!(result.is_ok());
         let result = result.as_ref().unwrap();
+        let _ = generate_data(&result);
+    }
+
+    #[test]
+    fn test_integer_constant() {
+        let schema = r#"{"properties":{"sample":{"type":"integer","constant":10}}}"#;
+        let schema: Value = serde_json::from_str(schema).unwrap();
+        let result = data_schema_from_value(&schema);
+        assert!(result.is_ok());
+        let result = result.as_ref().unwrap();
         let value = generate_data(&result);
-        println!("{:?}", result);
-        println!("{:?}", value);
+        assert_eq!(value.get("sample").unwrap().as_i64().unwrap(), 10);
+    }
+
+    #[test]
+    fn test_string_constant() {
+        let schema = r#"{"properties":{"sample":{"type":"string","constant":"always produce this string"}}}"#;
+        let schema: Value = serde_json::from_str(schema).unwrap();
+        let result = data_schema_from_value(&schema);
+        assert!(result.is_ok());
+        let result = result.as_ref().unwrap();
+        let value = generate_data(&result);
+        assert_eq!(
+            value.get("sample").unwrap().as_str().unwrap(),
+            "always produce this string"
+        );
+    }
+
+    #[test]
+    fn test_string_pattern() {
+        let regex = regex::Regex::new(r"^\d{4}-\w+-\d{2}$").unwrap();
+        let schema = r#"{"properties":{"sample":{"type":"string","pattern":"^[0-9]{4}-[a-z]{2,}-[0-9]{2}$"}}}"#;
+        let schema: Value = serde_json::from_str(schema).unwrap();
+        let result = data_schema_from_value(&schema);
+        assert!(result.is_ok());
+        let result = result.as_ref().unwrap();
+        let value = generate_data(&result);
+        assert!(regex.is_match(value.get("sample").unwrap().as_str().unwrap()));
+    }
+
+    #[test]
+    fn test_object() {
+        let schema = r#"{"properties":{"sample":{"constant":10,"type":"integer"},"sampleObject":{"properties":{"nestedSample":{"constant":20,"type":"integer"}},"type":"object"}}}"#;
+        let schema: Value = serde_json::from_str(schema).unwrap();
+        let result = data_schema_from_value(&schema);
+        assert!(result.is_ok());
+        let result = result.as_ref().unwrap();
+        let value = generate_data(&result);
+        assert_eq!(value.get("sample").unwrap().as_i64().unwrap(), 10);
+        println!("{}", serde_json::to_string(&value).unwrap());
+        let object = value.get("sampleObject").unwrap();
+        assert_eq!(object.get("nestedSample").unwrap().as_i64().unwrap(), 20);
     }
 }

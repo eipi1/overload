@@ -108,6 +108,13 @@ version = "1.4"
 [dependencies.rand]
 version = "0.8"
 
+[dependencies.regex-syntax]
+version = "0.6"
+
+[dependencies.regex_generate]
+git = "https://github.com/eipi1/regex_generate"
+branch = "pub-gen-from-hir"
+
 [dependencies.anyhow]
 version = "1.0"
 
