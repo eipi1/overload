@@ -164,28 +164,26 @@ Generate request with random data based on constraints, can be specified using J
 | bodySchema | No | Request body spec to be used for random data generation | JSON Schema |
 | uriParamSchema | No | Url param spec to be used for random data generation | JSON Schema |
 
-<details>
-<summary>Supported JSON Schema spec</summary>
+#### Supported JSON Schema spec
 
 | type | supported |
 | ---- | ------- |
 | string | ✅ |
 | integer| ✅ |
-| object | ❎ |
+| object | ✅ |
 | array | ❎ |
 | boolean | ❎ |
 | null | ❎ |
 
-| Constraints | supported |
-| ---- | ------- |
-| minLength | ✅ |
-| maxLength | ✅ |
-| minimum | ✅ |
-| maximum | ✅ |
-| pattern | ❎ |
-| format | ❎ |
-
-</details>
+| Constraints | Supported | Note | 
+| ----------- | --------- | ---- |
+| minLength | ✅ | |
+| maxLength | ✅ | |
+| minimum | ✅ | |
+| maximum | ✅ | |
+| constant | ✅ | |
+| pattern | ✅ | Unicode pattern. Careful with character groups, e.g. `\d` represents digits from english, arabic and other languages. Maximum repeat(`*`,`+`) length is 10 |
+| format | ❎ | |
 
 <details>
 <summary> Example </summary>
@@ -198,8 +196,6 @@ Generate request with random data based on constraints, can be specified using J
       "url": "http://httpbin.org/anything/{param1}/{param2}",
       "method": "GET",
       "bodySchema": {
-        "$id": "https://example.com/person.schema.json",
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "Person",
         "type": "object",
         "properties": {
