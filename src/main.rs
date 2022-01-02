@@ -23,10 +23,8 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::convert::{Infallible, TryFrom};
 use std::env;
-use std::fmt::Debug;
 #[cfg(feature = "cluster")]
 use std::sync::Arc;
-use warp::reject::Reject;
 #[cfg(feature = "cluster")]
 use warp::reply::{Json, WithStatus};
 use warp::{reply, Filter, Reply};
@@ -380,9 +378,3 @@ fn no_cluster_err() -> WithStatus<Json> {
     let error_msg: Value = serde_json::from_str("{\"error\":\"Cluster is not running\"}").unwrap();
     reply::with_status(reply::json(&error_msg), StatusCode::NOT_FOUND)
 }
-
-#[derive(Debug)]
-struct Rejectable<T> {
-    err: T,
-}
-impl<T: Debug + Sync + Send + 'static> Reject for Rejectable<T> {}

@@ -101,7 +101,7 @@ pub fn data_schema_from_value(schema: &Value) -> AnyResult<DataSchema> {
         .and_then(|prop| prop.as_object())
         .ok_or("properties not found")
         .map_err(anyhow::Error::msg)
-        .and_then(|properties| parse_properties(properties))
+        .and_then(parse_properties)
         .map(|data_schema| DataSchema::Object(Option::None, data_schema));
     trace!("generated DataSchema: {:?}", &data_schema);
     data_schema
