@@ -47,29 +47,35 @@ impl TryFrom<&String> for RequestSpecEnum {
 /// # fn main() {
 ///     # let req = r#"
 /// {
-///   "name": null,
 ///   "duration": 1,
-///   "req": {
-///     "RequestList": {
-///       "data": [
-///         {
-///           "method": "GET",
-///           "url": "example.com",
-///           "body": null
-///         }
-///       ]
-///     }
-///   },
+///   "name": "demo-test",
 ///   "qps": {
 ///     "ConstantQPS": {
 ///       "qps": 1
 ///     }
-///   }
+///   },
+///   "req": {
+///     "RequestList": {
+///       "data": [
+///         {
+///           "body": null,
+///           "method": "GET",
+///           "url": "example.com"
+///         }
+///       ]
+///     }
+///   },
+///   "histogramBuckets": [35,40,45,48,50, 52]
+/// }
 /// # "#;
-/// #     let result = serde_json::from_str::<Request>(req);
+/// #    let result = serde_json::from_str::<Request>(req);
+/// #    assert!(result.is_ok());
+/// #    let result = result.unwrap();
+/// #
 /// # }
 /// ```
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Request {
     pub name: Option<String>,
     pub(crate) duration: u32,
@@ -163,9 +169,11 @@ impl TryFrom<HashMap<String, String>> for JobStatusQueryParams {
 #[cfg(test)]
 mod test {
     use crate::generator::test::req_list_with_n_req;
-    use crate::generator::{request_generator_stream, ConstantQPS, RequestGenerator};
-    use crate::http_util::request::{JobStatusQueryParams, Request};
+    use crate::generator::{request_generator_stream, ConstantQPS, RequestGenerator, RequestList};
+    use crate::http_util::request::{JobStatusQueryParams, Request, RequestSpecEnum};
     use crate::http_util::GenericError;
+    use crate::HttpReq;
+    use http::Method;
     use std::collections::HashMap;
     use std::convert::TryInto;
 
@@ -174,7 +182,7 @@ mod test {
         let req = r#"
             {
               "duration": 1,
-              "name": null,
+              "name": "demo-test",
               "qps": {
                 "ConstantQPS": {
                   "qps": 1
@@ -184,17 +192,40 @@ mod test {
                 "RequestList": {
                   "data": [
                     {
-                      "body": null,
                       "method": "GET",
                       "url": "example.com"
                     }
                   ]
                 }
-              }
+              },
+              "histogramBuckets": [35,40,45,48,50, 52]
             }
         "#;
         let result = serde_json::from_str::<Request>(req);
         assert!(result.is_ok());
+        let result = result.unwrap();
+        assert_eq!(
+            result.histogram_buckets,
+            smallvec::SmallVec::from([35f64, 40f64, 45f64, 48f64, 50f64, 52f64])
+        );
+        let req = HttpReq {
+            id: {
+                if let RequestSpecEnum::RequestList(r) = &result.req {
+                    r.data.get(0).unwrap().id.clone()
+                } else {
+                    "".to_string()
+                }
+            },
+            method: Method::GET,
+            url: "example.com".to_string(),
+            body: None,
+            headers: Default::default(),
+        };
+        assert_eq!(
+            serde_json::to_value(result.req).unwrap(),
+            serde_json::to_value(RequestSpecEnum::RequestList(RequestList::from(vec![req])))
+                .unwrap()
+        );
     }
 
     #[tokio::test]

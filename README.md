@@ -19,9 +19,16 @@
 
 A distributed load testing utility written in Rust
 
+
+* [Usage](#usage)
+* [Environment variables](#environment-variables)
+* [APIs](#apis)
+* [Monitoring](#monitoring)
+
 ## Usage
 
-Overload support two modes - cluster & standalone
+Overload support two modes - cluster & standalone. Overload exposes a set of [APIs](#apis)
+at port `3030` to manage tests.
 
 ### Cluster
 
@@ -35,7 +42,8 @@ There are a few constraints/limitations is in place -
 * Maximum nodes: 20
 * Requires container image tagged as *{version}-cluster*
 
-Repository provides a sample *[deployment.yaml][deployment-yaml]* file.
+Repository provides a sample *[deployment.yaml][deployment-yaml]* file. Addition to that the
+application also needs "get", "list" permission for "pods", "endpoints" for discovery. 
 
 ### Standalone
 
@@ -49,16 +57,24 @@ docker run -p 3030:3030 mdsarowar/overload:latest-standalone-snapshot
 
 ## Environment variables
 
-variable|desc|default
----|---|---
-LOG_LEVEL| application log level |info
-DATA_DIR| path to store uploaded CSV, should be shared among all instance in cluster mode| /tmp
-K8S_ENDPOINT_NAME| name of the [endpoints][endpoint-api] (cluster mode only)| overload
-K8S_NAMESPACE_NAME| kubernetes namespace | default
+| variable           | desc                                                                            | default  |
+|--------------------|---------------------------------------------------------------------------------|----------|
+| LOG_LEVEL          | application log level                                                           | info     |
+| DATA_DIR           | path to store uploaded CSV, should be shared among all instance in cluster mode | /tmp     |
+| K8S_ENDPOINT_NAME  | name of the [endpoints][endpoint-api] (cluster mode only)                       | overload |
+| K8S_NAMESPACE_NAME | kubernetes namespace                                                            | default  |
 
 ## APIs
 
-### Run a test
+### Request
+Test specification
+
+| Field    | Required | Default | Description                                                         | Data type                           |
+|----------|----------|---------|---------------------------------------------------------------------|-------------------------------------|
+| name     | ❎        | UUID    | Test name, application will append UUID to ensure unique identifier | String                              |
+| duration | ✅        |         | Test duration                                                       | uint32                              |
+| req      | ✅        |         | Request provider Spec                                               | [RequestProvider](#requestprovider) |
+| qps      | ✅        |         | RPS specification                                                   | [QPSSpec](#qpsspec)                 |
 
 ```http request
 POST /test HTTP/1.1
@@ -67,40 +83,35 @@ Content-Type: application/json
 
 {
   "duration": 120,
+  "name": "demo-test",
+  "qps": {
+    "ConstantQPS": {
+      "qps": 1
+    }
+  },
   "req": {
     "RequestList": {
       "data": [
         {
+          "body": null,
           "method": "GET",
           "url": "http://httpbin.org/"
         }
       ]
     }
   },
-  "qps": {
-    "Linear": {
-      "a": 0.5,
-      "b": 1,
-      "max": 120
-    }
-  }
+  "histogramBuckets": [35,40,45,48,50, 52]
 }
 ```
 
 This will run the test for 120 seconds with a linear increase in request per seconds(RPS).
 
-| field | Description | data type
-| --- | ----------- | ---------
-| duration | Test duration | uint32
-| req | Request provider Spec | [RequestProvider](#requestprovider)
-| qps | RPS specification | [QPSSpec](#qpsspec)
-
 ### Response
 
-| field | Description | data type
-| --- | ----------- | ---------
-| job_id | Test ID | UUID
-| status | status of the test | [JobStatus](#jobstatus)
+| field  | Description        | data type               |
+|--------|--------------------|-------------------------|
+| job_id | Test ID            | UUID                    |
+| status | status of the test | [JobStatus](#jobstatus) |
 
 ```json
 {
@@ -117,17 +128,17 @@ Currently, supports the following providers
 
 An unordered set of [HttpReq](#httpreq)
 
-| field | Description | data type
-| --- | ----------- | ---------
-| data | Array of HttpReq | [[HttpReq](#httpreq)]
+| field | Description      | data type             |
+|-------|------------------|-----------------------|
+| data  | Array of HttpReq | [[HttpReq](#httpreq)] |
 
 #### RequestFile
 
 Get request data from a file. File have to be [uploaded](#upload-request-data-file) before the test.
 
-| field | Description | data type
-| --- | ----------- | ---------
-| file_name | ID of the uploaded file | UUID
+| field     | Description             | data type |
+|-----------|-------------------------|-----------|
+| file_name | ID of the uploaded file | UUID      |
 
 ##### Example
 
@@ -156,34 +167,34 @@ Get request data from a file. File have to be [uploaded](#upload-request-data-fi
 
 Generate request with random data based on constraints, can be specified using JSON Schema like syntax.
 
-| field | Required | Description | data type
-| ----- | -------- | ----------- | ---------
-| method | Yes | HTTP method | Enum ("POST","GET") |
-| url | Yes | Request Url, optionally supports param substitution. Param name should be of format `{[a-z0-9]+}`, e.g. http://httpbin.org/anything/{param1}/{p2}| string|
-| headers | No | HTTP request header | Map<String,String> |
-| bodySchema | No | Request body spec to be used for random data generation | JSON Schema |
-| uriParamSchema | No | Url param spec to be used for random data generation | JSON Schema |
+| field          | Required | Description                                                                                                                                       | data type           |
+|----------------|----------|---------------------------------------------------------------------------------------------------------------------------------------------------|---------------------|
+| method         | Yes      | HTTP method                                                                                                                                       | Enum ("POST","GET") |
+| url            | Yes      | Request Url, optionally supports param substitution. Param name should be of format `{[a-z0-9]+}`, e.g. http://httpbin.org/anything/{param1}/{p2} | string              |
+| headers        | No       | HTTP request header                                                                                                                               | Map<String,String>  |
+| bodySchema     | No       | Request body spec to be used for random data generation                                                                                           | JSON Schema         |
+| uriParamSchema | No       | Url param spec to be used for random data generation                                                                                              | JSON Schema         |
 
 #### Supported JSON Schema spec
 
-| type | supported |
-| ---- | ------- |
-| string | ✅ |
-| integer| ✅ |
-| object | ✅ |
-| array | ❎ |
-| boolean | ❎ |
-| null | ❎ |
+| type    | supported |
+|---------|-----------|
+| string  | ✅         |
+| integer | ✅         |
+| object  | ✅         |
+| array   | ❎         |
+| boolean | ❎         |
+| null    | ❎         |
 
-| Constraints | Supported | Note | 
-| ----------- | --------- | ---- |
-| minLength | ✅ | |
-| maxLength | ✅ | |
-| minimum | ✅ | |
-| maximum | ✅ | |
-| constant | ✅ | |
-| pattern | ✅ | Unicode pattern. Careful with character groups, e.g. `\d` represents digits from english, arabic and other languages. Maximum repeat(`*`,`+`) length is 10 |
-| format | ❎ | |
+| Constraints | Supported | Note                                                                                                                                                       | 
+|-------------|-----------|------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| minLength   | ✅         |                                                                                                                                                            |
+| maxLength   | ✅         |                                                                                                                                                            |
+| minimum     | ✅         |                                                                                                                                                            |
+| maximum     | ✅         |                                                                                                                                                            |
+| constant    | ✅         |                                                                                                                                                            |
+| pattern     | ✅         | Unicode pattern. Careful with character groups, e.g. `\d` represents digits from english, arabic and other languages. Maximum repeat(`*`,`+`) length is 10 |
+| format      | ❎         |                                                                                                                                                            |
 
 <details>
 <summary> Example </summary>
@@ -246,11 +257,11 @@ Generate request with random data based on constraints, can be specified using J
 
 #### HttpReq
 
-| field | Description | data type
-| --- | ----------- | ---------
-| method | HTTP method | Enum(POST,GET)
-| url | valid url | string
-| body | Body for POST | string
+| field   | Description         | data type          |
+|---------|---------------------|--------------------|
+| method  | HTTP method         | Enum(POST,GET)     |
+| url     | valid url           | string             |
+| body    | Body for POST       | string             |
 | headers | HTTP request header | Map<String,String> |
 
 ### QPSSpec
@@ -259,19 +270,19 @@ Currently, supports the following specifications
 
 #### ConstantQPS
 
-| field | Description | data type
-| --- | ----------- | ---------
-| qps | QPS to maintain for the `duration` | uint32
+| field | Description                        | data type |
+|-------|------------------------------------|-----------|
+| qps   | QPS to maintain for the `duration` | uint32    |
 
 #### Linear
 
 Increase QPS linearly; QPS for any time is calculated using eq. qps = ax + b, where x being the n-th second.
 
-| field | Description | data type
-| --- | ----------- | ---------
-| a | Slope of the line | float
-| b | Intercept | uint32
-| max | max QPS | uint32
+| field | Description       | data type |
+|-------|-------------------|-----------|
+| a     | Slope of the line | float     |
+| b     | Intercept         | uint32    |
+| max   | max QPS           | uint32    |
 
 ##### Example
 
@@ -293,9 +304,9 @@ If a test runs for 10 seconds, the generated RPS will be [1, 5, 7, 9, 11, 12, 12
 
 Specify RPS directly
 
-| field | Description | data type
-| --- | ----------- | ---------
-| qps | Array of qps | [uint32]
+| field | Description  | data type |
+|-------|--------------|-----------|
+| qps   | Array of qps | [uint32]  |
 
 ##### Example
 
@@ -309,7 +320,7 @@ Specify RPS directly
 }
 ```
 
-If a test runs for 10 seconds, generated RPS will be 1 on the first second, 4 on second seconds, 6 on third seconds and
+If a test runs for 10 seconds, generated RPS will be 1 on the first second, 4 on second, 6 on third seconds and
 10, 20, 10 on 4, 5, 6th second. It'll restart from 0 position once reaches the end of the array, so on the 7th seconds,
 QPS will go down back to 1 and 4, 6, 10 on 8, 9, 10th seconds, respectively.
 
@@ -349,23 +360,23 @@ curl --location --request POST 'overload.host:3030/test/requests-bin' \
 API returns valid count, i.e. count of requests that has been parsed successfully and a file ID. File ID will be
 required to for testing.
 
-| field | Description | data type
-| --- | ----------- | ---------
-| valid_count | number of valid requests in file | uint32
-| file | ID of the file | UUID
+| field       | Description                      | data type |
+|-------------|----------------------------------|-----------|
+| valid_count | number of valid requests in file | uint32    |
+| file        | ID of the file                   | UUID      |
 
 ### JobStatus
 
 Enum stating the current status of the test
 
-| value | Description
-| --- | -----------
-| Starting | Job starting or submitted to the queue |
-| InProgress | Job is running |
-| Stopped | Job stopped by User |
-| Completed | Job Done |
-| Failed | Some error happened, Couldn't finish executing the job |
-| Error(ErrorCode) | Other error |
+| value            | Description                                            |
+|------------------|--------------------------------------------------------|
+| Starting         | Job starting or submitted to the queue                 |
+| InProgress       | Job is running                                         |
+| Stopped          | Job stopped by User                                    |
+| Completed        | Job Done                                               |
+| Failed           | Some error happened, Couldn't finish executing the job |
+| Error(ErrorCode) | Other error                                            |
 
 ### Get Job Status
 
@@ -379,24 +390,24 @@ Returns status of all jobs.
 
 #### Request
 
-|Spec| Value |
-| --- | -----------
-| Path | /test/status |
-| Method | GET |
+| Spec   | Value        |
+|--------|--------------|
+| Path   | /test/status |
+| Method | GET          |
 
 #### Query Params
 
-| field | Description | data type
-| --- | ----------- | ---------
-| offset | start of the page | uint32 |
-| limit | size of the page | uint32 |
+| field  | Description       | data type |
+|--------|-------------------|-----------|
+| offset | start of the page | uint32    |
+| limit  | size of the page  | uint32    |
 
 #### Response
 
-| field | Description | data type
-| --- | ----------- | ---------
-| {job_id} | Test job identifier received when test was submitted | string |
-| {status} | current status of the test job | [JobStatus](#jobstatus)
+| field    | Description                                          | data type               |
+|----------|------------------------------------------------------|-------------------------|
+| {job_id} | Test job identifier received when test was submitted | string                  |
+| {status} | current status of the test job                       | [JobStatus](#jobstatus) |
 
 #### Example
 
@@ -415,16 +426,60 @@ Host: localhost:3030
 
 #### Request
 
-|Spec| Value |
-| --- | -----------
-| Path | /test/status/{job_id} |
-| Method | GET |
+| Spec   | Value                 |
+|--------|-----------------------|
+| Path   | /test/status/{job_id} |
+| Method | GET                   |
 
 #### Request Params
 
-| field | Description | data type
-| --- | ----------- | ---------
-| job_id | id of the test job to be stopped | string |
+| field  | Description                      | data type |
+|--------|----------------------------------|-----------|
+| job_id | id of the test job to be stopped | string    |
+
+## Monitoring
+The application comes with Prometheus support for monitoring. Metrics are exposed at `/metrics` endpoint.
+
+<details>
+<summary>Sample Prometheus scraper config</summary>
+
+```
+- job_name: overload-k8s
+  honor_timestamps: true
+  scrape_interval: 5s
+  scrape_timeout: 1s
+  metrics_path: /metrics
+  scheme: http
+  kubernetes_sd_configs:
+  - api_server: <k8s-api-server>
+    role: endpoints
+    namespaces:
+      names:
+      - default
+    selectors:
+    - role: endpoints
+      field: metadata.name=overload
+```
+</details>
+
+### Histogram
+Check Prometheus [HISTOGRAMS AND SUMMARIES](https://prometheus.io/docs/practices/histograms/).
+
+By default, the application uses (20, 50, 100, 300, 700, 1100) as buckets to calculate response
+time quantiles. But each service has difference requirements, so the application provides a way to
+configure buckets in the test request itself.
+
+Test endpoint accepts an array field `histogramBuckets`. Users can use this field to configure
+their own criteria. Currently, the field allows any number of buckets, but it's advisable not to
+use more than six buckets.
+
+### Grafana Dashboard
+The application provides [sample Grafana dashboard](docs/monitoring/grafana-dashboard.json) that can be used for monitoring. It has
+graphs for Request Per Seconds, Response Status count, Average response time and Response 
+time quantiles.
+
+![Grafana Dashboard](docs/monitoring/grafana-dashboard.png)
+
 
 ## Build yourself
 

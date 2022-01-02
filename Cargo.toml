@@ -7,7 +7,7 @@ license = "MIT"
 readme = "README.md"
 repository = "https://github.com/eipi1/overload"
 description = """
-An util to overload API with requests
+A distributed load testing application with kubernetes support
 """
 categories = ["development-tools"]
 keywords = ["load-testing", "cluster"]
