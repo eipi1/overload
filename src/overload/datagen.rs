@@ -318,7 +318,7 @@ mod test {
         let result = data_schema_from_value(&schema);
         assert!(result.is_ok());
         let result = result.as_ref().unwrap();
-        let _ = generate_data(&result);
+        let _ = generate_data(result);
     }
 
     #[test]
@@ -328,7 +328,7 @@ mod test {
         let result = data_schema_from_value(&schema);
         assert!(result.is_ok());
         let result = result.as_ref().unwrap();
-        let value = generate_data(&result);
+        let value = generate_data(result);
         assert_eq!(value.get("sample").unwrap().as_i64().unwrap(), 10);
     }
 
@@ -339,7 +339,7 @@ mod test {
         let result = data_schema_from_value(&schema);
         assert!(result.is_ok());
         let result = result.as_ref().unwrap();
-        let value = generate_data(&result);
+        let value = generate_data(result);
         assert_eq!(
             value.get("sample").unwrap().as_str().unwrap(),
             "always produce this string"
@@ -354,7 +354,7 @@ mod test {
         let result = data_schema_from_value(&schema);
         assert!(result.is_ok());
         let result = result.as_ref().unwrap();
-        let value = generate_data(&result);
+        let value = generate_data(result);
         assert!(regex.is_match(value.get("sample").unwrap().as_str().unwrap()));
     }
 
@@ -365,7 +365,7 @@ mod test {
         let result = data_schema_from_value(&schema);
         assert!(result.is_ok());
         let result = result.as_ref().unwrap();
-        let value = generate_data(&result);
+        let value = generate_data(result);
         assert_eq!(value.get("sample").unwrap().as_i64().unwrap(), 10);
         println!("{}", serde_json::to_string(&value).unwrap());
         let object = value.get("sampleObject").unwrap();

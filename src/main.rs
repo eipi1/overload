@@ -12,8 +12,9 @@ use lazy_static::lazy_static;
 use log::{info, trace};
 use overload::http_util::request::{JobStatusQueryParams, Request};
 use overload::http_util::{handle_history_all, GenericError, GenericResponse};
+use overload::metrics::MetricsFactory;
 use overload::{data_dir, http_util};
-use prometheus::{opts, register_counter, Counter, Encoder, TextEncoder};
+use prometheus::{Encoder, TextEncoder};
 #[cfg(feature = "cluster")]
 use rust_cloud_discovery::DiscoveryClient;
 use serde::Serialize;
@@ -31,11 +32,7 @@ use warp::reply::{Json, WithStatus};
 use warp::{reply, Filter, Reply};
 
 lazy_static! {
-    static ref HTTP_COUNTER: Counter = register_counter!(opts!(
-        "overload_requests_total",
-        "Total number of HTTP requests made."
-    ))
-    .unwrap();
+    static ref METRICS_FACTORY: MetricsFactory = MetricsFactory::default();
 }
 
 #[cfg(feature = "cluster")]
@@ -100,7 +97,7 @@ async fn main() {
 
     let prometheus_metric = warp::get().and(warp::path("metrics")).map(|| {
         let encoder = TextEncoder::new();
-        let metrics = prometheus::gather();
+        let metrics = METRICS_FACTORY.registry().gather();
         let mut resp_buffer = vec![];
         let result = encoder.encode(&metrics, &mut resp_buffer);
         if result.is_ok() {
@@ -121,7 +118,6 @@ async fn main() {
         .and(warp::body::content_length_limit(1024 * 1024))
         .and(warp::body::json())
         .and_then(|request: Request| async move {
-            HTTP_COUNTER.inc();
             cfg_if! {
                 if #[cfg(feature = "cluster")] {
                     execute_cluster(request).await
@@ -162,10 +158,7 @@ async fn main() {
         )
         .and(warp::body::content_length_limit(1024 * 1024))
         .and(warp::body::json())
-        .and_then(|request: Request| async move {
-            HTTP_COUNTER.inc();
-            execute(request).await
-        });
+        .and_then(|request: Request| async move { execute(request).await });
 
     // cluster-mode configurations
     #[cfg(feature = "cluster")]
@@ -255,7 +248,7 @@ where
 // #[cfg(not(feature = "cluster"))]
 async fn execute(request: Request) -> Result<impl Reply, Infallible> {
     trace!("req: execute: {:?}", &request);
-    let response = overload::http_util::handle_request(request).await;
+    let response = overload::http_util::handle_request(request, &METRICS_FACTORY).await;
     let json = reply::json(&response);
     trace!("resp: execute: {:?}", &response);
     Ok(json)

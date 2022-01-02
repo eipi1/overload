@@ -17,6 +17,7 @@ pub use standalone::stop;
 use crate::executor::cluster::cluster_execute_request_generator;
 use crate::executor::execute_request_generator;
 use crate::http_util::request::Request;
+use crate::metrics::MetricsFactory;
 #[cfg(feature = "cluster")]
 use crate::ErrorCode;
 use crate::{HttpReq, JobStatus, Response};
@@ -55,17 +56,25 @@ use tokio_stream::StreamExt;
 use tokio_util::io::StreamReader;
 use uuid::Uuid;
 
-pub async fn handle_request(request: Request) -> Response {
+pub async fn handle_request(request: Request, metrics: &'static MetricsFactory) -> Response {
     let job_id = job_id(&request);
+    let buckets = request.histogram_buckets.clone();
     let generator = request.into();
 
-    tokio::spawn(execute_request_generator(generator, job_id.clone()));
+    tokio::spawn(execute_request_generator(
+        generator,
+        job_id.clone(),
+        metrics
+            .metrics_with_buckets(buckets.to_vec(), &*job_id)
+            .await,
+    ));
     Response::new(job_id, JobStatus::Starting)
 }
 
 #[cfg(feature = "cluster")]
 pub async fn handle_request_cluster(request: Request, cluster: Arc<Cluster>) -> Response {
     let job_id = job_id(&request);
+    let buckets = request.histogram_buckets.clone();
     if !cluster.is_active().await {
         Response::new(job_id, JobStatus::Error(ErrorCode::InactiveCluster))
     } else if cluster.is_primary().await {
@@ -74,6 +83,7 @@ pub async fn handle_request_cluster(request: Request, cluster: Arc<Cluster>) -> 
             generator,
             job_id.clone(),
             cluster,
+            buckets,
         ));
         Response::new(job_id, JobStatus::Starting)
     } else {
@@ -359,7 +369,7 @@ impl TryInto<HttpReq> for HttpReqCsvHelper {
     fn try_into(self) -> Result<HttpReq, Self::Error> {
         Uri::try_from(&self.url)?;
         let method = Method::try_from(self.method.as_str())?;
-        let headers = serde_json::from_str::<HashMap<String, String>>(&self.headers.as_str())?;
+        let headers = serde_json::from_str::<HashMap<String, String>>(self.headers.as_str())?;
         Ok(HttpReq {
             id: "".to_string(),
             method,

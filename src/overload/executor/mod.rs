@@ -5,21 +5,19 @@ pub mod cluster;
 
 use super::HttpReq;
 use crate::generator::{request_generator_stream, RequestGenerator};
+use crate::metrics::Metrics;
 use crate::{ErrorCode, JobStatus};
 use bytes::Bytes;
 use futures_util::future::BoxFuture;
 use futures_util::stream::FuturesUnordered;
 use futures_util::FutureExt;
 use http::header::HeaderName;
-use http::HeaderValue;
+use http::{HeaderValue, StatusCode};
 use hyper::client::{Client, HttpConnector, ResponseFuture};
 use hyper::{Error, Request};
 use hyper_tls::HttpsConnector;
 use lazy_static::lazy_static;
 use native_tls::TlsConnector;
-use prometheus::{
-    linear_buckets, register_histogram_vec, register_int_counter_vec, HistogramVec, IntCounterVec,
-};
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::option::Option::Some;
@@ -40,6 +38,7 @@ enum HttpRequestState {
     DONE,
 }
 
+//todo status fields seems unnecessary
 #[must_use = "futures do nothing unless polled"]
 struct HttpRequestFuture<'a> {
     state: HttpRequestState,
@@ -47,7 +46,8 @@ struct HttpRequestFuture<'a> {
     job_id: String,
     request: Pin<Box<ResponseFuture>>,
     body: Option<BoxFuture<'a, Result<Bytes, Error>>>,
-    status: Option<String>,
+    status: Option<StatusCode>,
+    metrics: &'a Metrics,
 }
 
 impl Future for HttpRequestFuture<'_> {
@@ -55,12 +55,10 @@ impl Future for HttpRequestFuture<'_> {
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let _e = "ERROR".to_string();
         if let HttpRequestState::INIT = self.state {
-            //todo move outside
-            // METRIC_QPS_COUNTER
-            //     .with_label_values(&[self.job_id.as_str()])
-            //     .inc_by(1);
+            self.metrics.upstream_request_count(1);
             self.timer = Some(Instant::now());
             self.state = HttpRequestState::InProgress;
+            trace!("HttpRequestFuture [{}] - Begin", &self.job_id);
         }
 
         if self.body.is_some() {
@@ -73,13 +71,7 @@ impl Future for HttpRequestFuture<'_> {
                         &self.job_id,
                         &elapsed
                     );
-                    //todo move outside
-                    // METRIC_RESPONSE_TIME
-                    //     .with_label_values(&[
-                    //         self.job_id.as_str(),
-                    //         self.status.as_ref().unwrap_or(&e),
-                    //     ])
-                    //     .observe(elapsed);
+                    //add metrics here if it's necessary to include time to fetch body
                     Poll::Ready(())
                 }
                 Poll::Pending => {
@@ -87,51 +79,41 @@ impl Future for HttpRequestFuture<'_> {
                     Poll::Pending
                 }
             };
-        } else {
-            trace!("HttpRequestFuture [{}] - body - None", &self.job_id);
+        } else if matches!(self.state, HttpRequestState::ResponseReceived) {
+            trace!(
+                "HttpRequestFuture [{}] - body: None - completing",
+                &self.job_id
+            );
+            return Poll::Ready(());
         }
 
-        trace!("HttpRequestFuture [{}] - request - polling", &self.job_id);
         match Pin::new(&mut self.request).poll(cx) {
-            Poll::Pending => {
-                trace!("HttpRequestFuture [{}] - request - Pending", &self.job_id);
-                Poll::Pending
-            }
+            Poll::Pending => Poll::Pending,
             Poll::Ready(val) => {
                 self.state = HttpRequestState::ResponseReceived;
-                trace!("HttpRequestFuture [{}] - request - Ready", &self.job_id);
                 match val {
                     Ok(response) => {
-                        self.status = Some(response.status().to_string());
+                        let status = response.status();
+                        self.status = Some(status);
                         let elapsed = self.timer.unwrap().elapsed().as_millis() as f64;
                         trace!(
-                            "HttpRequestFuture [{}] - request - Ready - Ok, status: {:?}, elapsed={}",
+                            "HttpRequestFuture [{}] - status: {:?}, elapsed: {}",
                             &self.job_id,
                             &self.status,
                             &elapsed
                         );
-                        //todo move outside
-                        // METRIC_HEADER_TIME
-                        //     .with_label_values(&[
-                        //         self.job_id.as_str(),
-                        //         self.status.as_ref().unwrap_or(&e).as_str(),
-                        //     ])
-                        //     .observe(elapsed);
+                        let status_str = status.as_str();
+                        self.metrics.upstream_response_time(status_str, elapsed);
+                        self.metrics.upstream_request_status_count(1, status_str);
                         let bytes = hyper::body::to_bytes(response.into_body());
                         self.body = Some(bytes.boxed());
                         cx.waker().wake_by_ref();
                         Poll::Pending
                     }
                     Err(err) => {
-                        trace!(
-                            "HttpRequestFuture [{}] - request - Ready - ERROR: {}",
-                            &self.job_id,
-                            err
-                        );
-                        //todo move outside
-                        // METRIC_HEADER_TIME
-                        //     .with_label_values(&[self.job_id.as_str(), err.to_string().as_str()])
-                        //     .observe(self.timer.unwrap().elapsed().as_millis() as f64);
+                        trace!("HttpRequestFuture [{}] - ERROR: {}", &self.job_id, &err);
+                        self.metrics
+                            .upstream_request_status_count(1, err.to_string().as_str());
                         Poll::Ready(())
                     }
                 }
@@ -141,32 +123,7 @@ impl Future for HttpRequestFuture<'_> {
 }
 
 lazy_static! {
-    pub static ref METRIC_QPS_COUNTER: IntCounterVec =
-        register_int_counter_vec!("overload_qps_counter", "qps counter", &["request_id"]).unwrap();
-    pub static ref METRIC_RESPONSE_TIME: HistogramVec = register_histogram_vec!(
-        "overload_response_time",
-        "Keeps track of response time",
-        &["request_id", "status"],
-        // exponential_buckets(50.0,0.5,10).unwrap()
-        linear_buckets(50.0, 100.0, 10).unwrap()
-    )
-    .unwrap();
-
-    pub static ref METRIC_HEADER_TIME: HistogramVec = register_histogram_vec!(
-        "overload_header_time",
-        "Time between request sent and got the first header, optionally equal to overload_response_time",
-        &["request_id", "status"],
-        // exponential_buckets(50.0,0.9,10).unwrap()
-        linear_buckets(50.0, 100.0, 10).unwrap()
-    )
-    // static ref RESPONSE_TIME_PERCENTILE_P99: GaugeVec = register_gauge_vec!(
-    //     "overload_response_time_p99",
-    //     "response time = 99th percentile",
-    //     &["request_id"]
-    // )
-    .unwrap();
-
-    pub static ref JOB_STATUS:RwLock<BTreeMap<String, JobStatus>> = RwLock::new(BTreeMap::new());
+    pub static ref JOB_STATUS: RwLock<BTreeMap<String, JobStatus>> = RwLock::new(BTreeMap::new());
 }
 
 pub async fn init() {
@@ -197,7 +154,11 @@ pub async fn init() {
     }
 }
 
-pub async fn execute_request_generator(request: RequestGenerator, job_id: String) {
+pub async fn execute_request_generator(
+    request: RequestGenerator,
+    job_id: String,
+    metrics: Arc<Metrics>,
+) {
     let stream = request_generator_stream(request);
     tokio::pin!(stream);
     let client = Arc::new(build_client());
@@ -212,17 +173,26 @@ pub async fn execute_request_generator(request: RequestGenerator, job_id: String
         }
         match requests {
             Ok(result) => {
-                send_multiple_requests(result, client.clone(), qps, job_id.clone()).await;
+                send_multiple_requests(
+                    result,
+                    client.clone(),
+                    qps,
+                    job_id.clone(),
+                    metrics.clone(),
+                )
+                .await;
             }
             Err(err) => {
                 if let Some(sqlx::Error::Database(_)) = err.downcast_ref::<sqlx::Error>() {
                     error!(
-                        "sqlx::Error::Database: {}. Unrecoverable error; stopping the job.",
+                        "[{}] sqlx::Error::Database: {}. Unrecoverable error; stopping the job.",
+                        &job_id,
                         &err.to_string()
                     );
                     set_job_status(&job_id, JobStatus::Error(ErrorCode::SqliteOpenFailed)).await;
                     break;
                 }
+                error!("[{}] - Error: {}", &job_id, &err.to_string());
             }
         };
     }
@@ -257,8 +227,8 @@ async fn send_requests(
     client: Arc<Client<HttpsConnector<HttpConnector>>>,
     count: i32,
     job_id: String,
+    metrics: Arc<Metrics>,
 ) {
-    info!("sending {} requests", count);
     let body = if let Some(body) = req.body {
         Bytes::from(body)
     } else {
@@ -287,12 +257,9 @@ async fn send_requests(
             request: Pin::new(Box::new(request)),
             body: None,
             status: None,
+            metrics: &metrics,
         });
     }
-    // QPS_COUNTER
-    //     .with_label_values(&[job_id.as_str()])
-    //     .inc_by(count as i64);
-    // let instant = std::time::Instant::now();
     while let Some(_resp) = request_futures.next().await {
         trace!("Request completed");
     }
@@ -303,7 +270,14 @@ async fn send_multiple_requests(
     client: Arc<Client<HttpsConnector<HttpConnector>>>,
     count: u32,
     job_id: String,
+    metrics: Arc<Metrics>,
 ) {
+    trace!(
+        "[{}] [send_multiple_requests] - size: {}, count: {}",
+        &job_id,
+        &requests.len(),
+        &count,
+    );
     let n_req = requests.len();
     if count == 0 || n_req == 0 {
         trace!(
@@ -324,6 +298,7 @@ async fn send_multiple_requests(
                 client.clone(),
                 remainder as i32,
                 job_id.clone(),
+                metrics.clone(),
             ));
         }
     }
@@ -336,6 +311,7 @@ async fn send_multiple_requests(
                 client.clone(),
                 qps_per_req as i32,
                 job_id.clone(),
+                metrics.clone(),
             ));
         }
     }
