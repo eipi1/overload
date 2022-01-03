@@ -36,17 +36,18 @@ jobs:
         fi
     - name: Build cluster
       run: cargo build --bins --features "cluster" --release
-    - name: Login to DockerHub
+    - name: Login to Github Container registry
       uses: docker/login-action@v1
       with:
-        username: ${{ secrets.DOCKER_HUB_USERNAME }}
-        password: ${{ secrets.DOCKER_HUB_TOKEN }}
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     - name: Build cluster image
       uses: docker/build-push-action@v2.5.0
       with:
         context: .
         push: true
-        tags: mdsarowar/overload:${{ env.version }}-cluster${{ env.suffix }}
+        tags: ${{ github.repository }}:${{ env.version }}-cluster${{ env.suffix }}
     - name: Run standalone tests
       run: cargo test --verbose
     - name: Build standalone
@@ -56,4 +57,4 @@ jobs:
       with:
         context: .
         push: true
-        tags: mdsarowar/overload:${{ env.version }}-standalone${{ env.suffix }}
+        tags: ${{ github.repository }}:${{ env.version }}-standalone${{ env.suffix }}
