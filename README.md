@@ -300,6 +300,53 @@ Increase QPS linearly; QPS for any time is calculated using eq. qps = ax + b, wh
 
 If a test runs for 10 seconds, the generated RPS will be [1, 5, 7, 9, 11, 12, 12, 12, 12, 12]
 
+#### Steps/Staircase QPS
+
+Specify RPS in steps
+
+| field   | Description   | data type |
+|---------|---------------|-----------|
+| steps   | Array of Step | [Step](#step)    |
+
+##### Step
+
+| field| Description          | data type |
+|------|----------------------|-----------|
+| start| Start of the step    | [uint32]  |
+| end  | end of the step      | [uint32]  |
+| qps  | QPS during this step | [uint32]  |
+
+##### Example
+
+```json
+{
+  "qps": {
+    "Steps" : {
+      "steps": [
+        {
+          "start": 0,
+          "end": 5,
+          "qps": 1
+        },
+        {
+          "start": 6,
+          "end": 8,
+          "qps": 4
+        },
+        {
+          "start": 9,
+          "end": 10,
+          "qps": 7
+        }
+      ]
+    }
+  }
+}
+```
+
+If the test run for 15 seconds, from 0 to 5th seconds, generated QPS is 1, from 6th to 8th seconds, 
+generated QPS is 4, from 9 to 10th and 11th to 15th seconds, generated QPS is 7
+
 #### ArrayQPS
 
 Specify RPS directly

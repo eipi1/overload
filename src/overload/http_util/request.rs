@@ -2,7 +2,7 @@
 
 use crate::generator::{
     ArrayQPS, ConstantQPS, Linear, QPSScheme, RandomDataRequest, RequestFile, RequestGenerator,
-    RequestList, RequestProvider,
+    RequestList, RequestProvider, Steps,
 };
 use crate::http_util::GenericError;
 use crate::{data_dir, fmt, HttpReq};
@@ -17,6 +17,7 @@ pub(crate) enum QPSSpec {
     ConstantQPS(ConstantQPS),
     Linear(Linear),
     ArrayQPS(ArrayQPS),
+    Steps(Steps),
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -92,6 +93,7 @@ impl Into<RequestGenerator> for Request {
             QPSSpec::ConstantQPS(qps) => Box::new(qps),
             QPSSpec::Linear(qps) => Box::new(qps),
             QPSSpec::ArrayQPS(qps) => Box::new(qps),
+            QPSSpec::Steps(qps) => Box::new(qps),
         };
         let req: Box<dyn RequestProvider + Send> = match self.req {
             RequestSpecEnum::RequestList(req) => Box::new(req),
