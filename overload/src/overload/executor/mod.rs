@@ -2,6 +2,8 @@
 
 #[cfg(feature = "cluster")]
 pub mod cluster;
+#[cfg(feature = "connection_pool")]
+pub mod connection;
 
 use super::HttpReq;
 use crate::generator::{request_generator_stream, RequestGenerator};
@@ -229,6 +231,10 @@ async fn send_requests(
     job_id: String,
     metrics: Arc<Metrics>,
 ) {
+    // let pool = r2d2::Pool::builder()
+    //     .max_size(15)
+    //     .build(manager)
+    //     .unwrap();
     let body = if let Some(body) = req.body {
         Bytes::from(body)
     } else {
