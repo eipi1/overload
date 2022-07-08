@@ -5,8 +5,7 @@ description = "Full-featured async (tokio-based) connection pool (like r2d2)"
 license = "MIT"
 repository = "https://github.com/djc/bb8"
 edition = "2018"
-workspace = ".."
-readme = "../README.md"
+readme = "README.md"
 
 [dependencies]
 async-trait = "0.1"

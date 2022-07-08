@@ -95,7 +95,7 @@ where
 
     pub(crate) fn wanted(&mut self, config: &Builder<M>) -> ApprovalIter {
         let available = self.conns.len() as u32 + self.pending_conns;
-        let min_idle = config.min_idle.unwrap_or(0);
+        let min_idle = config.get_min_idle();
         let wanted = if available < min_idle {
             min_idle - available
         } else {
@@ -116,8 +116,9 @@ where
 
     fn approvals(&mut self, config: &Builder<M>, num: u32) -> ApprovalIter {
         let current = self.num_conns + self.pending_conns;
-        let allowed = if current < config.max_size {
-            config.max_size - current
+        let max_size = config.get_max_size();
+        let allowed = if current < max_size {
+            max_size - current
         } else {
             0
         };

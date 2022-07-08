@@ -4,6 +4,7 @@ use std::fmt;
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::time::Duration;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 
@@ -96,7 +97,8 @@ pub struct Builder<M: ManageConnection> {
     /// User-supplied trait object responsible for initializing connections
     pub(crate) connection_customizer: Option<Box<dyn CustomizeConnection<M::Connection, M::Error>>>,
 
-    pub(crate) pool_customizer: Option<Box<dyn PoolCustomizer>>,
+    // pub(crate) pool_customizer: Option<Arc<Box<dyn PoolCustomizer>>>,
+    pub(crate) pool_customizer: Option<Arc<dyn PoolCustomizer>>,
 
     _p: PhantomData<M>,
 }
@@ -136,6 +138,12 @@ impl<M: ManageConnection> Builder<M> {
         self
     }
 
+    pub (crate) fn get_max_size(&self) -> u32 {
+        self.pool_customizer.as_ref()
+        .map_or(self.max_size, |c| c.max_size())
+        
+    }
+
     /// Sets the minimum idle connection count maintained by the pool.
     ///
     /// If set, the pool will try to maintain at least this many idle
@@ -145,6 +153,13 @@ impl<M: ManageConnection> Builder<M> {
     pub fn min_idle(mut self, min_idle: Option<u32>) -> Builder<M> {
         self.min_idle = min_idle;
         self
+    }
+
+    pub (crate) fn get_min_idle(&self) -> u32 {
+        self.pool_customizer.as_ref()
+        .map(|c| c.min_idle())
+        .or(self.min_idle)
+        .unwrap_or(0)
     }
 
     /// If true, the health of a connection will be verified through a call to
@@ -231,6 +246,17 @@ impl<M: ManageConnection> Builder<M> {
         self
     }
 
+
+    /// Set the pool customizer to customizer
+    pub fn pool_customizer (
+        mut self,
+        // pool_customizer: Arc<Box<dyn PoolCustomizer>>,
+        pool_customizer: Arc<dyn PoolCustomizer>,
+    ) -> Builder<M> {
+        self.pool_customizer = Some(pool_customizer);
+        self
+    }
+
     fn build_inner(self, manager: M) -> Pool<M> {
         if let Some(min_idle) = self.min_idle {
             assert!(
@@ -295,7 +321,14 @@ pub trait CustomizeConnection<C: Send + 'static, E: 'static>:
     }
 }
 
-pub trait PoolCustomizer {}
+/// Override number of pooled connectiion
+pub trait PoolCustomizer : fmt::Debug + Send + Sync {
+    /// override minimum ide connection count
+    fn min_idle(&self) -> u32;
+
+    /// override maximum connection
+    fn max_size(&self) -> u32;
+}
 
 /// A smart pointer wrapping a connection.
 pub struct PooledConnection<'a, M>
