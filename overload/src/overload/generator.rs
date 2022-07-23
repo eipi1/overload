@@ -34,6 +34,20 @@ pub enum ProviderOrFuture {
     Dummy,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub enum Scheme {
+    HTTP,
+    //Unsupported
+    // HTTPS
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Target {
+    pub(crate) host: String,
+    pub(crate) port: u16,
+    pub(crate) protocol: Scheme,
+}
+
 /// Based on the QPS policy, generate requests to be sent to the application that's being tested.
 #[must_use = "futures do nothing unless polled"]
 #[allow(dead_code)]
@@ -50,11 +64,13 @@ pub struct RequestGenerator {
     current_count: u32,
     current_qps: u32,
     shared_provider: bool,
+    pub(crate) target: Target,
     // replace ProviderOrFuture::Provider with enum, no need to use conversion
     // or check if Any can be used like sqlx AnyConnection
     req_provider: String,
     provider_or_future: ProviderOrFuture,
-    qps_scheme: Box<dyn QPSScheme + Send>,
+    qps_scheme: Box<dyn RateScheme + Send>,
+    concurrent_connection: Box<dyn RateScheme + Send>,
 }
 
 impl RequestGenerator {
@@ -71,16 +87,16 @@ impl RequestGenerator {
     }
 }
 
-pub trait QPSScheme {
+pub trait RateScheme {
     fn next(&self, nth: u32, last_qps: Option<u32>) -> u32;
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct ConstantQPS {
+pub struct ConstantRate {
     pub qps: u32,
 }
 
-impl QPSScheme for ConstantQPS {
+impl RateScheme for ConstantRate {
     #[inline]
     fn next(&self, _nth: u32, _last_qps: Option<u32>) -> u32 {
         self.qps
@@ -88,17 +104,17 @@ impl QPSScheme for ConstantQPS {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct ArrayQPS {
+pub struct ArraySpec {
     qps: Vec<u32>,
 }
 
-impl ArrayQPS {
+impl ArraySpec {
     pub fn new(qps: Vec<u32>) -> Self {
         Self { qps }
     }
 }
 
-impl QPSScheme for ArrayQPS {
+impl RateScheme for ArraySpec {
     #[inline]
     fn next(&self, nth: u32, _last_qps: Option<u32>) -> u32 {
         let len = self.qps.len();
@@ -109,6 +125,24 @@ impl QPSScheme for ArrayQPS {
         } else {
             0
         }
+    }
+}
+
+/// Used only for concurrent connections, creates a pool of maximum size specified
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Bounded {
+    max: u32,
+}
+
+impl Default for Bounded {
+    fn default() -> Self {
+        Bounded { max: 500 }
+    }
+}
+
+impl RateScheme for Bounded {
+    fn next(&self, _nth: u32, _last_value: Option<u32>) -> u32 {
+        self.max
     }
 }
 
@@ -215,11 +249,12 @@ impl RequestProvider for RequestFile {
         }
         if self.inner.is_none() {
             //open sqlite connection
-            let mut connection =
-                SqliteConnectOptions::from_str(format!("sqlite://{}", &self.file_name).as_str())?
-                    .read_only(true)
-                    .connect()
-                    .await?;
+            let sqlite_file = format!("sqlite://{}", &self.file_name);
+            trace!("Openning sqlite file at: {}", &sqlite_file);
+            let mut connection = SqliteConnectOptions::from_str(sqlite_file.as_str())?
+                .read_only(true)
+                .connect()
+                .await?;
             let size: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM http_req")
                 .fetch_one(&mut connection)
                 .await?;
@@ -381,13 +416,12 @@ impl RandomDataRequest {
     fn substitute_param_with_data(url: &mut String, positions: &BinaryHeap<UrlParam>, data: Value) {
         for url_param in positions.iter() {
             if let Some(p_val) = data.get(&url_param.name.as_str()) {
-                let val: String;
-                if p_val.is_string() {
-                    val = String::from(p_val.as_str().unwrap())
+                let val: String = if p_val.is_string() {
+                    String::from(p_val.as_str().unwrap())
                 } else {
-                    val = p_val
+                    p_val
                         .as_i64()
-                        .map_or(String::from("unknown"), |t| t.to_string());
+                        .map_or(String::from("unknown"), |t| t.to_string())
                 };
                 url.replace_range(url_param.start..url_param.end as usize, &val);
             }
@@ -406,10 +440,14 @@ impl RequestGenerator {
     pub fn new(
         duration: u32,
         requests: ReqProvider,
-        qps_scheme: Box<dyn QPSScheme + Send>,
+        qps_scheme: Box<dyn RateScheme + Send>,
+        target: Target,
+        concurrent_connection: Option<Box<dyn RateScheme + Send>>,
     ) -> Self {
         let time_scale: u8 = 1;
         let total = duration * time_scale as u32;
+        let concurrent_connection =
+            concurrent_connection.unwrap_or_else(|| Box::new(Bounded::default()));
         RequestGenerator {
             duration,
             time_scale,
@@ -420,12 +458,14 @@ impl RequestGenerator {
             provider_or_future: ProviderOrFuture::Provider(requests),
             qps_scheme,
             current_count: 0,
+            target,
+            concurrent_connection,
         }
     }
 }
 
 impl Stream for RequestGenerator {
-    type Item = (u32, AnyResult<Vec<HttpReq>>);
+    type Item = (u32, AnyResult<Vec<HttpReq>>, u32);
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         if self.current_count >= self.total {
@@ -457,8 +497,9 @@ impl Stream for RequestGenerator {
                         let qps = self.current_qps;
                         self.current_qps = 0;
                         self.current_count += 1;
+                        let conn = self.concurrent_connection.next(self.current_count, None);
                         self.provider_or_future = ProviderOrFuture::Provider(provider);
-                        Poll::Ready(Some((qps, result)))
+                        Poll::Ready(Some((qps, result, conn)))
                     }
                     Poll::Pending => {
                         self.provider_or_future = ProviderOrFuture::Future(future);
@@ -478,7 +519,7 @@ impl Stream for RequestGenerator {
 #[allow(clippy::let_and_return)]
 pub fn request_generator_stream(
     generator: RequestGenerator,
-) -> impl Stream<Item = (u32, AnyResult<Vec<HttpReq>>)> {
+) -> impl Stream<Item = (u32, AnyResult<Vec<HttpReq>>, u32)> {
     //todo impl throttled stream function according to time_scale
     let scale = generator.time_scale;
     let throttle = generator.throttle(Duration::from_millis(1000 / scale as u64));
@@ -487,7 +528,7 @@ pub fn request_generator_stream(
 }
 
 /// Increase QPS linearly as per equation
-/// `y=ax+b` until hit the max cap
+/// `y=ceil(ax+b)` until hit the max cap
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Linear {
     a: f32,
@@ -495,7 +536,7 @@ pub struct Linear {
     max: u32,
 }
 
-impl QPSScheme for Linear {
+impl RateScheme for Linear {
     fn next(&self, nth: u32, _last_qps: Option<u32>) -> u32 {
         min((self.a * nth as f32).ceil() as u32 + self.b, self.max)
     }
@@ -504,8 +545,11 @@ impl QPSScheme for Linear {
 #[cfg(test)]
 pub(crate) mod test {
     use crate::datagen::{data_schema_from_value, generate_data};
+    use crate::generator::Linear;
+    use crate::generator::Scheme;
+    use crate::generator::Target;
     use crate::generator::{
-        request_generator_stream, ConstantQPS, RandomDataRequest, RequestFile, RequestGenerator,
+        request_generator_stream, ConstantRate, RandomDataRequest, RequestFile, RequestGenerator,
         RequestList, RequestProvider, MAX_REQ_RET_SIZE,
     };
     use crate::HttpReq;
@@ -539,7 +583,13 @@ pub(crate) mod test {
         let mut generator = RequestGenerator::new(
             3,
             Box::new(req_list_with_n_req(0)),
-            Box::new(ConstantQPS { qps: 3 }),
+            Box::new(ConstantRate { qps: 3 }),
+            Target {
+                host: "example.com".into(),
+                port: 8080,
+                protocol: Scheme::HTTP,
+            },
+            None,
         );
         let ret = generator.next().await;
         if let Some(arg) = ret {
@@ -551,7 +601,7 @@ pub(crate) mod test {
         //stream should generate 3 value
         assert!(generator.next().await.is_some());
         assert!(generator.next().await.is_some());
-        assert!(!generator.next().await.is_some());
+        assert!(generator.next().await.is_none());
     }
 
     #[tokio::test]
@@ -559,7 +609,13 @@ pub(crate) mod test {
         let mut generator = RequestGenerator::new(
             3,
             Box::new(req_list_with_n_req(1)),
-            Box::new(ConstantQPS { qps: 3 }),
+            Box::new(ConstantRate { qps: 3 }),
+            Target {
+                host: "example.com".into(),
+                port: 8080,
+                protocol: Scheme::HTTP,
+            },
+            None,
         );
         let ret = generator.next().await;
         if let Some(arg) = ret {
@@ -579,7 +635,13 @@ pub(crate) mod test {
         let mut generator = RequestGenerator::new(
             3,
             Box::new(req_list_with_n_req(4)),
-            Box::new(ConstantQPS { qps: 3 }),
+            Box::new(ConstantRate { qps: 3 }),
+            Target {
+                host: "example.com".into(),
+                port: 8080,
+                protocol: Scheme::HTTP,
+            },
+            None,
         );
         let ret = generator.next().await;
         if let Some(arg) = ret {
@@ -595,7 +657,13 @@ pub(crate) mod test {
         let mut generator = RequestGenerator::new(
             3,
             Box::new(req_list_with_n_req(12)),
-            Box::new(ConstantQPS { qps: 15 }),
+            Box::new(ConstantRate { qps: 15 }),
+            Target {
+                host: "example.com".into(),
+                port: 8080,
+                protocol: Scheme::HTTP,
+            },
+            None,
         );
         let ret = generator.next().await;
         if let Some(arg) = ret {
@@ -608,12 +676,102 @@ pub(crate) mod test {
 
     //noinspection Duplicates
     #[tokio::test]
+    async fn test_request_generator_concurrent_con_default() {
+        let mut generator = RequestGenerator::new(
+            3,
+            Box::new(req_list_with_n_req(12)),
+            Box::new(ConstantRate { qps: 3 }),
+            Target {
+                host: "example.com".into(),
+                port: 8080,
+                protocol: Scheme::HTTP,
+            },
+            None,
+        );
+        let arg = generator.next().await.unwrap();
+        assert_eq!(arg.0, 3);
+        assert_eq!(arg.1.unwrap().len(), 3);
+        assert_eq!(arg.2, 500);
+        tokio::time::pause();
+        let arg = generator.next().await.unwrap();
+        tokio::time::advance(Duration::from_millis(1001)).await;
+        assert_eq!(arg.0, 3);
+        assert_eq!(arg.1.unwrap().len(), 3);
+        assert_eq!(arg.2, 500);
+        let arg = generator.next().await.unwrap();
+        tokio::time::advance(Duration::from_millis(1001)).await;
+        assert_eq!(arg.0, 3);
+        assert_eq!(arg.1.unwrap().len(), 3);
+        assert_eq!(arg.2, 500);
+        let arg = generator.next().await;
+        tokio::time::advance(Duration::from_millis(1001)).await;
+        assert!(arg.is_none())
+    }
+
+    //noinspection Duplicates
+    #[tokio::test]
+    async fn test_request_generator_concurrent_con_linear() {
+        let mut generator = RequestGenerator::new(
+            30,
+            Box::new(req_list_with_n_req(12)),
+            Box::new(ConstantRate { qps: 3 }),
+            Target {
+                host: "example.com".into(),
+                port: 8080,
+                protocol: Scheme::HTTP,
+            },
+            Some(Box::new(Linear {
+                a: 0.5,
+                b: 1,
+                max: 10,
+            })),
+        );
+        let arg = generator.next().await.unwrap();
+        //assert first element
+        assert_eq!(arg.0, 3);
+        assert_eq!(arg.1.unwrap().len(), 3);
+        assert_eq!(arg.2, 2);
+        tokio::time::pause();
+
+        let _arg = generator.next().await.unwrap();
+        tokio::time::advance(Duration::from_millis(1001)).await;
+
+        let arg = generator.next().await.unwrap();
+        tokio::time::advance(Duration::from_millis(1001)).await;
+        // assert third element
+        assert_eq!(arg.0, 3);
+        assert_eq!(arg.1.unwrap().len(), 3);
+        assert_eq!(arg.2, 3);
+
+        for _ in 0..26 {
+            let arg = generator.next().await;
+            tokio::time::advance(Duration::from_millis(1001)).await;
+            assert!(arg.is_some());
+        }
+        let arg = generator.next().await.unwrap();
+        tokio::time::advance(Duration::from_millis(1001)).await;
+        assert_eq!(arg.0, 3);
+        assert_eq!(arg.1.unwrap().len(), 3);
+        assert_eq!(arg.2, 10);
+        let arg = generator.next().await;
+        tokio::time::advance(Duration::from_millis(1001)).await;
+        assert!(arg.is_none());
+    }
+
+    //noinspection Duplicates
+    #[tokio::test]
     async fn test_request_generator_stream() {
         time::pause();
         let generator = RequestGenerator::new(
             3,
             Box::new(req_list_with_n_req(1)),
-            Box::new(ConstantQPS { qps: 3 }),
+            Box::new(ConstantRate { qps: 3 }),
+            Target {
+                host: "example.com".into(),
+                port: 8080,
+                protocol: Scheme::HTTP,
+            },
+            None,
         );
         let throttle = request_generator_stream(generator);
         let mut throttle = task::spawn(throttle);
@@ -667,7 +825,10 @@ pub(crate) mod test {
         setup();
         if create_sqlite_file().await.is_ok() {
             let mut request = RequestFile {
-                file_name: format!("{}/test-data.sqlite", std::env::var("PWD").unwrap()),
+                file_name: format!(
+                    "{}/test-data.sqlite",
+                    std::env::var("CARGO_MANIFEST_DIR").unwrap()
+                ),
                 inner: None,
                 size: 0,
             };

@@ -4,9 +4,9 @@
 
 tasks:
   - init: cargo build
-    command: cargo watch -x run
-image:
-  file: .gitpod.Dockerfile
+    command: cargo watch -c -d 5 -x 'clippy --tests --all-features -- -A warnings'
+# image:
+#   file: .gitpod.Dockerfile
 vscode:
   extensions:
     - webfreak.debug@0.24.0

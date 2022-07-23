@@ -6,20 +6,22 @@ pub mod cluster;
 pub mod connection;
 
 use super::HttpReq;
+use crate::executor::connection::ConcurrentConnectionCountManager;
+use crate::executor::connection::HttpConnectionPool;
 use crate::generator::{request_generator_stream, RequestGenerator};
 use crate::metrics::Metrics;
 use crate::{ErrorCode, JobStatus};
+use bb8::Pool;
 use bytes::Bytes;
 use futures_util::future::BoxFuture;
 use futures_util::stream::FuturesUnordered;
 use futures_util::FutureExt;
 use http::header::HeaderName;
 use http::{HeaderValue, StatusCode};
-use hyper::client::{Client, HttpConnector, ResponseFuture};
+use hyper::client::conn::ResponseFuture;
 use hyper::{Error, Request};
-use hyper_tls::HttpsConnector;
 use lazy_static::lazy_static;
-use native_tls::TlsConnector;
+use log::warn;
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::option::Option::Some;
@@ -30,6 +32,7 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tokio_stream::StreamExt;
+use tower::ServiceExt;
 use tracing::{error, info, trace};
 
 #[allow(dead_code)]
@@ -161,28 +164,44 @@ pub async fn execute_request_generator(
     job_id: String,
     metrics: Arc<Metrics>,
 ) {
+    let target = request.target.clone();
     let stream = request_generator_stream(request);
     tokio::pin!(stream);
-    let client = Arc::new(build_client());
+
+    let host_port = format!("{}:{}", target.host, target.port);
+    let pool = HttpConnectionPool::new(&host_port);
+    let customizer = Arc::new(ConcurrentConnectionCountManager::new(1));
+
+    let pool = bb8::Pool::builder()
+        .pool_customizer(customizer.clone())
+        .reaper_rate(Duration::from_millis(1000))
+        .idle_timeout(Some(Duration::from_millis(1000)))
+        .build(pool)
+        .await
+        .unwrap();
+
     {
         let mut write_guard = JOB_STATUS.write().await;
         write_guard.insert(job_id.clone(), JobStatus::InProgress);
     }
-    while let Some((qps, requests)) = stream.next().await {
+
+    let mut prev_connection_count = 1;
+
+    while let Some((qps, requests, connection_count)) = stream.next().await {
         let stop = should_stop(&job_id).await;
         if stop {
             break;
         }
+        if prev_connection_count != connection_count {
+            customizer.update(connection_count);
+            prev_connection_count = connection_count;
+        }
+        trace!("Connection pool stat: {:?}", pool.state());
+
         match requests {
             Ok(result) => {
-                send_multiple_requests(
-                    result,
-                    client.clone(),
-                    qps,
-                    job_id.clone(),
-                    metrics.clone(),
-                )
-                .await;
+                send_multiple_requests(result, pool.clone(), qps, job_id.clone(), metrics.clone())
+                    .await;
             }
             Err(err) => {
                 if let Some(sqlx::Error::Database(_)) = err.downcast_ref::<sqlx::Error>() {
@@ -226,15 +245,11 @@ async fn set_job_status(job_id: &str, new_status: JobStatus) {
 
 async fn send_requests(
     req: HttpReq,
-    client: Arc<Client<HttpsConnector<HttpConnector>>>,
+    pool: Pool<HttpConnectionPool>,
     count: i32,
     job_id: String,
     metrics: Arc<Metrics>,
 ) {
-    // let pool = r2d2::Pool::builder()
-    //     .max_size(15)
-    //     .build(manager)
-    //     .unwrap();
     let body = if let Some(body) = req.body {
         Bytes::from(body)
     } else {
@@ -254,17 +269,33 @@ async fn send_requests(
             );
         }
         let request = request.body(body.clone().into()).unwrap();
-        let request = client.request(request);
-        // request_futures.push(request);
-        request_futures.push(HttpRequestFuture {
-            state: HttpRequestState::INIT,
-            timer: None,
-            job_id: job_id.clone(),
-            request: Pin::new(Box::new(request)),
-            body: None,
-            status: None,
-            metrics: &metrics,
-        });
+        trace!("sending request: {:?}", &request);
+        match pool.get().await {
+            Ok(mut con) => {
+                // let mut handle = con.request_handle;
+                trace!("readying connection");
+                let handle = con.request_handle.ready().await;
+                if handle.is_err() {
+                    warn!("error - connection not ready");
+                    continue;
+                }
+                trace!("connection ready");
+                let request = handle.unwrap().send_request(request);
+                request_futures.push(HttpRequestFuture {
+                    state: HttpRequestState::INIT,
+                    timer: None,
+                    job_id: job_id.clone(),
+                    request: Pin::new(Box::new(request)),
+                    body: None,
+                    status: None,
+                    metrics: &metrics,
+                });
+            }
+            Err(err) => {
+                warn!("error while getting connection from pool: {:?}", err);
+                continue;
+            }
+        }
     }
     while let Some(_resp) = request_futures.next().await {
         trace!("Request completed");
@@ -273,7 +304,7 @@ async fn send_requests(
 
 async fn send_multiple_requests(
     requests: Vec<HttpReq>,
-    client: Arc<Client<HttpsConnector<HttpConnector>>>,
+    pool: Pool<HttpConnectionPool>,
     count: u32,
     job_id: String,
     metrics: Arc<Metrics>,
@@ -301,7 +332,7 @@ async fn send_multiple_requests(
             //0 is getting preference. Choosing random index instead of 0 should be better
             tokio::spawn(send_requests(
                 req.clone(),
-                client.clone(),
+                pool.clone(),
                 remainder as i32,
                 job_id.clone(),
                 metrics.clone(),
@@ -314,7 +345,7 @@ async fn send_multiple_requests(
         for req in drain {
             tokio::spawn(send_requests(
                 req,
-                client.clone(),
+                pool.clone(),
                 qps_per_req as i32,
                 job_id.clone(),
                 metrics.clone(),
@@ -382,14 +413,14 @@ pub(crate) async fn get_job_status(
     job_status
 }
 
-fn build_client() -> Client<HttpsConnector<HttpConnector>> {
-    let tls = TlsConnector::builder()
-        .danger_accept_invalid_hostnames(true)
-        .danger_accept_invalid_certs(true)
-        .build()
-        .unwrap();
-    let mut http_connector = HttpConnector::new();
-    http_connector.enforce_http(false);
-    let connector = HttpsConnector::from((http_connector, tls.into()));
-    Client::builder().build(connector)
-}
+// fn build_client() -> Client<HttpsConnector<HttpConnector>> {
+//     let tls = TlsConnector::builder()
+//         .danger_accept_invalid_hostnames(true)
+//         .danger_accept_invalid_certs(true)
+//         .build()
+//         .unwrap();
+//     let mut http_connector = HttpConnector::new();
+//     http_connector.enforce_http(false);
+//     let connector = HttpsConnector::from((http_connector, tls.into()));
+//     Client::builder().build(connector)
+// }

@@ -1,8 +1,9 @@
 #![allow(clippy::upper_case_acronyms)]
 
+use crate::generator::Target;
 use crate::generator::{
-    ArrayQPS, ConstantQPS, Linear, QPSScheme, RandomDataRequest, RequestFile, RequestGenerator,
-    RequestList, RequestProvider,
+    ArraySpec, Bounded, ConstantRate, Linear, RandomDataRequest, RateScheme, RequestFile,
+    RequestGenerator, RequestList, RequestProvider,
 };
 use crate::http_util::GenericError;
 use crate::{data_dir, fmt, HttpReq};
@@ -13,10 +14,18 @@ use std::convert::TryFrom;
 use std::fmt::{Debug, Display, Formatter};
 
 #[derive(Debug, Serialize, Deserialize)]
-pub(crate) enum QPSSpec {
-    ConstantQPS(ConstantQPS),
+pub(crate) enum RateSpec {
+    ConstantRate(ConstantRate),
     Linear(Linear),
-    ArrayQPS(ArrayQPS),
+    ArraySpec(ArraySpec),
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) enum ConcurrentConnectionRateSpec {
+    ConstantRate(ConstantRate),
+    Linear(Linear),
+    ArraySpec(ArraySpec),
+    Bounded(Bounded),
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -42,45 +51,15 @@ impl TryFrom<&String> for RequestSpecEnum {
 }
 
 /// Describe the request, for example
-/// ```
-/// # use overload::http_util::request::Request;
-/// # fn main() {
-///     # let req = r#"
-/// {
-///   "duration": 1,
-///   "name": "demo-test",
-///   "qps": {
-///     "ConstantQPS": {
-///       "qps": 1
-///     }
-///   },
-///   "req": {
-///     "RequestList": {
-///       "data": [
-///         {
-///           "body": null,
-///           "method": "GET",
-///           "url": "example.com"
-///         }
-///       ]
-///     }
-///   },
-///   "histogramBuckets": [35,40,45,48,50, 52]
-/// }
-/// # "#;
-/// #    let result = serde_json::from_str::<Request>(req);
-/// #    assert!(result.is_ok());
-/// #    let result = result.unwrap();
-/// #
-/// # }
-/// ```
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Request {
     pub name: Option<String>,
     pub(crate) duration: u32,
+    pub(crate) target: Target,
     pub(crate) req: RequestSpecEnum,
-    pub(crate) qps: QPSSpec,
+    pub(crate) qps: RateSpec,
+    pub(crate) concurrent_connection: Option<ConcurrentConnectionRateSpec>,
     #[serde(default = "crate::metrics::default_histogram_bucket")]
     pub(crate) histogram_buckets: SmallVec<[f64; 6]>,
 }
@@ -88,10 +67,10 @@ pub struct Request {
 #[allow(clippy::from_over_into)]
 impl Into<RequestGenerator> for Request {
     fn into(self) -> RequestGenerator {
-        let qps: Box<dyn QPSScheme + Send> = match self.qps {
-            QPSSpec::ConstantQPS(qps) => Box::new(qps),
-            QPSSpec::Linear(qps) => Box::new(qps),
-            QPSSpec::ArrayQPS(qps) => Box::new(qps),
+        let qps: Box<dyn RateScheme + Send> = match self.qps {
+            RateSpec::ConstantRate(qps) => Box::new(qps),
+            RateSpec::Linear(qps) => Box::new(qps),
+            RateSpec::ArraySpec(qps) => Box::new(qps),
         };
         let req: Box<dyn RequestProvider + Send> = match self.req {
             RequestSpecEnum::RequestList(req) => Box::new(req),
@@ -102,7 +81,20 @@ impl Into<RequestGenerator> for Request {
             }
             RequestSpecEnum::RandomDataRequest(req) => Box::new(req),
         };
-        RequestGenerator::new(self.duration, req, qps)
+
+        let connection_rate = if let Some(connection_rate_spec) = self.concurrent_connection {
+            let rate_spec: Box<dyn RateScheme + Send> = match connection_rate_spec {
+                ConcurrentConnectionRateSpec::ArraySpec(spec) => Box::new(spec),
+                ConcurrentConnectionRateSpec::ConstantRate(spec) => Box::new(spec),
+                ConcurrentConnectionRateSpec::Linear(spec) => Box::new(spec),
+                ConcurrentConnectionRateSpec::Bounded(spec) => Box::new(spec),
+            };
+            Some(rate_spec)
+        } else {
+            None
+        };
+
+        RequestGenerator::new(self.duration, req, qps, self.target, connection_rate)
     }
 }
 
@@ -139,18 +131,12 @@ impl TryFrom<HashMap<String, String>> for JobStatusQueryParams {
             let offset = value.remove("offset");
             let offset = offset.as_ref().map_or("0", |o| &*o);
             let offset = offset.parse::<usize>().map_err(|e| {
-                GenericError::new(
-                    &*format!("Invalid offset {}, {}", &offset, e.to_string()),
-                    400,
-                )
+                GenericError::new(&*format!("Invalid offset {}, {}", &offset, e), 400)
             })?;
             let limit = value.remove("limit");
             let limit = limit.as_ref().map_or("20", |l| &*l);
             let limit = limit.parse::<usize>().map_err(|e| {
-                GenericError::new(
-                    &*format!("Invalid limit {}, {}", &offset, e.to_string()),
-                    400,
-                )
+                GenericError::new(&*format!("Invalid limit {}, {}", &offset, e), 400)
             })?;
             if limit < 1 {
                 return Err(GenericError::new("limit can't be less than 1", 400));
@@ -169,7 +155,9 @@ impl TryFrom<HashMap<String, String>> for JobStatusQueryParams {
 #[cfg(test)]
 mod test {
     use crate::generator::test::req_list_with_n_req;
-    use crate::generator::{request_generator_stream, ConstantQPS, RequestGenerator, RequestList};
+    use crate::generator::Scheme;
+    use crate::generator::Target;
+    use crate::generator::{request_generator_stream, ConstantRate, RequestGenerator, RequestList};
     use crate::http_util::request::{JobStatusQueryParams, Request, RequestSpecEnum};
     use crate::http_util::GenericError;
     use crate::HttpReq;
@@ -184,7 +172,7 @@ mod test {
               "duration": 1,
               "name": "demo-test",
               "qps": {
-                "ConstantQPS": {
+                "ConstantRate": {
                   "qps": 1
                 }
               },
@@ -197,6 +185,11 @@ mod test {
                     }
                   ]
                 }
+              },
+              "target": {
+                "host": "example.com",
+                "port": 8080,
+                "protocol": "HTTP"
               },
               "histogramBuckets": [35,40,45,48,50, 52]
             }
@@ -234,9 +227,98 @@ mod test {
         let generator = RequestGenerator::new(
             3,
             Box::new(req_list_with_n_req(1)),
-            Box::new(ConstantQPS { qps: 1 }),
+            Box::new(ConstantRate { qps: 1 }),
+            Target {
+                host: "example.com".into(),
+                port: 8080,
+                protocol: Scheme::HTTP,
+            },
+            None,
         );
         request_generator_stream(generator);
+    }
+
+    #[tokio::test]
+    async fn test_request_1() {
+        let req = r#"
+            {
+              "duration": 5,
+              "name": "demo-test",
+              "qps": {
+                "ConstantRate": {
+                  "qps": 2
+                }
+              },
+              "req": {
+                "RequestList": {
+                  "data": [
+                    {
+                      "method": "GET",
+                      "url": "example.com"
+                    }
+                  ]
+                }
+              },
+              "target": {
+                "host": "example.com",
+                "port": 8080,
+                "protocol": "HTTP"
+              },
+              "histogramBuckets": [35,40,45,48,50, 52]
+            }
+        "#;
+        let result = serde_json::from_str::<Request>(req);
+        match result {
+            Err(err) => {
+                panic!("Error: {}", err);
+            }
+            Ok(request) => {
+                let _ = request_generator_stream(request.into());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_request_2() {
+        let req = r#"
+            {
+              "duration": 5,
+              "name": "demo-test",
+              "qps": {
+                "ConstantRate": {
+                  "qps": 2
+                }
+              },
+              "req": {
+                "RequestList": {
+                  "data": [
+                    {
+                      "method": "GET",
+                      "url": "example.com"
+                    }
+                  ]
+                }
+              },
+              "target": {
+                "host": "example.com",
+                "port": 8080,
+                "protocol": "HTTP"
+              },
+              "concurrentConnections": {
+                "max":100
+              },
+              "histogramBuckets": [35,40,45,48,50, 52]
+            }
+        "#;
+        let result = serde_json::from_str::<Request>(req);
+        match result {
+            Err(err) => {
+                panic!("Error: {}", err);
+            }
+            Ok(request) => {
+                let _ = request_generator_stream(request.into());
+            }
+        }
     }
 
     #[test]

@@ -3,8 +3,8 @@
 
 use super::HttpReq;
 use crate::executor::{set_job_status, should_stop};
-use crate::generator::{request_generator_stream, ArrayQPS, RequestGenerator};
-use crate::http_util::request::{QPSSpec, RequestSpecEnum};
+use crate::generator::{request_generator_stream, ArraySpec, RequestGenerator, Scheme, Target};
+use crate::http_util::request::{RateSpec, RequestSpecEnum};
 use crate::{ErrorCode, JobStatus};
 use cluster_mode::{Cluster, RestClusterNode};
 use futures_util::stream::FuturesUnordered;
@@ -48,7 +48,7 @@ pub async fn cluster_execute_request_generator(
                 break;
             }
             let mut bundle = vec![];
-            while let Some((qps, requests)) = stream.next().await {
+            while let Some((qps, requests, _connection_count)) = stream.next().await {
                 match requests {
                     Ok(result) => {
                         bundle.push((qps, result));
@@ -171,14 +171,20 @@ fn to_test_request(
     buckets: &SmallVec<[f64; 6]>,
 ) -> crate::http_util::request::Request {
     let duration = qps.len() as u32;
-    let qps = ArrayQPS::new(Vec::from(qps));
-    let qps = QPSSpec::ArrayQPS(qps);
+    let qps = ArraySpec::new(Vec::from(qps));
+    let qps = RateSpec::ArraySpec(qps);
 
     crate::http_util::request::Request {
         name: Some(job_id),
         duration,
         req,
         qps,
+        target: Target {
+            host: "example.com".into(),
+            port: 8080,
+            protocol: Scheme::HTTP,
+        },
+        concurrent_connection: None,
         histogram_buckets: buckets.clone(),
     }
 }
@@ -211,7 +217,7 @@ mod test {
         calculate_req_per_secondary, cluster_execute_request_generator,
     };
     use crate::generator::test::req_list_with_n_req;
-    use crate::generator::{ConstantQPS, RequestGenerator};
+    use crate::generator::{ConstantRate, RequestGenerator, Scheme, Target};
     use crate::HttpReq;
     use cluster_mode::{Cluster, InstanceMode, RestClusterNode};
     use rust_cloud_discovery::ServiceInstance;
@@ -225,8 +231,18 @@ mod test {
         for _ in 0..3 {
             requests.push(http_req_random());
         }
-        let qps = ConstantQPS { qps: 3 };
-        let rg = RequestGenerator::new(3, Box::new(req_list_with_n_req(3)), Box::new(qps));
+        let qps = ConstantRate { qps: 3 };
+        let rg = RequestGenerator::new(
+            3,
+            Box::new(req_list_with_n_req(3)),
+            Box::new(qps),
+            Target {
+                host: "example.com".to_string(),
+                port: 80,
+                protocol: Scheme::HTTP,
+            },
+            None,
+        );
         let job_id = "test_job".to_string();
         let instance = ServiceInstance::new(
             None,
