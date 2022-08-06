@@ -29,7 +29,7 @@ pub struct HttpReq {
     #[serde(with = "http_serde::method")]
     pub method: Method,
     //todo as a http::Uri
-    //panic and send_request if doesn't start with /
+    //panic in send_request if doesn't start with /
     pub url: String,
     pub body: Option<Vec<u8>>,
     #[serde(default = "HashMap::new")]

@@ -129,6 +129,10 @@ impl Future for HttpRequestFuture<'_> {
 
 lazy_static! {
     pub static ref JOB_STATUS: RwLock<BTreeMap<String, JobStatus>> = RwLock::new(BTreeMap::new());
+    //in cluster mode, secondary nodes receive workloads in small requests and new pools are created everytime.
+    //That'll lead to inconsistent number of connections. To avoid that, use global pool collection as hack.
+    //Need to find a better way to divide workloads to secondaries, maybe using websocket?
+    pub(crate) static ref CONNECTION_POOLS: RwLock<HashMap<String, Arc<Pool<HttpConnectionPool>>>> = RwLock::new(HashMap::new());
 }
 
 pub async fn init() {
@@ -156,6 +160,21 @@ pub async fn init() {
                 write_guard.remove(&id);
             }
         }
+
+        //remove unused pool
+        {
+            let mut write_guard= CONNECTION_POOLS.write().await;
+            // for pool in read_guard.iter() {
+
+            // }
+            write_guard.retain(|_,pool|{
+                let state = pool.state();
+                let remove = state.connections == state.idle_connections;
+                trace!("removing pool: {}", remove);
+                remove
+            })
+        }
+        
     }
 }
 
@@ -169,21 +188,15 @@ pub async fn execute_request_generator(
     tokio::pin!(stream);
 
     let host_port = format!("{}:{}", target.host, target.port);
-    let pool = HttpConnectionPool::new(&host_port);
-    let customizer = Arc::new(ConcurrentConnectionCountManager::new(1));
 
-    let pool = bb8::Pool::builder()
-        .pool_customizer(customizer.clone())
-        .reaper_rate(Duration::from_millis(1000))
-        .idle_timeout(Some(Duration::from_millis(1000)))
-        .build(pool)
-        .await
-        .unwrap();
+    let pool = get_pool(&host_port).await;
 
     {
         let mut write_guard = JOB_STATUS.write().await;
         write_guard.insert(job_id.clone(), JobStatus::InProgress);
     }
+    
+    let customizer = pool.get_pool_customizer().unwrap();
 
     let mut prev_connection_count = 1;
 
@@ -196,7 +209,8 @@ pub async fn execute_request_generator(
             customizer.update(connection_count);
             prev_connection_count = connection_count;
         }
-        trace!("Connection pool stat: {:?}", pool.state());
+        let state = pool.state();
+        metrics.pool_state((state.connections, state.idle_connections));
 
         match requests {
             Ok(result) => {
@@ -245,7 +259,7 @@ async fn set_job_status(job_id: &str, new_status: JobStatus) {
 
 async fn send_requests(
     req: HttpReq,
-    pool: Pool<HttpConnectionPool>,
+    pool: Arc<Pool<HttpConnectionPool>>,
     count: i32,
     job_id: String,
     metrics: Arc<Metrics>,
@@ -304,7 +318,7 @@ async fn send_requests(
 
 async fn send_multiple_requests(
     requests: Vec<HttpReq>,
-    pool: Pool<HttpConnectionPool>,
+    pool: Arc<Pool<HttpConnectionPool>>,
     count: u32,
     job_id: String,
     metrics: Arc<Metrics>,
@@ -413,14 +427,27 @@ pub(crate) async fn get_job_status(
     job_status
 }
 
-// fn build_client() -> Client<HttpsConnector<HttpConnector>> {
-//     let tls = TlsConnector::builder()
-//         .danger_accept_invalid_hostnames(true)
-//         .danger_accept_invalid_certs(true)
-//         .build()
-//         .unwrap();
-//     let mut http_connector = HttpConnector::new();
-//     http_connector.enforce_http(false);
-//     let connector = HttpsConnector::from((http_connector, tls.into()));
-//     Client::builder().build(connector)
-// }
+/// Get from global pool collection or create a new pool and put into the collection
+async fn get_pool(host_port: &String) -> Arc<Pool<HttpConnectionPool>>{
+    let pool = {
+        let read_guard = CONNECTION_POOLS.read().await;
+        read_guard.get(host_port).map(|pool|pool.clone())
+    };
+    if pool.is_none(){
+        let pool = HttpConnectionPool::new(&host_port);
+        let customizer = Arc::new(ConcurrentConnectionCountManager::new(1));
+        let pool = bb8::Pool::builder()
+            .pool_customizer(customizer.clone())
+            .reaper_rate(Duration::from_millis(1000))
+            .idle_timeout(Some(Duration::from_millis(1000)))
+            .build(pool)
+            .await
+            .unwrap();
+        let pool = Arc::new(pool);
+        let mut write_guard = CONNECTION_POOLS.write().await;
+        write_guard.insert(host_port.clone(),pool.clone());
+        pool
+    } else {
+        pool.unwrap()
+    }
+}

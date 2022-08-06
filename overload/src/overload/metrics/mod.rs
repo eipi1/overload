@@ -1,4 +1,4 @@
-use prometheus::{HistogramOpts, HistogramVec, IntCounter, IntCounterVec, Opts, Registry};
+use prometheus::{HistogramOpts, HistogramVec, IntCounter, IntCounterVec, Opts, Registry, Gauge};
 use smallvec::SmallVec;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -66,6 +66,15 @@ impl MetricsFactory {
         let opts = opts.const_label("job_id", job_id);
         let upstream_request_count = IntCounter::with_opts(opts).unwrap();
 
+        let opts = Opts::new("connection_pool_connections", "total number of connections in the pool");
+        let opts = opts.const_label("job_id", job_id);
+        let connection_pool_connections = Gauge::with_opts(opts).unwrap();
+
+        let opts = Opts::new("connection_pool_idle_connections", "number of idle connections in the pool");
+        let opts = opts.const_label("job_id", job_id);
+        let connection_pool_idle_connections = Gauge::with_opts(opts).unwrap();
+
+
         self.registry
             .register(Box::new(upstream_response_time.clone()))
             .unwrap();
@@ -75,10 +84,19 @@ impl MetricsFactory {
         self.registry
             .register(Box::new(upstream_request_count.clone()))
             .unwrap();
+        self.registry
+            .register(Box::new(connection_pool_connections.clone()))
+            .unwrap();
+        self.registry
+            .register(Box::new(connection_pool_idle_connections.clone()))
+            .unwrap();
+
         let metrics = Metrics {
             upstream_request_count,
             upstream_request_status_count,
             upstream_response_time,
+            connection_pool_connections,
+            connection_pool_idle_connections
         };
         let metrics = Arc::new(metrics);
         write_guard.insert(String::from(job_id), metrics.clone());
@@ -90,6 +108,8 @@ pub struct Metrics {
     upstream_request_status_count: IntCounterVec,
     upstream_request_count: IntCounter,
     upstream_response_time: HistogramVec,
+    connection_pool_connections: Gauge,
+    connection_pool_idle_connections: Gauge
 }
 
 impl Metrics {
@@ -107,6 +127,10 @@ impl Metrics {
         self.upstream_response_time
             .with_label_values(&[status])
             .observe(elapsed);
+    }
+    pub fn pool_state(&self, state: (u32, u32)) {
+        self.connection_pool_connections.set(state.0.into());
+        self.connection_pool_idle_connections.set(state.1.into());
     }
 }
 

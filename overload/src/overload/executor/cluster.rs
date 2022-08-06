@@ -231,7 +231,7 @@ mod test {
         for _ in 0..3 {
             requests.push(http_req_random());
         }
-        let qps = ConstantRate { qps: 3 };
+        let qps = ConstantRate { count_per_sec: 3 };
         let rg = RequestGenerator::new(
             3,
             Box::new(req_list_with_n_req(3)),

@@ -173,7 +173,7 @@ mod test {
               "name": "demo-test",
               "qps": {
                 "ConstantRate": {
-                  "qps": 1
+                  "countPerSec": 1
                 }
               },
               "req": {
@@ -227,7 +227,7 @@ mod test {
         let generator = RequestGenerator::new(
             3,
             Box::new(req_list_with_n_req(1)),
-            Box::new(ConstantRate { qps: 1 }),
+            Box::new(ConstantRate { count_per_sec: 1 }),
             Target {
                 host: "example.com".into(),
                 port: 8080,
@@ -246,7 +246,7 @@ mod test {
               "name": "demo-test",
               "qps": {
                 "ConstantRate": {
-                  "qps": 2
+                  "countPerSec": 2
                 }
               },
               "req": {
@@ -286,7 +286,7 @@ mod test {
               "name": "demo-test",
               "qps": {
                 "ConstantRate": {
-                  "qps": 2
+                  "countPerSec": 2
                 }
               },
               "req": {

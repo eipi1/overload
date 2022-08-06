@@ -73,6 +73,11 @@ impl<M: ManageConnection> Pool<M> {
     pub async fn dedicated_connection(&self) -> Result<M::Connection, M::Error> {
         self.inner.connect().await
     }
+
+    /// Get the pool customizer
+    pub fn get_pool_customizer(&self) -> Option<std::sync::Arc<dyn PoolCustomizer>>{
+        self.inner.pool_customizer()
+    }
 }
 
 /// A builder for a connection pool.
@@ -250,7 +255,6 @@ impl<M: ManageConnection> Builder<M> {
     /// Set the pool customizer to customizer
     pub fn pool_customizer (
         mut self,
-        // pool_customizer: Arc<Box<dyn PoolCustomizer>>,
         pool_customizer: Arc<dyn PoolCustomizer>,
     ) -> Builder<M> {
         self.pool_customizer = Some(pool_customizer);
@@ -328,6 +332,9 @@ pub trait PoolCustomizer : fmt::Debug + Send + Sync {
 
     /// override maximum connection
     fn max_size(&self) -> u32;
+
+    /// update the connection count
+    fn update(&self, conn_count: u32);
 }
 
 /// A smart pointer wrapping a connection.

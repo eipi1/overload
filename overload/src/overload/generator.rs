@@ -92,35 +92,36 @@ pub trait RateScheme {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ConstantRate {
-    pub qps: u32,
+    pub count_per_sec: u32,
 }
 
 impl RateScheme for ConstantRate {
     #[inline]
     fn next(&self, _nth: u32, _last_qps: Option<u32>) -> u32 {
-        self.qps
+        self.count_per_sec
     }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ArraySpec {
-    qps: Vec<u32>,
+    count_per_sec: Vec<u32>,
 }
 
 impl ArraySpec {
-    pub fn new(qps: Vec<u32>) -> Self {
-        Self { qps }
+    pub fn new(count_per_sec: Vec<u32>) -> Self {
+        Self { count_per_sec }
     }
 }
 
 impl RateScheme for ArraySpec {
     #[inline]
     fn next(&self, nth: u32, _last_qps: Option<u32>) -> u32 {
-        let len = self.qps.len();
+        let len = self.count_per_sec.len();
         if len != 0 {
             let idx = nth as usize % len;
-            let val = self.qps.get(idx).unwrap();
+            let val = self.count_per_sec.get(idx).unwrap();
             *val
         } else {
             0
@@ -571,10 +572,9 @@ pub(crate) mod test {
 
     fn setup() {
         ONCE.call_once(|| {
-            tracing_subscriber::fmt()
+            let _ = tracing_subscriber::fmt()
                 .with_env_filter("trace")
-                .try_init()
-                .unwrap();
+                .try_init();
         });
     }
 
@@ -583,7 +583,7 @@ pub(crate) mod test {
         let mut generator = RequestGenerator::new(
             3,
             Box::new(req_list_with_n_req(0)),
-            Box::new(ConstantRate { qps: 3 }),
+            Box::new(ConstantRate { count_per_sec: 3 }),
             Target {
                 host: "example.com".into(),
                 port: 8080,
@@ -609,7 +609,7 @@ pub(crate) mod test {
         let mut generator = RequestGenerator::new(
             3,
             Box::new(req_list_with_n_req(1)),
-            Box::new(ConstantRate { qps: 3 }),
+            Box::new(ConstantRate { count_per_sec: 3 }),
             Target {
                 host: "example.com".into(),
                 port: 8080,
@@ -635,7 +635,7 @@ pub(crate) mod test {
         let mut generator = RequestGenerator::new(
             3,
             Box::new(req_list_with_n_req(4)),
-            Box::new(ConstantRate { qps: 3 }),
+            Box::new(ConstantRate { count_per_sec: 3 }),
             Target {
                 host: "example.com".into(),
                 port: 8080,
@@ -657,7 +657,7 @@ pub(crate) mod test {
         let mut generator = RequestGenerator::new(
             3,
             Box::new(req_list_with_n_req(12)),
-            Box::new(ConstantRate { qps: 15 }),
+            Box::new(ConstantRate { count_per_sec: 15 }),
             Target {
                 host: "example.com".into(),
                 port: 8080,
@@ -680,7 +680,7 @@ pub(crate) mod test {
         let mut generator = RequestGenerator::new(
             3,
             Box::new(req_list_with_n_req(12)),
-            Box::new(ConstantRate { qps: 3 }),
+            Box::new(ConstantRate { count_per_sec: 3 }),
             Target {
                 host: "example.com".into(),
                 port: 8080,
@@ -714,7 +714,7 @@ pub(crate) mod test {
         let mut generator = RequestGenerator::new(
             30,
             Box::new(req_list_with_n_req(12)),
-            Box::new(ConstantRate { qps: 3 }),
+            Box::new(ConstantRate { count_per_sec: 3 }),
             Target {
                 host: "example.com".into(),
                 port: 8080,
@@ -765,7 +765,7 @@ pub(crate) mod test {
         let generator = RequestGenerator::new(
             3,
             Box::new(req_list_with_n_req(1)),
-            Box::new(ConstantRate { qps: 3 }),
+            Box::new(ConstantRate { count_per_sec: 3 }),
             Target {
                 host: "example.com".into(),
                 port: 8080,

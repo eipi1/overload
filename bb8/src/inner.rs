@@ -176,6 +176,10 @@ where
         self.inner.internals.lock().state()
     }
 
+    pub(crate) fn pool_customizer (&self) -> Option<std::sync::Arc<dyn crate::PoolCustomizer>>{
+        self.inner.statics.pool_customizer.clone()
+    }
+
     fn reap(&self) {
         let mut internals = self.inner.internals.lock();
         let approvals = internals.reap(&self.inner.statics);

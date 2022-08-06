@@ -24,13 +24,6 @@ impl ConcurrentConnectionCountManager {
             number_of_connection: AtomicU32::new(conn_count),
         }
     }
-
-    pub fn update(&self, conn_count: u32) {
-        trace!("updating pool connection count to: {}", &conn_count);
-        let _ = &self
-            .number_of_connection
-            .store(conn_count, Ordering::Relaxed);
-    }
 }
 
 impl Default for ConcurrentConnectionCountManager {
@@ -70,6 +63,13 @@ impl PoolCustomizer for ConcurrentConnectionCountManager {
         let max = self.number_of_connection.load(Ordering::Relaxed);
         trace!("Checking max pool size: {}", max);
         max
+    }
+
+    fn update(&self, conn_count: u32) {
+        trace!("updating pool connection count to: {}", &conn_count);
+        let _ = &self
+            .number_of_connection
+            .store(conn_count, Ordering::Relaxed);
     }
 }
 
