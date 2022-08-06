@@ -74,7 +74,7 @@ Test specification
 | name     | ❎        | UUID    | Test name, application will append UUID to ensure unique identifier | String                              |
 | duration | ✅        |         | Test duration                                                       | uint32                              |
 | req      | ✅        |         | Request provider Spec                                               | [RequestProvider](#requestprovider) |
-| qps      | ✅        |         | RPS specification                                                   | [QPSSpec](#qpsspec)                 |
+| qps      | ✅        |         | Request per second specification                                    | [QPSSpec](#qpsspec)                 |
 
 ```http request
 POST /test HTTP/1.1
@@ -85,8 +85,8 @@ Content-Type: application/json
   "duration": 120,
   "name": "demo-test",
   "qps": {
-    "ConstantQPS": {
-      "qps": 1
+    "ConstantRate": {
+      "countPerSec": 1
     }
   },
   "req": {
@@ -99,6 +99,11 @@ Content-Type: application/json
         }
       ]
     }
+  },
+  "target": {
+    "host": "example.com",
+    "port": 8080,
+    "protocol": "HTTP"
   },
   "histogramBuckets": [35,40,45,48,50, 52]
 }
@@ -154,8 +159,8 @@ Get request data from a file. File have to be [uploaded](#upload-request-data-fi
     }
   },
   "qps": {
-    "ConstantQPS": {
-      "qps": 8
+    "ConstantRate": {
+      "countPerSec": 8
     }
   }
 }
@@ -246,8 +251,8 @@ Generate request with random data based on constraints, can be specified using J
     }
   },
   "qps": {
-    "ConstantQPS": {
-      "qps": 5
+    "ConstantRate": {
+      "countPerSec": 5
     }
   }
 }
@@ -268,11 +273,11 @@ Generate request with random data based on constraints, can be specified using J
 
 Currently, supports the following specifications
 
-#### ConstantQPS
+#### ConstantRate
 
-| field | Description                        | data type |
-|-------|------------------------------------|-----------|
-| qps   | QPS to maintain for the `duration` | uint32    |
+| field         | Description                        | data type |
+|---------------|------------------------------------|-----------|
+| countPerSec   | QPS to maintain for the `duration` | uint32    |
 
 #### Linear
 
