@@ -1,4 +1,4 @@
-use prometheus::{HistogramOpts, HistogramVec, IntCounter, IntCounterVec, Opts, Registry, Gauge};
+use prometheus::{Gauge, HistogramOpts, HistogramVec, IntCounter, IntCounterVec, Opts, Registry};
 use smallvec::SmallVec;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -66,14 +66,19 @@ impl MetricsFactory {
         let opts = opts.const_label("job_id", job_id);
         let upstream_request_count = IntCounter::with_opts(opts).unwrap();
 
-        let opts = Opts::new("connection_pool_connections", "total number of connections in the pool");
+        let opts = Opts::new(
+            "connection_pool_connections",
+            "total number of connections in the pool",
+        );
         let opts = opts.const_label("job_id", job_id);
         let connection_pool_connections = Gauge::with_opts(opts).unwrap();
 
-        let opts = Opts::new("connection_pool_idle_connections", "number of idle connections in the pool");
+        let opts = Opts::new(
+            "connection_pool_idle_connections",
+            "number of idle connections in the pool",
+        );
         let opts = opts.const_label("job_id", job_id);
         let connection_pool_idle_connections = Gauge::with_opts(opts).unwrap();
-
 
         self.registry
             .register(Box::new(upstream_response_time.clone()))
@@ -96,7 +101,7 @@ impl MetricsFactory {
             upstream_request_status_count,
             upstream_response_time,
             connection_pool_connections,
-            connection_pool_idle_connections
+            connection_pool_idle_connections,
         };
         let metrics = Arc::new(metrics);
         write_guard.insert(String::from(job_id), metrics.clone());
@@ -109,7 +114,7 @@ pub struct Metrics {
     upstream_request_count: IntCounter,
     upstream_response_time: HistogramVec,
     connection_pool_connections: Gauge,
-    connection_pool_idle_connections: Gauge
+    connection_pool_idle_connections: Gauge,
 }
 
 impl Metrics {

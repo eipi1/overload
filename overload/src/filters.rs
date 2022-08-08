@@ -554,7 +554,7 @@ mod integration_tests {
         req.to_string()
     }
 
-    fn get_metrics() -> String{
+    fn get_metrics() -> String {
         let encoder = prometheus::TextEncoder::new();
         let metrics = METRICS_FACTORY.registry().gather();
         let mut resp_buffer = vec![];
@@ -566,8 +566,9 @@ mod integration_tests {
         let mut lines = metrics.as_str().lines();
         while let Some(metric) = lines.next() {
             if metric.starts_with(metrics_name) {
-                return metric.rsplit_once(' ')
-                    .map_or(-1,|(_,count)| count.parse::<i32>().unwrap());
+                return metric
+                    .rsplit_once(' ')
+                    .map_or(-1, |(_, count)| count.parse::<i32>().unwrap());
             }
         }
         -1

@@ -3,8 +3,8 @@ use std::error;
 use std::fmt;
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
-use std::time::Duration;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 
@@ -75,7 +75,7 @@ impl<M: ManageConnection> Pool<M> {
     }
 
     /// Get the pool customizer
-    pub fn get_pool_customizer(&self) -> Option<std::sync::Arc<dyn PoolCustomizer>>{
+    pub fn get_pool_customizer(&self) -> Option<std::sync::Arc<dyn PoolCustomizer>> {
         self.inner.pool_customizer()
     }
 }
@@ -143,10 +143,10 @@ impl<M: ManageConnection> Builder<M> {
         self
     }
 
-    pub (crate) fn get_max_size(&self) -> u32 {
-        self.pool_customizer.as_ref()
-        .map_or(self.max_size, |c| c.max_size())
-        
+    pub(crate) fn get_max_size(&self) -> u32 {
+        self.pool_customizer
+            .as_ref()
+            .map_or(self.max_size, |c| c.max_size())
     }
 
     /// Sets the minimum idle connection count maintained by the pool.
@@ -160,11 +160,12 @@ impl<M: ManageConnection> Builder<M> {
         self
     }
 
-    pub (crate) fn get_min_idle(&self) -> u32 {
-        self.pool_customizer.as_ref()
-        .map(|c| c.min_idle())
-        .or(self.min_idle)
-        .unwrap_or(0)
+    pub(crate) fn get_min_idle(&self) -> u32 {
+        self.pool_customizer
+            .as_ref()
+            .map(|c| c.min_idle())
+            .or(self.min_idle)
+            .unwrap_or(0)
     }
 
     /// If true, the health of a connection will be verified through a call to
@@ -251,12 +252,8 @@ impl<M: ManageConnection> Builder<M> {
         self
     }
 
-
     /// Set the pool customizer to customizer
-    pub fn pool_customizer (
-        mut self,
-        pool_customizer: Arc<dyn PoolCustomizer>,
-    ) -> Builder<M> {
+    pub fn pool_customizer(mut self, pool_customizer: Arc<dyn PoolCustomizer>) -> Builder<M> {
         self.pool_customizer = Some(pool_customizer);
         self
     }
@@ -326,7 +323,7 @@ pub trait CustomizeConnection<C: Send + 'static, E: 'static>:
 }
 
 /// Override number of pooled connectiion
-pub trait PoolCustomizer : fmt::Debug + Send + Sync {
+pub trait PoolCustomizer: fmt::Debug + Send + Sync {
     /// override minimum ide connection count
     fn min_idle(&self) -> u32;
 

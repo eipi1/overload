@@ -163,18 +163,17 @@ pub async fn init() {
 
         //remove unused pool
         {
-            let mut write_guard= CONNECTION_POOLS.write().await;
+            let mut write_guard = CONNECTION_POOLS.write().await;
             // for pool in read_guard.iter() {
 
             // }
-            write_guard.retain(|_,pool|{
+            write_guard.retain(|_, pool| {
                 let state = pool.state();
                 let remove = state.connections == state.idle_connections;
                 trace!("removing pool: {}", remove);
                 remove
             })
         }
-        
     }
 }
 
@@ -195,7 +194,7 @@ pub async fn execute_request_generator(
         let mut write_guard = JOB_STATUS.write().await;
         write_guard.insert(job_id.clone(), JobStatus::InProgress);
     }
-    
+
     let customizer = pool.get_pool_customizer().unwrap();
 
     let mut prev_connection_count = 1;
@@ -428,13 +427,13 @@ pub(crate) async fn get_job_status(
 }
 
 /// Get from global pool collection or create a new pool and put into the collection
-async fn get_pool(host_port: &String) -> Arc<Pool<HttpConnectionPool>>{
+async fn get_pool(host_port: &String) -> Arc<Pool<HttpConnectionPool>> {
     let pool = {
         let read_guard = CONNECTION_POOLS.read().await;
-        read_guard.get(host_port).map(|pool|pool.clone())
+        read_guard.get(host_port).cloned()
     };
-    if pool.is_none(){
-        let pool = HttpConnectionPool::new(&host_port);
+    if pool.is_none() {
+        let pool = HttpConnectionPool::new(host_port);
         let customizer = Arc::new(ConcurrentConnectionCountManager::new(1));
         let pool = bb8::Pool::builder()
             .pool_customizer(customizer.clone())
@@ -445,7 +444,7 @@ async fn get_pool(host_port: &String) -> Arc<Pool<HttpConnectionPool>>{
             .unwrap();
         let pool = Arc::new(pool);
         let mut write_guard = CONNECTION_POOLS.write().await;
-        write_guard.insert(host_port.clone(),pool.clone());
+        write_guard.insert(host_port.clone(), pool.clone());
         pool
     } else {
         pool.unwrap()
