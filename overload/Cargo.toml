@@ -170,6 +170,9 @@ version = "0.5"
 [dev-dependencies.httpmock]
 version = "0.6"
 
+[dev-dependencies.assert-json-diff]
+version = "2.0.2"
+
 [features]
 default = ["debug", "connection_pool"]
 

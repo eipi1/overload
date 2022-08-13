@@ -119,7 +119,11 @@ async fn forward_test_request(
             .uri()
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Invalid ServiceInstance URI"))?;
-        trace!("forwarding request to primary: {}", &uri);
+        trace!(
+            "forwarding request to primary: {}, {}",
+            &uri,
+            serde_json::to_string(&request).unwrap()
+        );
         let req = hyper::Request::builder()
             .uri(format!("{}/test", &uri))
             .method("POST")
