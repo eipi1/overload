@@ -409,10 +409,10 @@ mod test {
                 }
             }
         }"#;
-        let schema: super::DataSchema = serde_json::from_str(&data).unwrap();
+        let schema: super::DataSchema = serde_json::from_str(data).unwrap();
         println!("deserialized: {}", serde_json::to_string(&schema).unwrap());
         assert_json_diff::assert_json_include!(
-            actual: serde_json::from_str::<Value>(&data).unwrap(),
+            actual: serde_json::from_str::<Value>(data).unwrap(),
             expected: serde_json::from_str::<Value>(serde_json::to_string(&schema).unwrap().as_str())
                 .unwrap()
         );

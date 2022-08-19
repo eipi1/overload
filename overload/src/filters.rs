@@ -387,28 +387,6 @@ mod test_common {
     use wiremock::matchers::{method, path_regex};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    #[cfg(not(feature = "cluster"))]
-    pub async fn init_env() -> (MockServer, url::Url, tokio::sync::oneshot::Sender<()>) {
-        let wire_mock = wiremock::MockServer::start().await;
-        let wire_mock_uri = wire_mock.uri();
-        let url = url::Url::parse(&wire_mock_uri).unwrap();
-
-        let route = super::overload_req();
-
-        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
-        let (_addr, server) =
-            warp::serve(route).bind_with_graceful_shutdown(([127, 0, 0, 1], 3030), async {
-                rx.await.ok();
-            });
-        // Spawn the server into a runtime
-        tokio::task::spawn(server);
-
-        (wire_mock, url, tx)
-    }
-
-    pub static ASYNC_ONCE: OnceCell<(MockServer, url::Url, tokio::sync::oneshot::Sender<()>)> =
-        OnceCell::const_new();
-
     pub async fn init_http_mock() -> (httpmock::MockServer, url::Url) {
         let mock_server = httpmock::MockServer::start_async().await;
         let url = url::Url::parse(&mock_server.base_url()).unwrap();
@@ -430,8 +408,8 @@ mod test_common {
             tracing_subscriber::fmt()
                 .with_env_filter(format!(
                     "overload={},rust_cloud_discovery={},cloud_discovery_kubernetes={},cluster_mode={},\
-                    almost_raft={}, hyper={}",
-                    "trace", "info", "info", "info", "info", "trace"
+                    almost_raft={}, hyper={}, httpmock={}",
+                    "trace", "info", "info", "info", "info", "info","trace"
                 ))
                 .try_init()
                 .unwrap();
@@ -439,7 +417,7 @@ mod test_common {
     }
 
     pub fn send_request(body: String) -> hyper::client::ResponseFuture {
-        let client = Client::new();
+        let client = hyper::Client::new();
         let req = Request::builder()
             .method("POST")
             .uri("http://127.0.0.1:3030/test")
@@ -449,7 +427,7 @@ mod test_common {
     }
 
     pub fn json_request_random_constant(host: String, port: u16) -> String {
-        let req = json!(
+        let req = serde_json::json!(
         {
             "duration": 5,
             "req": {
@@ -501,10 +479,13 @@ mod test_common {
 
 #[cfg(all(test, feature = "cluster"))]
 mod cluster_test {
-
     use async_trait::async_trait;
     use cluster_mode::Cluster;
+    use http::Request;
+    use httpmock::Method::POST;
+    use hyper::Body;
     use log::info;
+    use overload::JobStatus;
     use regex::Regex;
     use rust_cloud_discovery::DiscoveryClient;
     use rust_cloud_discovery::DiscoveryService;
@@ -513,6 +494,7 @@ mod cluster_test {
     use std::str::FromStr;
     use std::sync::Arc;
     use std::time::Duration;
+    use tokio::io::AsyncReadExt;
     use uuid::Uuid;
     use warp::Filter;
 
@@ -534,7 +516,7 @@ mod cluster_test {
     ) -> tokio::sync::oneshot::Sender<()> {
         info!("Running in cluster mode");
 
-        let cluster = Arc::new(Cluster::new(1 * 1000));
+        let cluster = Arc::new(Cluster::new(10 * 1000));
 
         tokio::spawn(cluster_mode::start_cluster(
             cluster.clone(),
@@ -567,7 +549,7 @@ mod cluster_test {
         let heartbeat = super::heartbeat(cluster.clone());
 
         let prometheus_metric = super::prometheus_metric();
-        let overload_req = super::overload_req(cluster.clone());
+        let overload_req = super::overload_req(cluster);
         let routes = prometheus_metric
             .or(overload_req)
             .or(stop_req)
@@ -642,7 +624,7 @@ mod cluster_test {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_request_random_constant() {
+    async fn test_requests() {
         info!("cluster: test_request_random_constant");
         super::test_common::setup();
 
@@ -661,33 +643,47 @@ mod cluster_test {
 
         let ds = get_discovery_service();
         let dc = DiscoveryClient::new(ds);
-        let tx1 = start_overload_at_port(3030, dc).await;
+        let _tx1 = start_overload_at_port(3030, dc).await;
 
         let ds = get_discovery_service();
         let dc = DiscoveryClient::new(ds);
-        let tx2 = start_overload_at_port(3031, dc).await;
+        let _tx2 = start_overload_at_port(3031, dc).await;
 
         let ds = get_discovery_service();
         let dc = DiscoveryClient::new(ds);
-        let tx3 = start_overload_at_port(3032, dc).await;
+        let _tx3 = start_overload_at_port(3032, dc).await;
 
         let ds = get_discovery_service();
         let dc = DiscoveryClient::new(ds);
-        let tx4 = start_overload_at_port(3033, dc).await;
+        let _tx4 = start_overload_at_port(3033, dc).await;
 
-        tokio::time::sleep(Duration::from_millis(40000)).await;
+        tokio::time::sleep(Duration::from_millis(30000)).await;
 
-        let response =
-            super::test_common::send_request(super::test_common::json_request_random_constant(
-                url.host().unwrap().to_string(),
-                url.port().unwrap(),
-            ))
+        for _ in 0..10 {
+            let response = crate::filters::test_common::send_request(
+                crate::filters::test_common::json_request_random_constant(
+                    url.host().unwrap().to_string(),
+                    url.port().unwrap(),
+                ),
+            )
             .await
             .unwrap();
-        println!("{:?}", response);
-        let status = response.status();
-        info!("body: {:?}", hyper::body::to_bytes(response).await.unwrap());
-        assert_eq!(status, 200);
+            println!("{:?}", response);
+            let status = response.status();
+            let response = hyper::body::to_bytes(response).await.unwrap();
+            info!("body: {:?}", response);
+            let response = serde_json::from_slice::<overload::Response>(&response).unwrap();
+            info!("body: {:?}", &response);
+            match response.get_status() {
+                JobStatus::Error(_) => {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(5000)).await;
+                }
+                _ => {
+                    assert_eq!(status, 200);
+                    break;
+                }
+            }
+        }
 
         //primary node bundles 10 requests together and then sends to secondary, so wait for min(10,duration) seconds
         tokio::time::sleep(tokio::time::Duration::from_millis(5000)).await;
@@ -699,11 +695,108 @@ mod cluster_test {
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
         }
         mock.delete_async().await;
+
+        //test csv file
+        let mut csv_requests = vec![];
+        let mut mocks = vec![];
+        csv_requests.push(r#""url","method","body","headers""#.to_string());
+        for i in 1..=15 {
+            // csv_requests.push(format!(r#"http://127.0.0.1:{}/anything","POST","{{\"some\":\"random data\",\"second-key\":\"more data\"}}","{{\"Authorization\":\"Bearer 123\"}}"#, url.port().unwrap()));
+            csv_requests.push(format!(r#""http://127.0.0.1:{}/{}","POST","{{\"some\":\"random data\",\"second-key\":\"more data\"}}","{{}}""#, url.port().unwrap(), i));
+            let mock = mock_server.mock(|when, then| {
+                when.method(POST).path(format!("/{}", i));
+                then.status(200)
+                    .header("content-type", "application/json")
+                    .header("Connection", "keep-alive")
+                    .body(r#"{"hello": "1"}"#);
+            });
+            mocks.push(mock);
+        }
+
+        let csv_requests = csv_requests.iter().fold("".to_string(), |prev, current| {
+            info!("csv request: {}", &current);
+            format!("{}\n{}", prev, current)
+        });
+
+        info!("uploading file...");
+        let contents = csv_requests.into_bytes();
+        // sqlite.read_to_end(&mut contents).await.unwrap();
+        let client = hyper::Client::new();
+        let req = Request::builder()
+            .method("POST")
+            .uri("http://127.0.0.1:3030/test/requests-bin")
+            .body(hyper::Body::from(contents))
+            .expect("request builder failed");
+        let response = client.request(req).await.unwrap();
+        let response = hyper::body::to_bytes(response).await.unwrap();
+        println!("body: {:?}", &response);
+        let response = serde_json::from_slice::<serde_json::Value>(&response).unwrap();
+        println!("body: {:?}", &response);
+        assert_eq!(
+            response
+                .get("valid_count")
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .parse::<u16>()
+                .unwrap(),
+            15
+        );
+        let json = json_request_with_file(
+            url.host().unwrap().to_string(),
+            url.port().unwrap(),
+            response.get("file").unwrap().as_str().unwrap().to_string(),
+        );
+        let response = crate::filters::test_common::send_request(json)
+            .await
+            .unwrap();
+        let status = response.status();
+        let response = hyper::body::to_bytes(response).await.unwrap();
+        info!("body: {:?}", &response);
+        let response = serde_json::from_slice::<overload::Response>(&response).unwrap();
+        info!("body: {:?}", &response);
+        assert_eq!(status, 200);
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(15000)).await;
+        let mut i = 0;
+        for mock in mocks {
+            //each seconds we expect mock to receive 3 request
+            // assert_eq!(1, mock.hits_async().await);
+            let hits = mock.hits_async().await;
+            info!("mock hit: {}", hits);
+            i += hits;
+            mock.delete_async().await;
+        }
+        assert_eq!(15, i);
+
+        let _ = std::fs::remove_file("csv_requests_for_test.sqlite");
+    }
+
+    fn json_request_with_file(host: String, port: u16, filename: String) -> String {
+        let req = serde_json::json!({
+            "duration": 5,
+            "req": {
+                "RequestFile": {
+                   "file_name": filename
+                }
+            },
+            "qps": {
+                "ConstantRate": {
+                   "countPerSec": 3
+                }
+            },
+            "target": {
+                "host":host,
+                "port": port,
+                "protocol": "HTTP"
+            }
+        });
+        serde_json::to_string(&req).unwrap()
     }
 }
 
-#[cfg(test)]
-mod integration_tests {
+#[cfg(all(test, not(feature = "cluster")))]
+mod standalone_mode_tests {
     use httpmock::prelude::*;
     use hyper::{Body, Client, Request};
     use log::info;
@@ -717,13 +810,31 @@ mod integration_tests {
 
     use super::METRICS_FACTORY;
 
-    #[cfg(not(feature = "cluster"))] //test fails for cluster mode as there's no cluster
+    pub async fn init_env() -> (MockServer, url::Url, tokio::sync::oneshot::Sender<()>) {
+        let wire_mock = wiremock::MockServer::start().await;
+        let wire_mock_uri = wire_mock.uri();
+        let url = url::Url::parse(&wire_mock_uri).unwrap();
+
+        let route = super::overload_req();
+
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let (_addr, server) =
+            warp::serve(route).bind_with_graceful_shutdown(([127, 0, 0, 1], 3030), async {
+                rx.await.ok();
+            });
+        // Spawn the server into a runtime
+        tokio::task::spawn(server);
+
+        (wire_mock, url, tx)
+    }
+
+    pub static ASYNC_ONCE: OnceCell<(MockServer, url::Url, tokio::sync::oneshot::Sender<()>)> =
+        OnceCell::const_new();
+
     #[tokio::test(flavor = "multi_thread")]
     async fn test_request_random_constant() {
         super::test_common::setup();
-        let (_, _, _) = super::test_common::ASYNC_ONCE
-            .get_or_init(super::test_common::init_env)
-            .await;
+        let (_, _, _) = ASYNC_ONCE.get_or_init(init_env).await;
 
         let (mock_server, url) = super::test_common::ASYNC_ONCE_HTTP_MOCK
             .get_or_init(super::test_common::init_http_mock)
@@ -738,10 +849,12 @@ mod integration_tests {
                 .body(r#"{"hello": "world"}"#);
         });
 
-        let response = send_request(json_request_random_constant(
-            url.host().unwrap().to_string(),
-            url.port().unwrap(),
-        ))
+        let response = crate::filters::test_common::send_request(
+            crate::filters::test_common::json_request_random_constant(
+                url.host().unwrap().to_string(),
+                url.port().unwrap(),
+            ),
+        )
         .await
         .unwrap();
         println!("{:?}", response);
@@ -761,13 +874,10 @@ mod integration_tests {
         // assert_eq!(get_value_for_metrics("connection_pool_idle_connections", &metrics), 3);
     }
 
-    #[cfg(not(feature = "cluster"))] //test fails for cluster mode as there's no cluster
     #[tokio::test(flavor = "multi_thread")]
     async fn test_request_list_constant() {
         super::test_common::setup();
-        let (_, _, _) = super::test_common::ASYNC_ONCE
-            .get_or_init(super::test_common::init_env)
-            .await;
+        let (_, _, _) = ASYNC_ONCE.get_or_init(init_env).await;
 
         let (mock_server, url) = super::test_common::ASYNC_ONCE_HTTP_MOCK
             .get_or_init(super::test_common::init_http_mock)
@@ -781,7 +891,7 @@ mod integration_tests {
                 .body(r#"{"hello": "list"}"#);
         });
 
-        let response = send_request(json_request_list_constant(
+        let response = crate::filters::test_common::send_request(json_request_list_constant(
             url.host().unwrap().to_string(),
             url.port().unwrap(),
         ))
@@ -834,66 +944,7 @@ mod integration_tests {
         req.to_string()
     }
 
-    fn send_request(body: String) -> hyper::client::ResponseFuture {
-        let client = Client::new();
-        let req = Request::builder()
-            .method("POST")
-            .uri("http://127.0.0.1:3030/test")
-            .body(Body::from(body))
-            .expect("request builder");
-        client.request(req)
-    }
-
-    fn json_request_random_constant(host: String, port: u16) -> String {
-        let req = json!(
-        {
-            "duration": 5,
-            "req": {
-              "RandomDataRequest": {
-                "url": "/anything/{param1}/{param2}",
-                "method": "GET",
-                "uriParamSchema": {
-                  "type": "object",
-                  "properties": {
-                    "param1": {
-                      "type": "string",
-                      "description": "The person's first name.",
-                      "minLength": 6,
-                      "maxLength": 15
-                    },
-                    "param2": {
-                      "description": "Age in years which must be equal to or greater than zero.",
-                      "type": "integer",
-                      "minimum": 1000000,
-                      "maximum": 1100000
-                    }
-                  }
-                },
-                "headers": {
-                    "Connection":"keep-alive"
-                }
-              }
-            },
-            "target": {
-                "host":host,
-                "port": port,
-                "protocol": "HTTP"
-            },
-            "qps": {
-              "ConstantRate": {
-                "countPerSec": 3
-              }
-            },
-            "concurrentConnection": {
-                "ConstantRate": {
-                    "countPerSec": 3
-                  }
-            }
-          }
-        );
-        req.to_string()
-    }
-
+    #[allow(dead_code)]
     fn get_metrics() -> String {
         let encoder = prometheus::TextEncoder::new();
         let metrics = METRICS_FACTORY.registry().gather();
@@ -902,9 +953,10 @@ mod integration_tests {
         String::from_utf8(resp_buffer).unwrap()
     }
 
-    fn get_value_for_metrics(metrics_name: &str, metrics: &String) -> i32 {
-        let mut lines = metrics.as_str().lines();
-        while let Some(metric) = lines.next() {
+    #[allow(dead_code)]
+    fn get_value_for_metrics(metrics_name: &str, metrics: &str) -> i32 {
+        // let lines = metrics.as_str().lines();
+        for metric in metrics.lines() {
             if metric.starts_with(metrics_name) {
                 return metric
                     .rsplit_once(' ')

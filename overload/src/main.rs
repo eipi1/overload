@@ -2,6 +2,7 @@
 use cloud_discovery_kubernetes::KubernetesDiscoverService;
 #[cfg(feature = "cluster")]
 use cluster_mode::Cluster;
+#[cfg(feature = "cluster")]
 use lazy_static::lazy_static;
 use log::info;
 use overload::data_dir;
