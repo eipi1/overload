@@ -119,7 +119,11 @@ async fn forward_test_request(
             .uri()
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Invalid ServiceInstance URI"))?;
-        trace!("forwarding request to primary: {}", &uri);
+        trace!(
+            "forwarding request to primary: {}, {}",
+            &uri,
+            serde_json::to_string(&request).unwrap()
+        );
         let req = hyper::Request::builder()
             .uri(format!("{}/test", &uri))
             .method("POST")
@@ -187,7 +191,7 @@ where
     }
 }
 
-async fn csv_reader_to_sqlite<R>(
+pub async fn csv_reader_to_sqlite<R>(
     mut reader: AsyncDeserializer<R>,
     dest_file: String,
 ) -> anyhow::Result<GenericResponse<String>>
@@ -214,7 +218,7 @@ where
     while let Some(req) = reader.next().await {
         match req {
             Ok(csv_req) => {
-                trace!("{:?}", &csv_req);
+                trace!("csv row: {:?}", &csv_req);
                 //todo use TryInto
                 let req: Result<HttpReq, AnyError> = csv_req.try_into();
                 match req {

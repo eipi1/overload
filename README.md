@@ -95,14 +95,14 @@ Content-Type: application/json
         {
           "body": null,
           "method": "GET",
-          "url": "http://httpbin.org/"
+          "url": "/get"
         }
       ]
     }
   },
   "target": {
-    "host": "example.com",
-    "port": 8080,
+    "host": "httpbin.org",
+    "port": 80,
     "protocol": "HTTP"
   },
   "histogramBuckets": [35,40,45,48,50, 52]
@@ -162,6 +162,11 @@ Get request data from a file. File have to be [uploaded](#upload-request-data-fi
     "ConstantRate": {
       "countPerSec": 8
     }
+  },
+  "target": {
+    "host": "httpbin.org",
+    "port": 80,
+    "protocol": "HTTP"
   }
 }
 ```
@@ -209,7 +214,7 @@ Generate request with random data based on constraints, can be specified using J
   "duration": 10,
   "req": {
     "RandomDataRequest": {
-      "url": "http://httpbin.org/anything/{param1}/{param2}",
+      "url": "/anything/{param1}/{param2}",
       "method": "GET",
       "bodySchema": {
         "title": "Person",
@@ -254,6 +259,11 @@ Generate request with random data based on constraints, can be specified using J
     "ConstantRate": {
       "countPerSec": 5
     }
+  },
+  "target": {
+    "host": "httpbin.org",
+    "port": 80,
+    "protocol": "HTTP"
   }
 }
 ```

@@ -58,8 +58,8 @@ impl Display for HttpReq {
 impl PartialEq for HttpReq {
     /// The purpose is not to test if two request is exactly equal, rather to check if two
     /// represent the same request.
-    /// For a test, each request will be given a uuid. As long as uuid is same
-    /// the request will be treated as equal request.
+    /// For a test, each request will be given a uuid. As long as uuid is equal
+    /// the request will be treated as same request.
     fn eq(&self, other: &Self) -> bool {
         self.id == other.id
     }
@@ -122,6 +122,10 @@ pub struct Response {
 impl Response {
     pub fn new(job_id: String, status: JobStatus) -> Self {
         Response { job_id, status }
+    }
+
+    pub fn get_status(&self) -> JobStatus {
+        self.status
     }
 }
 

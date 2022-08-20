@@ -2,6 +2,7 @@
 use cloud_discovery_kubernetes::KubernetesDiscoverService;
 #[cfg(feature = "cluster")]
 use cluster_mode::Cluster;
+#[cfg(feature = "cluster")]
 use lazy_static::lazy_static;
 use log::info;
 use overload::data_dir;
@@ -74,27 +75,36 @@ async fn main() {
 
     let upload_binary_file = filters::upload_binary_file();
 
+    #[cfg(not(feature = "cluster"))]
     let stop_req = filters::stop_req();
+    #[cfg(feature = "cluster")]
+    let stop_req = filters::stop_req(CLUSTER.clone());
 
+    #[cfg(not(feature = "cluster"))]
     let history = filters::history();
+    #[cfg(feature = "cluster")]
+    let history = filters::history(CLUSTER.clone());
 
     #[cfg(feature = "cluster")]
     let overload_req_secondary = filters::overload_req_secondary();
 
     // cluster-mode configurations
     #[cfg(feature = "cluster")]
-    let info = filters::info();
+    let info = filters::info(CLUSTER.clone());
 
     #[cfg(feature = "cluster")]
-    let request_vote = filters::request_vote();
+    let request_vote = filters::request_vote(CLUSTER.clone());
 
     #[cfg(feature = "cluster")]
-    let request_vote_response = filters::request_vote_response();
+    let request_vote_response = filters::request_vote_response(CLUSTER.clone());
 
     #[cfg(feature = "cluster")]
-    let heartbeat = filters::heartbeat();
+    let heartbeat = filters::heartbeat(CLUSTER.clone());
 
     let prometheus_metric = filters::prometheus_metric();
+    #[cfg(feature = "cluster")]
+    let overload_req = filters::overload_req(CLUSTER.clone());
+    #[cfg(not(feature = "cluster"))]
     let overload_req = filters::overload_req();
     let routes = prometheus_metric
         .or(overload_req)

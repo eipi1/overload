@@ -13,6 +13,7 @@ use std::convert::TryFrom;
 const PATTER_MAX_REPEAT: u32 = 10;
 
 #[derive(Debug, Serialize, Deserialize, Eq, PartialEq, Hash, Clone)]
+#[serde(rename_all = "camelCase")]
 pub enum Keywords {
     MinLength,
     MaxLength,
@@ -23,6 +24,7 @@ pub enum Keywords {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(untagged)]
 pub enum Constraints {
     MinLength(i64),
     MaxLength(i64),
@@ -63,6 +65,7 @@ impl Constraints {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(try_from = "Value")]
+#[serde(into = "Value")]
 pub enum DataSchema {
     Empty,
     String(String, HashMap<Keywords, Constraints>),
@@ -92,6 +95,58 @@ impl TryFrom<Value> for DataSchema {
     fn try_from(value: Value) -> Result<Self, Self::Error> {
         data_schema_from_value(&value)
     }
+}
+
+#[allow(clippy::from_over_into)]
+impl Into<Value> for DataSchema {
+    fn into(self) -> Value {
+        data_value_from_schema(self)
+    }
+}
+
+pub fn data_value_from_schema(schema: DataSchema) -> Value {
+    match schema {
+        DataSchema::Object(_, schemas) => {
+            let map = convert_data_schema_to_map(schemas);
+            let mut serialized = HashMap::new();
+            serialized.insert("properties", map);
+            serde_json::to_value(serialized).unwrap()
+        }
+        _ => {
+            json!("{}")
+        }
+    }
+}
+
+fn convert_data_schema_to_map(schemas: Vec<DataSchema>) -> HashMap<String, Value> {
+    let mut properties = HashMap::new();
+    for schema in schemas {
+        match schema {
+            Empty => {}
+            DataSchema::String(name, constraints) => {
+                let mut v = serde_json::to_value(constraints).unwrap();
+                v.as_object_mut().and_then(|map| {
+                    map.insert("type".to_string(), serde_json::to_value("string").unwrap())
+                });
+                properties.insert(name, v);
+            }
+            DataSchema::Integer(name, constraints) => {
+                let mut v = serde_json::to_value(constraints).unwrap();
+                v.as_object_mut().and_then(|map| {
+                    map.insert("type".to_string(), serde_json::to_value("integer").unwrap())
+                });
+                properties.insert(name, v);
+            }
+            DataSchema::Object(name, schemax) => {
+                let serialized_obj = convert_data_schema_to_map(schemax);
+                let mut map = HashMap::new();
+                map.insert("type", json!("object"));
+                map.insert("properties", serde_json::to_value(serialized_obj).unwrap());
+                properties.insert(name.unwrap(), serde_json::to_value(map).unwrap());
+            }
+        }
+    }
+    properties
 }
 
 pub fn data_schema_from_value(schema: &Value) -> AnyResult<DataSchema> {
@@ -293,32 +348,74 @@ mod test {
     #[test]
     fn test() {
         let data = r#"{
-    "properties":
-    {
-        "firstName":
-        {
-            "type": "string",
-            "description": "The person's first name."
-        },
-        "lastName":
-        {
-            "type": "string",
-            "description": "The person's last name."
-        },
-        "age":
-        {
-            "description": "Age in years which must be equal to or greater than zero.",
-            "type": "integer",
-            "minimum": 10,
-            "maximum": 11
-        }
-    }
-}"#;
+            "properties":
+            {
+                "firstName":
+                {
+                    "type": "string",
+                    "description": "The person's first name."
+                },
+                "lastName":
+                {
+                    "type": "string",
+                    "description": "The person's last name."
+                },
+                "age":
+                {
+                    "description": "Age in years which must be equal to or greater than zero.",
+                    "type": "integer",
+                    "minimum": 10,
+                    "maximum": 11
+                }
+            }
+        }"#;
         let schema: Value = serde_json::from_str(data).unwrap();
         let result = data_schema_from_value(&schema);
         assert!(result.is_ok());
         let result = result.as_ref().unwrap();
         let _ = generate_data(result);
+    }
+
+    #[test]
+    fn test_ser_deser() {
+        let data = r#"{
+            "properties":
+            {
+                "firstName":
+                {
+                    "type": "string",
+                    "description": "The person's first name."
+                },
+                "lastName":
+                {
+                    "type": "string",
+                    "description": "The person's last name."
+                },
+                "age":
+                {
+                    "description": "Age in years which must be equal to or greater than zero.",
+                    "type": "integer",
+                    "minimum": 10,
+                    "maximum": 11
+                },
+                "nested": {
+                    "type":"object",
+                    "properties": {
+                        "nestedProp":{
+                            "type": "string",
+                            "description": "a nested property description."
+                        }
+                    }
+                }
+            }
+        }"#;
+        let schema: super::DataSchema = serde_json::from_str(data).unwrap();
+        println!("deserialized: {}", serde_json::to_string(&schema).unwrap());
+        assert_json_diff::assert_json_include!(
+            actual: serde_json::from_str::<Value>(data).unwrap(),
+            expected: serde_json::from_str::<Value>(serde_json::to_string(&schema).unwrap().as_str())
+                .unwrap()
+        );
     }
 
     #[test]
