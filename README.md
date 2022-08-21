@@ -489,11 +489,11 @@ their own criteria. Currently, the field allows any number of buckets, but it's 
 use more than six buckets.
 
 ### Grafana Dashboard
-The application provides [sample Grafana dashboard](docs/monitoring/grafana-dashboard.json) that can be used for monitoring. It has
+The application provides [sample Grafana dashboard](overload/docs/monitoring/grafana-dashboard.json) that can be used for monitoring. It has
 graphs for Request Per Seconds, Response Status count, Average response time and Response 
 time quantiles.
 
-![Grafana Dashboard](docs/monitoring/grafana-dashboard.png)
+![Grafana Dashboard](overload/docs/monitoring/grafana-dashboard.png)
 
 
 ## Build yourself
