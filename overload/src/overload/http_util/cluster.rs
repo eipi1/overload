@@ -1,9 +1,6 @@
 use crate::executor::cluster::cluster_execute_request_generator;
 use crate::http_util::request::{JobStatusQueryParams, Request};
-use crate::http_util::{
-    job_id, unknown_error_resp, GenericError, GenericResponse, GenericResult, PATH_JOB_STATUS,
-    PATH_STOP_JOB,
-};
+use crate::http_util::{job_id, GenericError, GenericResponse, PATH_JOB_STATUS, PATH_STOP_JOB};
 use crate::{ErrorCode, JobStatus, Response};
 use bytes::Buf;
 use cluster_mode::{Cluster, RestClusterNode};

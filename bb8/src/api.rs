@@ -322,7 +322,7 @@ pub trait CustomizeConnection<C: Send + 'static, E: 'static>:
     }
 }
 
-/// Override number of pooled connectiion
+/// Override number of pooled connection
 pub trait PoolCustomizer: fmt::Debug + Send + Sync {
     /// override minimum ide connection count
     fn min_idle(&self) -> u32;

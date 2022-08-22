@@ -2,7 +2,6 @@
 
 #[cfg(feature = "cluster")]
 pub mod cluster;
-#[cfg(feature = "connection_pool")]
 pub mod connection;
 
 use super::HttpReq;
@@ -188,7 +187,7 @@ pub async fn execute_request_generator(
 
     let host_port = format!("{}:{}", target.host, target.port);
 
-    let pool = get_pool(&host_port).await;
+    let pool = get_pool(&host_port, &job_id).await;
 
     {
         let mut write_guard = JOB_STATUS.write().await;
@@ -202,6 +201,7 @@ pub async fn execute_request_generator(
     while let Some((qps, requests, connection_count)) = stream.next().await {
         let stop = should_stop(&job_id).await;
         if stop {
+            delete_pool(&job_id).await;
             break;
         }
         if prev_connection_count != connection_count {
@@ -230,6 +230,7 @@ pub async fn execute_request_generator(
             }
         };
     }
+    delete_pool(&job_id).await;
     set_job_status(&job_id, JobStatus::Completed).await;
 }
 
@@ -427,7 +428,7 @@ pub(crate) async fn get_job_status(
 }
 
 /// Get from global pool collection or create a new pool and put into the collection
-async fn get_pool(host_port: &String) -> Arc<Pool<HttpConnectionPool>> {
+async fn get_pool(host_port: &str, job_id: &str) -> Arc<Pool<HttpConnectionPool>> {
     let pool = {
         let read_guard = CONNECTION_POOLS.read().await;
         read_guard.get(host_port).cloned()
@@ -444,9 +445,14 @@ async fn get_pool(host_port: &String) -> Arc<Pool<HttpConnectionPool>> {
             .unwrap();
         let pool = Arc::new(pool);
         let mut write_guard = CONNECTION_POOLS.write().await;
-        write_guard.insert(host_port.clone(), pool.clone());
+        write_guard.insert(job_id.to_string(), pool.clone());
         pool
     } else {
         pool.unwrap()
     }
+}
+
+async fn delete_pool(job_id: &str) {
+    let mut write_guard = CONNECTION_POOLS.write().await;
+    write_guard.remove(job_id);
 }

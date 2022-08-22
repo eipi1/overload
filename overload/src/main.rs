@@ -66,5 +66,6 @@ async fn main() {
     tokio::spawn(overload::executor::init());
 
     let routes = filters::get_routes();
+    info!("staring server...");
     warp::serve(routes).run(([0, 0, 0, 0], 3030)).await;
 }
