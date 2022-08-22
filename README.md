@@ -25,7 +25,108 @@ A distributed load testing utility written in Rust
 * [APIs](#apis)
 * [Monitoring](#monitoring)
 
-## Usage
+## Getting started
+### Docker
+```shell
+docker run -p 3030:3030 ghcr.io/eipi1/overload:latest-standalone-snapshot
+```
+
+### Kubernetes
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: overload
+  name: overload
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: overload
+  template:
+    metadata:
+      labels:
+        app: overload
+    spec:
+      containers:
+        - image: ghcr.io/eipi1/overload:latest-standalone-snapshot
+          imagePullPolicy: "Always"
+          name: overload
+          ports:
+            - containerPort: 3030
+          env:
+            - name: LOG_LEVEL
+              value: "info"
+            - name: DATA_DIR
+              value: "/tmp"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: overload
+spec:
+  #  type: LoadBalancer
+  selector:
+    app: overload
+  ports:
+    - protocol: TCP
+      port: 3030
+      targetPort: 3030
+```
+
+### Start Test
+The following request will send two `GET` request per second(`"countPerSec": 2`) to `httpbin.org/get` a test for 60 
+seconds(`"duration": 60`).
+```shell
+curl --location --request POST 'localhost:3030/test' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+  "duration": 120,
+  "name": "demo-test",
+  "qps": {
+    "ConstantRate": {
+      "countPerSec": 1
+    }
+  },
+  "req": {
+    "RequestList": {
+      "data": [
+        {
+          "body": null,
+          "method": "GET",
+          "url": "/get"
+        }
+      ]
+    }
+  },
+  "target": {
+    "host": "httpbin.org",
+    "port": 80,
+    "protocol": "HTTP"
+  }
+}'
+```
+It'll respond with a job identifier and status.
+```json
+{
+  "job_id": "demo-test-d2ae5ff0-7bf4-4daf-8784-83b642d7dd6b",
+  "status": "Starting"
+}
+```
+We'll need the `job_id` if we want to stop the test later.
+
+### Get job status
+```shell
+curl --location --request GET 'localhost:3030/test/status/'
+```
+### Stop a job
+```shell
+curl --location --request GET 'localhost:3030/test/stop/demo-test-d2ae5ff0-7bf4-4daf-8784-83b642d7dd6b'
+```
+
+## Modes
 
 Overload support two modes - cluster & standalone. Overload exposes a set of [APIs](#apis)
 at port `3030` to manage tests.
@@ -489,11 +590,11 @@ their own criteria. Currently, the field allows any number of buckets, but it's 
 use more than six buckets.
 
 ### Grafana Dashboard
-The application provides [sample Grafana dashboard](docs/monitoring/grafana-dashboard.json) that can be used for monitoring. It has
+The application provides [sample Grafana dashboard](overload/docs/monitoring/grafana-dashboard.json) that can be used for monitoring. It has
 graphs for Request Per Seconds, Response Status count, Average response time and Response 
 time quantiles.
 
-![Grafana Dashboard](docs/monitoring/grafana-dashboard.png)
+![Grafana Dashboard](overload/docs/monitoring/grafana-dashboard.png)
 
 
 ## Build yourself

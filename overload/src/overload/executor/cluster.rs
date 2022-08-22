@@ -150,6 +150,7 @@ pub async fn cluster_execute_request_generator(
     } else {
         error!("Node is in secondary mode.");
     }
+    //todo drop connection pool
     set_job_status(&job_id, JobStatus::Completed).await;
 }
 

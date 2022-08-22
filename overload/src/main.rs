@@ -1,23 +1,15 @@
 #[cfg(feature = "cluster")]
 use cloud_discovery_kubernetes::KubernetesDiscoverService;
-#[cfg(feature = "cluster")]
-use cluster_mode::Cluster;
-#[cfg(feature = "cluster")]
-use lazy_static::lazy_static;
 use log::info;
 use overload::data_dir;
 #[cfg(feature = "cluster")]
 use rust_cloud_discovery::DiscoveryClient;
 use std::env;
-#[cfg(feature = "cluster")]
-use std::sync::Arc;
-use warp::Filter;
-mod filters;
 
-#[cfg(feature = "cluster")]
-lazy_static! {
-    static ref CLUSTER: Arc<Cluster> = Arc::new(Cluster::new(10 * 1000));
-}
+#[cfg_attr(feature = "cluster", path = "filters_cluster.rs")]
+mod filters;
+mod filters_common;
+
 #[tokio::main]
 async fn main() {
     //init logging
@@ -59,7 +51,7 @@ async fn main() {
             Ok(k8s) => {
                 let discovery_client = DiscoveryClient::new(k8s);
                 tokio::spawn(cluster_mode::start_cluster(
-                    CLUSTER.clone(),
+                    filters::CLUSTER.clone(),
                     discovery_client,
                 ));
             }
@@ -73,50 +65,7 @@ async fn main() {
     info!("spawning executor init");
     tokio::spawn(overload::executor::init());
 
-    let upload_binary_file = filters::upload_binary_file();
-
-    #[cfg(not(feature = "cluster"))]
-    let stop_req = filters::stop_req();
-    #[cfg(feature = "cluster")]
-    let stop_req = filters::stop_req(CLUSTER.clone());
-
-    #[cfg(not(feature = "cluster"))]
-    let history = filters::history();
-    #[cfg(feature = "cluster")]
-    let history = filters::history(CLUSTER.clone());
-
-    #[cfg(feature = "cluster")]
-    let overload_req_secondary = filters::overload_req_secondary();
-
-    // cluster-mode configurations
-    #[cfg(feature = "cluster")]
-    let info = filters::info(CLUSTER.clone());
-
-    #[cfg(feature = "cluster")]
-    let request_vote = filters::request_vote(CLUSTER.clone());
-
-    #[cfg(feature = "cluster")]
-    let request_vote_response = filters::request_vote_response(CLUSTER.clone());
-
-    #[cfg(feature = "cluster")]
-    let heartbeat = filters::heartbeat(CLUSTER.clone());
-
-    let prometheus_metric = filters::prometheus_metric();
-    #[cfg(feature = "cluster")]
-    let overload_req = filters::overload_req(CLUSTER.clone());
-    #[cfg(not(feature = "cluster"))]
-    let overload_req = filters::overload_req();
-    let routes = prometheus_metric
-        .or(overload_req)
-        .or(stop_req)
-        .or(history)
-        .or(upload_binary_file);
-    #[cfg(feature = "cluster")]
-    let routes = routes
-        .or(info)
-        .or(request_vote)
-        .or(request_vote_response)
-        .or(heartbeat)
-        .or(overload_req_secondary);
+    let routes = filters::get_routes();
+    info!("staring server...");
     warp::serve(routes).run(([0, 0, 0, 0], 3030)).await;
 }

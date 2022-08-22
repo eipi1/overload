@@ -82,9 +82,6 @@ version = "0.5"
 version = "0.4"
 features = ["util"]
 
-#[dependencies.tower-service]
-#version = "0.3"
-
 [dependencies.bb8]
 path = "../bb8"
 
@@ -117,7 +114,7 @@ version = "1.0"
 version = "1.0"
 
 [dependencies.uuid]
-version = "0.8"
+version = "1.1"
 features = ["v4"]
 
 [dependencies.fastrand]
@@ -140,7 +137,7 @@ version = "1.0"
 version = "1.0"
 
 [dependencies.prometheus]
-version = "0.12"
+version = "0.13"
 
 [dependencies.log]
 version = "0.4"
@@ -159,7 +156,7 @@ features = ["rt-multi-thread", "macros", "fs", "io-util", "time", "test-util"]
 version = "0.4"
 
 [dev-dependencies.more-asserts]
-version = "0.2"
+version = "0.3"
 
 [dev-dependencies.base64]
 version = "0.13"
@@ -171,13 +168,11 @@ version = "0.5"
 version = "0.6"
 
 [dev-dependencies.assert-json-diff]
-version = "2.0.2"
+version = "2.0"
 
 [features]
-default = ["debug", "connection_pool"]
+default = ["debug"]
 
 cluster = ["rust-cloud-discovery", "cloud-discovery-kubernetes", "cluster-mode"]
 # addtional checks for debugging/logging purpose
 debug = []
-# Unstable
-connection_pool = []

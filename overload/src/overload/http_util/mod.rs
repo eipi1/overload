@@ -1,5 +1,8 @@
 #[cfg(feature = "cluster")]
-mod cluster;
+pub mod cluster;
+#[cfg(feature = "cluster")]
+pub use self::cluster::handle_request_cluster;
+
 pub mod request;
 mod standalone;
 
@@ -13,27 +16,16 @@ pub use cluster::stop;
 #[cfg(not(feature = "cluster"))]
 pub use standalone::stop;
 
-#[cfg(feature = "cluster")]
-use crate::executor::cluster::cluster_execute_request_generator;
 use crate::executor::execute_request_generator;
 use crate::http_util::request::Request;
 use crate::metrics::MetricsFactory;
-#[cfg(feature = "cluster")]
-use crate::ErrorCode;
 use crate::{HttpReq, JobStatus, Response};
 use anyhow::Error as AnyError;
 use bytes::Buf;
-#[cfg(feature = "cluster")]
-use cluster_mode::Cluster;
 use csv_async::{AsyncDeserializer, AsyncReaderBuilder};
 use futures_core::ready;
 use futures_util::Stream;
 use http::{Method, Uri};
-#[cfg(feature = "cluster")]
-use hyper::client::HttpConnector;
-#[cfg(feature = "cluster")]
-use hyper::{Body, Client};
-#[allow(unused_imports)]
 use log::{error, trace};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -48,8 +40,6 @@ use std::io::Error as StdIoError;
 use std::io::ErrorKind;
 use std::pin::Pin;
 use std::str::FromStr;
-#[cfg(feature = "cluster")]
-use std::sync::Arc;
 use std::task::{Context, Poll};
 use tokio::io::AsyncRead;
 use tokio_stream::StreamExt;
@@ -69,78 +59,6 @@ pub async fn handle_request(request: Request, metrics: &'static MetricsFactory) 
             .await,
     ));
     Response::new(job_id, JobStatus::Starting)
-}
-
-#[cfg(feature = "cluster")]
-pub async fn handle_request_cluster(request: Request, cluster: Arc<Cluster>) -> Response {
-    let job_id = job_id(&request);
-    let buckets = request.histogram_buckets.clone();
-    if !cluster.is_active().await {
-        Response::new(job_id, JobStatus::Error(ErrorCode::InactiveCluster))
-    } else if cluster.is_primary().await {
-        let generator = request.into();
-        tokio::spawn(cluster_execute_request_generator(
-            generator,
-            job_id.clone(),
-            cluster,
-            buckets,
-        ));
-        Response::new(job_id, JobStatus::Starting)
-    } else {
-        //forward request to primary
-        let client = Client::new();
-        let job_id = request
-            .name
-            .clone()
-            .unwrap_or_else(|| "unknown_job".to_string());
-        match forward_test_request(request, cluster, client).await {
-            Ok(resp) => resp,
-            Err(err) => {
-                error!("{}", err);
-                unknown_error_resp(job_id)
-            }
-        }
-    }
-}
-
-#[cfg(feature = "cluster")]
-async fn forward_test_request(
-    request: Request,
-    cluster: Arc<Cluster>,
-    client: Client<HttpConnector>,
-) -> anyhow::Result<Response> {
-    let primaries = cluster
-        .primaries()
-        .await
-        .ok_or_else(|| anyhow::anyhow!("Primary returns None"))?;
-    if let Some(primary) = primaries.iter().next() {
-        let uri = primary
-            .service_instance()
-            .uri()
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("Invalid ServiceInstance URI"))?;
-        trace!(
-            "forwarding request to primary: {}, {}",
-            &uri,
-            serde_json::to_string(&request).unwrap()
-        );
-        let req = hyper::Request::builder()
-            .uri(format!("{}/test", &uri))
-            .method("POST")
-            .body(Body::from(serde_json::to_string(&request)?))?;
-        let resp = client.request(req).await?;
-        let bytes = hyper::body::to_bytes(resp.into_body()).await?;
-        let resp = serde_json::from_slice::<Response>(bytes.as_ref())?;
-        return Ok(resp);
-    };
-    Ok(unknown_error_resp(
-        request.name.unwrap_or_else(|| "unknown_job".to_string()),
-    ))
-}
-
-#[cfg(feature = "cluster")]
-fn unknown_error_resp(job_id: String) -> Response {
-    Response::new(job_id, JobStatus::Error(ErrorCode::Others))
 }
 
 //todo verify for cluster mode. using job id as name for secondary request
