@@ -47,7 +47,7 @@ jobs:
       with:
         context: .
         push: true
-        tags: ghcr.io/${{ github.repository }}:${{ env.version }}-cluster${{ env.suffix }}
+        tags: ghcr.io/${{ github.repository }}:cluster-${{ env.version }}${{ env.suffix }}
     - name: Run standalone tests
       run: cargo test --verbose
     - name: Build standalone
@@ -57,4 +57,4 @@ jobs:
       with:
         context: .
         push: true
-        tags: ghcr.io/${{ github.repository }}:${{ env.version }}-standalone${{ env.suffix }}
+        tags: ghcr.io/${{ github.repository }}:standalone-${{ env.version }}${{ env.suffix }}
