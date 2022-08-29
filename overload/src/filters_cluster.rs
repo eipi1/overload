@@ -1,21 +1,25 @@
-use bytes::Buf;
+use crate::filters_common;
+use crate::filters_common::{prometheus_metric, METRICS_FACTORY};
+use bytes::{Buf, Bytes, BytesMut};
 use cluster_mode::{get_cluster_info, Cluster};
-use futures_util::Stream;
+use futures_util::future::Either;
+use futures_util::{FutureExt, Stream, StreamExt};
 use http::StatusCode;
+use hyper::Body;
 use lazy_static::lazy_static;
 use log::trace;
-use overload::http_util::handle_history_all;
 use overload::http_util::request::{JobStatusQueryParams, Request};
+use overload::http_util::{handle_history_all, GenericError};
 use overload::{data_dir, http_util};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::convert::{Infallible, TryFrom};
-
+use std::pin::Pin;
 use std::sync::Arc;
-
-use crate::filters_common;
-use crate::filters_common::{execute, prometheus_metric};
-use warp::reply::{Json, WithStatus};
+use std::task::Poll;
+use tokio::fs::File;
+use tokio::io::AsyncSeekExt;
+use warp::reply::{Json, Response, WithStatus};
 use warp::{reply, Filter, Reply};
 
 lazy_static! {
@@ -31,13 +35,14 @@ pub fn get_routes_with_cluster(
     let upload_binary_file = upload_binary_file();
     let stop_req = stop_req(cluster.clone());
     let history = history(cluster.clone());
-    let overload_req_secondary = overload_req_secondary();
+    let overload_req_secondary = overload_req_secondary(cluster.clone());
     let overload_req = overload_req(cluster.clone());
 
     let info = info(cluster.clone());
     let request_vote = request_vote(cluster.clone());
     let request_vote_response = request_vote_response(cluster.clone());
     let heartbeat = heartbeat(cluster);
+    let download_data_file = download_req_from_secondaries();
 
     let prometheus_metric = prometheus_metric();
 
@@ -53,6 +58,7 @@ pub fn get_routes_with_cluster(
         .or(request_vote_response)
         .or(heartbeat)
         .or(overload_req_secondary)
+        .or(download_data_file)
 }
 
 pub fn overload_req(
@@ -116,6 +122,7 @@ pub fn history(
 }
 
 pub fn overload_req_secondary(
+    cluster: Arc<Cluster>,
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     warp::post()
         .and(
@@ -125,7 +132,22 @@ pub fn overload_req_secondary(
         )
         .and(warp::body::content_length_limit(1024 * 1024))
         .and(warp::body::json())
-        .and_then(|request: Request| async move { execute(request).await })
+        .and_then(move |request: Request| {
+            let tmp = cluster.clone();
+            async move { execute_secondary_request(request, tmp).await }
+        })
+}
+
+pub async fn execute_secondary_request(
+    request: Request,
+    cluster: Arc<Cluster>,
+) -> Result<impl Reply, Infallible> {
+    trace!("req: execute: {:?}", &request);
+    let response =
+        overload::http_util::handle_request_from_primary(request, &METRICS_FACTORY, cluster).await;
+    let json = reply::json(&response);
+    trace!("resp: execute: {:?}", &response);
+    Ok(json)
 }
 
 pub fn info(
@@ -141,7 +163,6 @@ pub fn info(
 pub fn request_vote(
     cluster: Arc<Cluster>,
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
-    // let tmp = cluster.clone();
     warp::path!("cluster" / "raft" / "request-vote" / String / usize).and_then(
         move |node_id, term| {
             let tmp = cluster.clone();
@@ -288,25 +309,192 @@ fn no_cluster_err() -> WithStatus<Json> {
     reply::with_status(reply::json(&error_msg), StatusCode::NOT_FOUND)
 }
 
+pub fn download_req_from_secondaries(
+) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+    warp::path!("cluster" / "data-file" / String)
+        .and_then(|filename| async move { response_file(filename).await })
+}
+
+async fn response_file(filename: String) -> Result<impl Reply, Infallible> {
+    let file = format!("{}/{}", data_dir(), filename);
+    trace!("received download request for file: {}", &filename);
+    let body = body_from_file(&file).await;
+    Ok(match body {
+        Ok(body) => {
+            let response = Response::new(body);
+            warp::reply::with_status(response, StatusCode::OK)
+        }
+        Err(e) => warp::reply::with_status(
+            Response::new(Body::from(serde_json::to_string(&e).unwrap())),
+            StatusCode::from_u16(e.error_code).unwrap(),
+        ),
+    })
+}
+
+async fn body_from_file(file: &str) -> Result<Body, GenericError> {
+    let file = tokio::fs::File::open(&file).await?;
+    let metadata = file.metadata().await?;
+    let stream = file_stream(file, 8_192, (0, metadata.len()));
+    Ok(Body::wrap_stream(stream))
+}
+
+fn file_stream(
+    mut file: File,
+    buf_size: usize,
+    (start, end): (u64, u64),
+) -> impl Stream<Item = Result<Bytes, std::io::Error>> + Send {
+    use std::io::SeekFrom;
+
+    let seek = async move {
+        if start != 0 {
+            file.seek(SeekFrom::Start(start)).await?;
+        }
+        Ok(file)
+    };
+
+    seek.into_stream()
+        .map(move |result| {
+            let mut buf = BytesMut::new();
+            let mut len = end - start;
+            let mut f = match result {
+                Ok(f) => f,
+                Err(f) => {
+                    return Either::Left(futures_util::stream::once(futures_util::future::err(f)))
+                }
+            };
+
+            Either::Right(futures_util::stream::poll_fn(move |cx| {
+                if len == 0 {
+                    return Poll::Ready(None);
+                }
+                reserve_at_least(&mut buf, buf_size);
+
+                let n = match futures_core::ready!(tokio_util::io::poll_read_buf(
+                    Pin::new(&mut f),
+                    cx,
+                    &mut buf
+                )) {
+                    Ok(n) => n as u64,
+                    Err(err) => {
+                        tracing::debug!("file read error: {}", err);
+                        return Poll::Ready(Some(Err(err)));
+                    }
+                };
+
+                if n == 0 {
+                    tracing::debug!("file read found EOF before expected length");
+                    return Poll::Ready(None);
+                }
+
+                let mut chunk = buf.split().freeze();
+                if n > len {
+                    chunk = chunk.split_to(len as usize);
+                    len = 0;
+                } else {
+                    len -= n;
+                }
+
+                Poll::Ready(Some(Ok(chunk)))
+            }))
+        })
+        .flatten()
+}
+
+fn reserve_at_least(buf: &mut BytesMut, cap: usize) {
+    if buf.capacity() - buf.len() < cap {
+        buf.reserve(cap);
+    }
+}
+
 #[cfg(all(test, feature = "cluster"))]
 mod cluster_test {
-    use crate::filters::get_routes_with_cluster;
+    use crate::filters::{download_req_from_secondaries, get_routes_with_cluster};
     use crate::filters_common::test_common::*;
     use async_trait::async_trait;
+    use bytes::Buf;
     use cluster_mode::Cluster;
     use http::Request;
     use httpmock::Method::POST;
+    use hyper::body::to_bytes;
+    use hyper::Body;
     use log::info;
-    use overload::JobStatus;
+    use overload::{JobStatus, PATH_REQUEST_DATA_FILE_DOWNLOAD};
     use regex::Regex;
     use rust_cloud_discovery::DiscoveryClient;
     use rust_cloud_discovery::DiscoveryService;
     use rust_cloud_discovery::ServiceInstance;
+    use sha2::Digest;
     use std::error::Error;
     use std::str::FromStr;
     use std::sync::Arc;
     use std::time::Duration;
+    use csv_async::AsyncReaderBuilder;
+    use tokio::sync::oneshot::Sender;
+    use tokio::task::JoinHandle;
+    use tracing::trace;
     use uuid::Uuid;
+    use warp::Filter;
+    use overload::http_util::csv_reader_to_sqlite;
+
+    fn start_warp_with_route(
+        route: impl Filter<Extract = impl warp::Reply, Error = warp::Rejection>
+            + Send
+            + Sync
+            + Clone
+            + 'static,
+    ) -> (Sender<()>, JoinHandle<()>) {
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let (_addr, server) =
+            warp::serve(route).bind_with_graceful_shutdown(([127, 0, 0, 1], 3030), async {
+                rx.await.ok();
+            });
+        // Spawn the server into a runtime
+        let handle = tokio::task::spawn(server);
+        (tx, handle)
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn test_download_req_from_secondaries() {
+        setup();
+        let (tx, join_handle) = start_warp_with_route(download_req_from_secondaries());
+        let filename = "005bbaa3-61cf-4ed3-a0f9-771d05a0c3cd";
+        let file_path = format!("/tmp/{}", filename);
+        generate_sqlite_file(&file_path).await;
+        let client = hyper::Client::new();
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!(
+                "http://127.0.0.1:3030{}/{}",
+                PATH_REQUEST_DATA_FILE_DOWNLOAD, filename
+            ))
+            .body(Body::empty())
+            .expect("request builder");
+        let response = client.request(req).await.unwrap();
+        trace!("{:?}", &response);
+        assert_eq!(response.status(), 200);
+        let bytes = to_bytes(response).await.unwrap();
+        let mut reader = bytes.reader();
+
+        let _ = tx.send(());
+
+        let mut file = std::fs::File::open(&file_path).unwrap();
+        let mut sha256 = sha2::Sha256::new();
+        std::io::copy(&mut file, &mut sha256).unwrap();
+        let hash_1 = sha256.finalize();
+
+        let mut sha256 = sha2::Sha256::new();
+        std::io::copy(&mut reader, &mut sha256).unwrap();
+        let hash_2 = sha256.finalize();
+        assert_eq!(hash_1, hash_2);
+        let _ = tokio::fs::remove_file(&file_path).await;
+
+        //ensure that server is terminated. Otherwise other tests may get port already in use error
+        join_handle.abort();
+        // while !join_handle.is_finished() {
+        //     let _ = tokio::time::sleep(Duration::from_millis(2));
+        // }
+    }
 
     pub struct TestDiscoverService {
         instances: Vec<ServiceInstance>,
@@ -400,6 +588,7 @@ mod cluster_test {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[serial_test::serial]
     async fn test_requests() {
         info!("cluster: test_request_random_constant");
         setup();
@@ -479,7 +668,6 @@ mod cluster_test {
                 when.method(POST).path(format!("/{}", i));
                 then.status(200)
                     .header("content-type", "application/json")
-                    .header("Connection", "keep-alive")
                     .body(r#"{"hello": "1"}"#);
             });
             mocks.push(mock);
@@ -527,7 +715,7 @@ mod cluster_test {
         info!("body: {:?}", &response);
         assert_eq!(status, 200);
 
-        tokio::time::sleep(tokio::time::Duration::from_millis(15000)).await;
+        tokio::time::sleep(tokio::time::Duration::from_millis(21000)).await;
         let mut i = 0;
         for mock in mocks {
             //each seconds we expect mock to receive 3 request
@@ -537,14 +725,14 @@ mod cluster_test {
             i += hits;
             mock.delete_async().await;
         }
-        assert_eq!(15, i);
+        assert_eq!(45, i);
 
         let _ = std::fs::remove_file("csv_requests_for_test.sqlite");
     }
 
     fn json_request_with_file(host: String, port: u16, filename: String) -> String {
         let req = serde_json::json!({
-            "duration": 5,
+            "duration": 15,
             "req": {
                 "RequestFile": {
                    "file_name": filename
@@ -562,5 +750,18 @@ mod cluster_test {
             }
         });
         serde_json::to_string(&req).unwrap()
+    }
+
+    pub async fn generate_sqlite_file(file_path: &str) {
+        let csv_data = r#""url","method","body","headers"
+            "http://httpbin.org/anything/11","GET","","{}"
+            "http://httpbin.org/anything/13","GET","","{}"
+            "http://httpbin.org/anything","POST","{\"some\":\"random data\",\"second-key\":\"more data\"}","{\"Authorization\":\"Bearer 123\"}"
+            "http://httpbin.org/bearer","GET","","{\"Authorization\":\"Bearer 123\"}"
+            "#;
+        let reader = AsyncReaderBuilder::new()
+            .escape(Some(b'\\'))
+            .create_deserializer(csv_data.as_bytes());
+        let _ = csv_reader_to_sqlite(reader, file_path.to_string()).await;
     }
 }

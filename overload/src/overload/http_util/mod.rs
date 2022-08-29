@@ -2,6 +2,8 @@
 pub mod cluster;
 #[cfg(feature = "cluster")]
 pub use self::cluster::handle_request_cluster;
+#[cfg(feature = "cluster")]
+pub use self::cluster::handle_request_from_primary;
 
 pub mod request;
 mod standalone;
@@ -24,7 +26,7 @@ use anyhow::Error as AnyError;
 use bytes::Buf;
 use csv_async::{AsyncDeserializer, AsyncReaderBuilder};
 use futures_core::ready;
-use futures_util::Stream;
+use futures_util::{FutureExt, Stream};
 use http::{Method, Uri};
 use log::{error, trace};
 use regex::Regex;
@@ -57,8 +59,13 @@ pub async fn handle_request(request: Request, metrics: &'static MetricsFactory) 
         metrics
             .metrics_with_buckets(buckets.to_vec(), &*job_id)
             .await,
+        noop().boxed(),
     ));
     Response::new(job_id, JobStatus::Starting)
+}
+
+pub async fn noop() -> Result<(), anyhow::Error> {
+    Ok(())
 }
 
 //todo verify for cluster mode. using job id as name for secondary request
@@ -248,6 +255,7 @@ macro_rules! from_error {
 from_error!(hyper::Error);
 from_error!(AnyError);
 from_error!(serde_json::Error);
+from_error!(StdIoError);
 
 impl Default for GenericError {
     fn default() -> Self {
@@ -315,8 +323,6 @@ where
     type Item = Result<B, WarpStdIoError>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        // let opt_item = ready!(Pin::new(&mut self.get_mut().body).poll_next(cx));
-
         match ready!(Pin::new(&mut self.get_mut().inner).poll_next(cx)) {
             None => Poll::Ready(None),
             Some(data) => {

@@ -20,7 +20,7 @@ use http::{HeaderValue, StatusCode};
 use hyper::client::conn::ResponseFuture;
 use hyper::{Error, Request};
 use lazy_static::lazy_static;
-use log::warn;
+use log::{debug, warn};
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::option::Option::Some;
@@ -180,7 +180,12 @@ pub async fn execute_request_generator(
     request: RequestGenerator,
     job_id: String,
     metrics: Arc<Metrics>,
+    init: BoxFuture<'_, Result<(), anyhow::Error>>,
 ) {
+    if let Err(e) = init.await {
+        error!("Error during preparation: {:?}", e);
+        return;
+    }
     let target = request.target.clone();
     let stream = request_generator_stream(request);
     tokio::pin!(stream);
@@ -283,14 +288,14 @@ async fn send_requests(
             );
         }
         let request = request.body(body.clone().into()).unwrap();
-        trace!("sending request: {:?}", &request);
+        trace!("sending request: {:?}", &request.uri());
         match pool.get().await {
             Ok(mut con) => {
                 // let mut handle = con.request_handle;
                 trace!("readying connection");
                 let handle = con.request_handle.ready().await;
                 if handle.is_err() {
-                    warn!("error - connection not ready");
+                    warn!("error - connection not ready for {:?}", &request.uri());
                     continue;
                 }
                 trace!("connection ready");
@@ -311,9 +316,7 @@ async fn send_requests(
             }
         }
     }
-    while let Some(_resp) = request_futures.next().await {
-        trace!("Request completed");
-    }
+    while let Some(_resp) = request_futures.next().await {}
 }
 
 async fn send_multiple_requests(
@@ -323,7 +326,7 @@ async fn send_multiple_requests(
     job_id: String,
     metrics: Arc<Metrics>,
 ) {
-    trace!(
+    debug!(
         "[{}] [send_multiple_requests] - size: {}, count: {}",
         &job_id,
         &requests.len(),

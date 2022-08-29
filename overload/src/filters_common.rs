@@ -2,14 +2,11 @@ use http::header::CONTENT_TYPE;
 use http::{Response, StatusCode};
 use hyper::Body;
 use lazy_static::lazy_static;
-use log::trace;
-use overload::http_util::request::Request;
 use overload::http_util::{GenericError, GenericResponse};
 use overload::metrics::MetricsFactory;
 use prometheus::{Encoder, TextEncoder};
 use serde::Serialize;
-use std::convert::Infallible;
-use warp::{reply, Filter, Reply};
+use warp::{reply, Filter};
 
 lazy_static! {
     pub static ref METRICS_FACTORY: MetricsFactory = MetricsFactory::default();
@@ -35,14 +32,6 @@ pub fn prometheus_metric(
                 .unwrap()
         }
     })
-}
-
-pub async fn execute(request: Request) -> Result<impl Reply, Infallible> {
-    trace!("req: execute: {:?}", &request);
-    let response = overload::http_util::handle_request(request, &METRICS_FACTORY).await;
-    let json = reply::json(&response);
-    trace!("resp: execute: {:?}", &response);
-    Ok(json)
 }
 
 pub fn generic_result_to_reply_with_status<T: Serialize>(
@@ -91,8 +80,8 @@ pub(crate) mod test_common {
             tracing_subscriber::fmt()
                 .with_env_filter(format!(
                     "overload={},rust_cloud_discovery={},cloud_discovery_kubernetes={},cluster_mode={},\
-                    almost_raft={}, hyper={}, httpmock={}",
-                    "trace", "info", "info", "info", "info", "info","trace"
+                    almost_raft={}, hyper={}",
+                    "trace", "info", "info", "info", "info", "info"
                 ))
                 .try_init()
                 .unwrap();

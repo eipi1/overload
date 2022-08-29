@@ -102,7 +102,7 @@ impl ManageConnection for HttpConnectionPool {
 
     async fn is_valid(&self, conn: &mut Self::Connection) -> Result<(), Self::Error> {
         trace!("Checking if connection is ready");
-        match timeout(Duration::from_millis(10), conn.request_handle.ready()).await {
+        match timeout(Duration::from_millis(5), conn.request_handle.ready()).await {
             Ok(result) => match result {
                 Ok(_) => Ok(()),
                 Err(err) => {
@@ -132,19 +132,6 @@ pub(crate) struct HttpConnection {
     broken: bool,
     join_handle: JoinHandle<()>,
 }
-
-impl Drop for HttpConnection {
-    fn drop(&mut self) {
-        trace!("Dropping HttpConnection");
-        let done = self.join_handle.is_finished();
-        trace!("JoinHandle is finished? - {}", done);
-        if !done {
-            self.join_handle.abort();
-        }
-    }
-}
-
-impl HttpConnection {}
 
 async fn open_connection(host_port: &str) -> Option<HttpConnection> {
     debug!("Opening connection to: {}", host_port);

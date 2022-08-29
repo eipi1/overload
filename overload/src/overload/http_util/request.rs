@@ -46,7 +46,7 @@ impl TryFrom<&String> for RequestSpecEnum {
     type Error = serde_json::Error;
 
     fn try_from(value: &String) -> Result<Self, Self::Error> {
-        serde_json::from_str(&*value)
+        serde_json::from_str(value)
     }
 }
 
@@ -129,12 +129,12 @@ impl TryFrom<HashMap<String, String>> for JobStatusQueryParams {
         } else {
             //try for offset & limit
             let offset = value.remove("offset");
-            let offset = offset.as_ref().map_or("0", |o| &*o);
+            let offset = offset.as_ref().map_or("0", |o| o);
             let offset = offset.parse::<usize>().map_err(|e| {
                 GenericError::new(&*format!("Invalid offset {}, {}", &offset, e), 400)
             })?;
             let limit = value.remove("limit");
-            let limit = limit.as_ref().map_or("20", |l| &*l);
+            let limit = limit.as_ref().map_or("20", |l| l);
             let limit = limit.parse::<usize>().map_err(|e| {
                 GenericError::new(&*format!("Invalid limit {}, {}", &offset, e), 400)
             })?;
