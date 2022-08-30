@@ -10,12 +10,15 @@ use cluster_mode::{Cluster, RestClusterNode};
 use futures_util::stream::FuturesUnordered;
 use http::Request;
 use hyper::client::{Client, HttpConnector};
-use log::{error, trace};
+use log::{error, info, trace};
 use smallvec::SmallVec;
 use std::collections::HashSet;
 use std::convert::TryInto;
 use std::sync::Arc;
 use tokio_stream::StreamExt;
+
+type ConnectionCount = u32;
+type QPS = u32;
 
 /// Run tests in cluster mode.
 /// Requires `buckets` specification as it needs to be forwarded to
@@ -48,7 +51,7 @@ pub async fn cluster_execute_request_generator(
             if should_stop(&job_id).await {
                 break;
             }
-            let mut bundle = vec![];
+            let mut bundle: Vec<(QPS, Vec<HttpReq>, ConnectionCount)> = vec![];
             while let Some((qps, requests, connection_count)) = stream.next().await {
                 match requests {
                     Ok(result) => {
@@ -150,6 +153,7 @@ pub async fn cluster_execute_request_generator(
     } else {
         error!("Node is in secondary mode.");
     }
+    info!("primary - finished generating QPS");
     //todo drop connection pool
     set_job_status(&job_id, JobStatus::Completed).await;
 }

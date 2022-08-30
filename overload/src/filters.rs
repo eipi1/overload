@@ -28,7 +28,7 @@ pub fn overload_req() -> impl Filter<Extract = impl warp::Reply, Error = warp::R
         .and(warp::path("test").and(warp::path::end()))
         .and(warp::body::content_length_limit(1024 * 1024))
         .and(warp::body::json())
-        .and_then(|request: Request| async move { filters_common::execute(request).await })
+        .and_then(|request: Request| async move { execute(request).await })
 }
 
 pub fn upload_binary_file(
@@ -91,6 +91,15 @@ async fn stop(job_id: String) -> Result<impl Reply, Infallible> {
     let resp = overload::http_util::stop(job_id).await;
     trace!("resp: stop: {:?}", &resp);
     Ok(filters_common::generic_result_to_reply_with_status(resp))
+}
+
+pub async fn execute(request: Request) -> Result<impl Reply, Infallible> {
+    trace!("req: execute: {:?}", &request);
+    let response =
+        overload::http_util::handle_request(request, &filters_common::METRICS_FACTORY).await;
+    let json = reply::json(&response);
+    trace!("resp: execute: {:?}", &response);
+    Ok(json)
 }
 
 #[cfg(all(test, not(feature = "cluster")))]

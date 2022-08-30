@@ -17,6 +17,7 @@ use std::hash::{Hash, Hasher};
 use std::{env, fmt};
 
 pub const DEFAULT_DATA_DIR: &str = "/tmp";
+pub const PATH_REQUEST_DATA_FILE_DOWNLOAD: &str = "/cluster/data-file";
 
 pub fn data_dir() -> String {
     env::var("DATA_DIR").unwrap_or_else(|_| DEFAULT_DATA_DIR.to_string())
@@ -110,6 +111,7 @@ pub enum JobStatus {
 pub enum ErrorCode {
     InactiveCluster,
     SqliteOpenFailed,
+    PreparationFailed,
     Others,
 }
 
@@ -133,7 +135,28 @@ impl Response {
 macro_rules! log_error {
     ($result:expr) => {
         if let Err(e) = $result {
+            use log::error;
             error!("{}", e.to_string());
         }
     };
+}
+
+#[cfg(test)]
+pub mod test_utils {
+    use crate::http_util::csv_reader_to_sqlite;
+    use csv_async::AsyncReaderBuilder;
+
+    pub async fn generate_sqlite_file(file_path: &str) {
+        let csv_data = r#""url","method","body","headers"
+            "http://httpbin.org/anything/11","GET","","{}"
+            "http://httpbin.org/anything/13","GET","","{}"
+            "http://httpbin.org/anything","POST","{\"some\":\"random data\",\"second-key\":\"more data\"}","{\"Authorization\":\"Bearer 123\"}"
+            "http://httpbin.org/bearer","GET","","{\"Authorization\":\"Bearer 123\"}"
+            "#;
+        let reader = AsyncReaderBuilder::new()
+            .escape(Some(b'\\'))
+            .create_deserializer(csv_data.as_bytes());
+        let to_sqlite = csv_reader_to_sqlite(reader, file_path.to_string()).await;
+        log_error!(to_sqlite);
+    }
 }

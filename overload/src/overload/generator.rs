@@ -216,6 +216,7 @@ impl From<Vec<HttpReq>> for RequestList {
     }
 }
 
+/// Test request with file data
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RequestFile {
     pub(crate) file_name: String,

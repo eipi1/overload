@@ -42,6 +42,9 @@ features = ["serde"]
 [dependencies.lazy_static]
 version = "1.4"
 
+[dependencies.futures]
+version = "0.3"
+
 [dependencies.futures-core]
 version = "0.3"
 
@@ -60,7 +63,7 @@ version = "0.1"
 
 [dependencies.tokio-util]
 version = "0.7"
-features = ["io"]
+features = ["io", "compat"]
 
 [dependencies.native-tls]
 version = "0.2"
@@ -169,6 +172,12 @@ version = "0.6"
 
 [dev-dependencies.assert-json-diff]
 version = "2.0"
+
+[dev-dependencies.sha2]
+version = "0.10"
+
+[dev-dependencies.serial_test]
+version = "0.9"
 
 [features]
 default = ["debug"]
