@@ -38,8 +38,7 @@ use tracing::{error, info, trace};
 type ConnectionCount = u32;
 type QPS = u32;
 
-const CYCLE_LENGTH_IN_MILLIS:i128 = 1_000; //1 seconds
-
+const CYCLE_LENGTH_IN_MILLIS: i128 = 1_000; //1 seconds
 
 #[allow(dead_code)]
 enum HttpRequestState {
@@ -222,7 +221,7 @@ pub async fn execute_request_generator(
 
     let mut prev_connection_count = 0;
 
-    let mut time_offset:i128=0;
+    let mut time_offset: i128 = 0;
     while let Some((qps, requests, connection_count)) = stream.next().await {
         let start_of_cycle = Instant::now();
         let stop = should_stop(&job_id).await;
@@ -242,7 +241,7 @@ pub async fn execute_request_generator(
         if time_offset > 0 {
             //the previous cycle took longer than cycle duration
             // use less time for next one
-            corrected_with_offset=start_of_cycle-Duration::from_millis(time_offset as u64);
+            corrected_with_offset = start_of_cycle - Duration::from_millis(time_offset as u64);
         }
 
         match requests {
@@ -451,7 +450,6 @@ async fn send_multiple_requests(
     // let qps_per_req = count / n_req as u32;
     // let remainder = count % n_req as u32;
 
-
     let time_remaining =
         move || CYCLE_LENGTH_IN_MILLIS - start_of_cycle.elapsed().as_millis() as i128;
     let interval_between_requests = |remaining_requests: QPS| {
@@ -480,13 +478,16 @@ async fn send_multiple_requests(
     };
     let mut sleep_time = interval_between_requests(count) * bundle_size as f32;
     //reserve 10% of the time for the internal logic
-    sleep_time = (sleep_time-(sleep_time*0.1)).floor();
+    sleep_time = (sleep_time - (sleep_time * 0.1)).floor();
 
     let mut req_iterator = requests.iter().cycle();
     loop {
         let remaining_t = time_remaining();
         if remaining_t < 0 {
-            debug!("stopping the cycle. remaining time: {}, remaining request: {}", remaining_t, total_remaining_qps);
+            debug!(
+                "stopping the cycle. remaining time: {}, remaining request: {}",
+                remaining_t, total_remaining_qps
+            );
             break; // give up
         }
         let requested_connection = min(bundle_size, total_remaining_qps);
@@ -529,7 +530,10 @@ async fn send_multiple_requests(
         }
         total_remaining_qps -= available_connection as u32;
         if time_remaining() < 0 {
-            debug!("stopping the cycle after sending req. remaining time: {}, remaining request: {}", remaining_t, total_remaining_qps);
+            debug!(
+                "stopping the cycle after sending req. remaining time: {}, remaining request: {}",
+                remaining_t, total_remaining_qps
+            );
             break; // give up
         }
         if total_remaining_qps == 0 {

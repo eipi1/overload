@@ -191,7 +191,7 @@ mod standalone_mode_tests {
             url.host().unwrap().to_string(),
             url.port().unwrap(),
             3,
-            "/list/data"
+            "/list/data",
         ))
         .await
         .unwrap();
@@ -227,10 +227,10 @@ mod standalone_mode_tests {
             url.host().unwrap().to_string(),
             url.port().unwrap(),
             1,
-            "/list/data2"
+            "/list/data2",
         ))
-            .await
-            .unwrap();
+        .await
+        .unwrap();
         println!("{:?}", response);
         let status = response.status();
         println!("body: {:?}", hyper::body::to_bytes(response).await.unwrap());
@@ -245,7 +245,12 @@ mod standalone_mode_tests {
         mock.delete_async().await;
     }
 
-    fn json_request_list_constant(host: String, port: u16, connection_count: u16, url: &str) -> String {
+    fn json_request_list_constant(
+        host: String,
+        port: u16,
+        connection_count: u16,
+        url: &str,
+    ) -> String {
         let req = json!(
         {
             "duration": 5,

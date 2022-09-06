@@ -183,7 +183,7 @@ impl QueuePool {
     ) {
         let handle = connection.request_handle.ready().await;
         if let Err(e) = handle {
-            warn!("error - connection not ready, error: {:?}",e);
+            warn!("error - connection not ready, error: {:?}", e);
             connection.broken = true;
         }
         return_pool.write().await.push(connection)

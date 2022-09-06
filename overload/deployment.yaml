@@ -32,6 +32,15 @@ spec:
               value: "overload"
             - name: K8S_NAMESPACE_NAME
               value: "default"
+            - name: RUST_LOG
+              value: info
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "250m"
+            limits:
+              memory: "1024Mi"
+              cpu: "2000m"
 ---
 apiVersion: v1
 kind: Service

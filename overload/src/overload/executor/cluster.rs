@@ -2,7 +2,7 @@
 #![allow(dead_code)]
 
 use super::HttpReq;
-use crate::executor::{ConnectionCount, QPS, set_job_status, should_stop};
+use crate::executor::{set_job_status, should_stop, ConnectionCount, QPS};
 use crate::generator::{request_generator_stream, ArraySpec, RequestGenerator, Target};
 use crate::http_util::request::{ConcurrentConnectionRateSpec, RateSpec, RequestSpecEnum};
 use crate::{ErrorCode, JobStatus};
@@ -16,7 +16,6 @@ use std::collections::HashSet;
 use std::convert::TryInto;
 use std::sync::Arc;
 use tokio_stream::StreamExt;
-
 
 /// Run tests in cluster mode.
 /// Requires `buckets` specification as it needs to be forwarded to

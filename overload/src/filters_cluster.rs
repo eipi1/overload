@@ -413,11 +413,13 @@ mod cluster_test {
     use async_trait::async_trait;
     use bytes::Buf;
     use cluster_mode::Cluster;
+    use csv_async::AsyncReaderBuilder;
     use http::Request;
     use httpmock::Method::POST;
     use hyper::body::to_bytes;
     use hyper::Body;
     use log::info;
+    use overload::http_util::csv_reader_to_sqlite;
     use overload::{JobStatus, PATH_REQUEST_DATA_FILE_DOWNLOAD};
     use regex::Regex;
     use rust_cloud_discovery::DiscoveryClient;
@@ -428,13 +430,11 @@ mod cluster_test {
     use std::str::FromStr;
     use std::sync::Arc;
     use std::time::Duration;
-    use csv_async::AsyncReaderBuilder;
     use tokio::sync::oneshot::Sender;
     use tokio::task::JoinHandle;
     use tracing::trace;
     use uuid::Uuid;
     use warp::Filter;
-    use overload::http_util::csv_reader_to_sqlite;
 
     fn start_warp_with_route(
         route: impl Filter<Extract = impl warp::Reply, Error = warp::Rejection>

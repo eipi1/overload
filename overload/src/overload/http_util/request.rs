@@ -1,10 +1,10 @@
 #![allow(clippy::upper_case_acronyms)]
 
-use crate::generator::{Elastic, Target};
 use crate::generator::{
-    ArraySpec, ConstantRate, Linear, RandomDataRequest, RateScheme, RequestFile,
-    RequestGenerator, RequestList, RequestProvider,
+    ArraySpec, ConstantRate, Linear, RandomDataRequest, RateScheme, RequestFile, RequestGenerator,
+    RequestList, RequestProvider,
 };
+use crate::generator::{Elastic, Target};
 use crate::http_util::GenericError;
 use crate::{data_dir, fmt, HttpReq};
 use serde::{Deserialize, Serialize};
