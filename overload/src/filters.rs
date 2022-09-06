@@ -106,6 +106,7 @@ pub async fn execute(request: Request) -> Result<impl Reply, Infallible> {
 mod standalone_mode_tests {
     use crate::filters_common::test_common::*;
     use httpmock::prelude::*;
+    use log::trace;
     use regex::Regex;
     use serde_json::json;
     use tokio::sync::OnceCell;
@@ -189,6 +190,8 @@ mod standalone_mode_tests {
         let response = send_request(json_request_list_constant(
             url.host().unwrap().to_string(),
             url.port().unwrap(),
+            3,
+            "/list/data"
         ))
         .await
         .unwrap();
@@ -205,7 +208,44 @@ mod standalone_mode_tests {
         mock.delete_async().await;
     }
 
-    fn json_request_list_constant(host: String, port: u16) -> String {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_request_list_constant_with_connection_lt_qps() {
+        setup();
+        let (_, _, _) = ASYNC_ONCE.get_or_init(init_env).await;
+
+        let (mock_server, url) = ASYNC_ONCE_HTTP_MOCK.get_or_init(init_http_mock).await;
+
+        let mock = mock_server.mock(|when, then| {
+            when.method(GET)
+                .path_matches(Regex::new(r"^/list/data2$").unwrap());
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(r#"{"hello": "list"}"#);
+        });
+
+        let response = send_request(json_request_list_constant(
+            url.host().unwrap().to_string(),
+            url.port().unwrap(),
+            1,
+            "/list/data2"
+        ))
+            .await
+            .unwrap();
+        println!("{:?}", response);
+        let status = response.status();
+        println!("body: {:?}", hyper::body::to_bytes(response).await.unwrap());
+        assert_eq!(status, 200);
+        tokio::time::sleep(tokio::time::Duration::from_millis(990)).await;
+        for i in 1..=5 {
+            // each seconds we expect mock to receive 3 request
+            assert_eq!(i * 3, mock.hits_async().await);
+            trace!("mock hits: {}", mock.hits_async().await);
+            tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+        }
+        mock.delete_async().await;
+    }
+
+    fn json_request_list_constant(host: String, port: u16, connection_count: u16, url: &str) -> String {
         let req = json!(
         {
             "duration": 5,
@@ -214,7 +254,7 @@ mod standalone_mode_tests {
                     "data": [
                       {
                         "method": "GET",
-                        "url": "/list/data"
+                        "url": url
                       }
                     ]
                 }
@@ -231,7 +271,7 @@ mod standalone_mode_tests {
             },
             "concurrentConnection": {
                 "ConstantRate": {
-                    "countPerSec": 6
+                    "countPerSec": connection_count
                   }
             }
           }

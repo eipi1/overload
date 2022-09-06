@@ -147,6 +147,17 @@ impl RateScheme for Bounded {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct Elastic {
+    max: u32,
+}
+
+impl RateScheme for Elastic {
+    fn next(&self, _nth: u32, _last_qps: Option<u32>) -> u32 {
+        0
+    }
+}
+
 #[async_trait]
 pub trait RequestProvider {
     /// Ask for `n` requests, be it chosen randomly or in any other way, entirely depends on implementations.
@@ -449,7 +460,7 @@ impl RequestGenerator {
         let time_scale: u8 = 1;
         let total = duration * time_scale as u32;
         let concurrent_connection =
-            concurrent_connection.unwrap_or_else(|| Box::new(Bounded::default()));
+            concurrent_connection.unwrap_or_else(|| Box::new(Elastic::default()));
         RequestGenerator {
             duration,
             time_scale,
@@ -692,18 +703,18 @@ pub(crate) mod test {
         let arg = generator.next().await.unwrap();
         assert_eq!(arg.0, 3);
         assert_eq!(arg.1.unwrap().len(), 3);
-        assert_eq!(arg.2, 500);
+        assert_eq!(arg.2, 0);
         tokio::time::pause();
         let arg = generator.next().await.unwrap();
         tokio::time::advance(Duration::from_millis(1001)).await;
         assert_eq!(arg.0, 3);
         assert_eq!(arg.1.unwrap().len(), 3);
-        assert_eq!(arg.2, 500);
+        assert_eq!(arg.2, 0);
         let arg = generator.next().await.unwrap();
         tokio::time::advance(Duration::from_millis(1001)).await;
         assert_eq!(arg.0, 3);
         assert_eq!(arg.1.unwrap().len(), 3);
-        assert_eq!(arg.2, 500);
+        assert_eq!(arg.2, 0);
         let arg = generator.next().await;
         tokio::time::advance(Duration::from_millis(1001)).await;
         assert!(arg.is_none())

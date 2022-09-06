@@ -16,7 +16,7 @@ spec:
         app: overload
     spec:
       containers:
-        - image: ghcr.io/eipi1/overload:cluster-latest-snapshot
+        - image: 10.1.64.1:5000/overload-cluster
           imagePullPolicy: "Always"
           name: overload
           ports:

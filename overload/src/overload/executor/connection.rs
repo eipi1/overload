@@ -1,22 +1,203 @@
 use async_trait::async_trait;
 use bb8::ManageConnection;
 use bb8::PoolCustomizer;
+use futures_util::{stream::FuturesUnordered, StreamExt};
 use hyper::client::conn;
 use hyper::client::conn::{Connection, SendRequest};
 use hyper::Body;
 use log::{debug, trace, warn};
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
 use tokio::net::TcpStream;
+use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 use tokio::time::{timeout, Duration};
 use tower::ServiceExt;
 
+type SharedMutableVec = Arc<RwLock<Vec<HttpConnection>>>;
+type InteriorMutable = SharedMutableVec;
+
+pub(crate) struct QueuePool {
+    pub(crate) max_connection: i64,
+    pub(crate) connections: VecDeque<HttpConnection>,
+    pub(crate) recyclable_connections: SharedMutableVec,
+    pub(crate) new_connections: SharedMutableVec,
+    _total_connection: AtomicU32,
+    _new_connection: AtomicU32,
+    _recyclable_connection: AtomicU32,
+    host_port: String,
+    // An elastic pools adds connections when required.
+    // the pool starts with max_connection =0 and never changes.
+    // once it changes max_connection, it'll become non-elastic
+    elastic: bool,
+}
+
+impl QueuePool {
+    pub fn new(host_port: String) -> Self {
+        QueuePool {
+            max_connection: 0,
+            connections: VecDeque::new(),
+            recyclable_connections: Arc::new(RwLock::new(Vec::new())),
+            new_connections: Arc::new(RwLock::new(Vec::new())),
+            _total_connection: AtomicU32::new(0),
+            _new_connection: AtomicU32::new(0),
+            _recyclable_connection: AtomicU32::new(0),
+            host_port,
+            elastic: true,
+        }
+    }
+
+    pub fn set_connection_count(&mut self, connection_count: usize) {
+        trace!("setting pool size to {}", &connection_count);
+        if self.elastic && connection_count != self.max_connection as usize {
+            self.elastic = false; // make it non-elastic as max_connection has changed
+        }
+        if self.connections.len() > connection_count {
+            self.connections
+                .drain(0..(self.connections.len() - connection_count));
+        }
+        let connection_count = connection_count as i64;
+        let diff = connection_count - self.max_connection;
+        self.max_connection = connection_count;
+        let new_connections = self.new_connections.clone();
+        let recycled = self.recyclable_connections.clone();
+        let host_port = self.host_port.clone();
+        let resizer = QueuePool::resize_connection_pool(new_connections, recycled, host_port, diff);
+        tokio::spawn(resizer);
+    }
+
+    pub async fn get_connections(&mut self, count: u32) -> Vec<HttpConnection> {
+        trace!("request received for {} connections", count);
+        let broken = self
+            .claim_connections(self.recyclable_connections.clone())
+            .await;
+        self.claim_connections(self.new_connections.clone()).await;
+        if self.elastic {
+            let diff = self.connections.len() as i64 - count as i64;
+            if diff < 0 {
+                // need more connections
+                self.add_new_connection_mut(diff.abs());
+            }
+        }
+        if broken != 0 {
+            //refill broken connections
+            self.add_new_connection_mut(broken);
+        }
+        let mut vec = Vec::with_capacity(std::cmp::min(count as usize, self.connections.len()));
+        for _ in 0..count {
+            if let Some(con) = self.connections.pop_front() {
+                vec.push(con);
+            } else {
+                break;
+            }
+        }
+        vec
+    }
+
+    fn add_new_connection_mut(&mut self, count: i64) {
+        let new_connections = self.new_connections.clone();
+        let host_port = self.host_port.clone();
+        let conn_gen = Self::add_new_connection(new_connections, host_port, count);
+        tokio::spawn(conn_gen);
+    }
+
+    pub fn get_return_pool(&self) -> InteriorMutable {
+        self.recyclable_connections.clone()
+    }
+
+    /// Add or remove connections
+    async fn resize_connection_pool(
+        new_connections: SharedMutableVec,
+        recycle_connections: SharedMutableVec,
+        host_port: String,
+        diff: i64,
+    ) {
+        trace!("resizing pool to: {}", &diff);
+        if diff < 0 {
+            // remove connections from the pool
+            let diff = diff.unsigned_abs() as usize;
+            // try removing recycled connection first
+            let removed = QueuePool::resize_conn_container(recycle_connections, diff).await;
+            trace!("removed {} connections from recycled pool", &removed);
+            // didn't have enough connections in recycle_connections, try removing from new connection
+            if removed < diff {
+                let removed =
+                    QueuePool::resize_conn_container(new_connections, diff - removed).await;
+                trace!("removed {} connections from new connection pool", &removed);
+            }
+        } else {
+            // need to add new connections
+            Self::add_new_connection(new_connections, host_port, diff).await;
+        }
+    }
+
+    async fn add_new_connection(new_connections: SharedMutableVec, host_port: String, count: i64) {
+        let mut futures = FuturesUnordered::new();
+        for _ in 0..count {
+            let connection_future = open_connection(&host_port);
+            futures.push(connection_future);
+        }
+        let mut conn = vec![];
+        while let Some(connection) = futures.next().await {
+            match connection {
+                Some(connection) => conn.push(connection),
+                None => {}
+            }
+        }
+        debug!("Adding {} new connections", conn.len());
+        new_connections.write().await.append(&mut conn);
+    }
+
+    async fn resize_conn_container(container: SharedMutableVec, to_be_removed: usize) -> usize {
+        let mut write_guard = container.write().await;
+        let len = write_guard.len();
+        if len < to_be_removed {
+            write_guard.clear();
+            len
+        } else {
+            write_guard.truncate(len - to_be_removed);
+            to_be_removed
+        }
+    }
+    async fn claim_connections(&mut self, con_container: SharedMutableVec) -> i64 {
+        let mut write_guard = con_container.write().await;
+        let len = write_guard.len();
+        let drain = write_guard.drain(..);
+        self.connections.try_reserve(len).unwrap();
+        let mut broken = 0;
+        for conn in drain {
+            if conn.broken {
+                broken += 1;
+                continue;
+            }
+            self.connections.push_back(conn);
+        }
+        broken
+    }
+
+    #[inline]
+    pub(crate) async fn return_connection(
+        return_pool: &SharedMutableVec,
+        mut connection: HttpConnection,
+    ) {
+        let handle = connection.request_handle.ready().await;
+        if let Err(e) = handle {
+            warn!("error - connection not ready, error: {:?}",e);
+            connection.broken = true;
+        }
+        return_pool.write().await.push(connection)
+    }
+}
+
+#[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) struct ConcurrentConnectionCountManager {
     min_number_of_connection: u32,
     number_of_connection: AtomicU32,
 }
 
+#[allow(dead_code)]
 impl ConcurrentConnectionCountManager {
     pub fn new(conn_count: u32) -> ConcurrentConnectionCountManager {
         ConcurrentConnectionCountManager {
@@ -73,12 +254,14 @@ impl PoolCustomizer for ConcurrentConnectionCountManager {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) struct HttpConnectionPool {
     host: String,
     // total_conn: i16,
     // borrowed_conn: i16,
 }
 
+#[allow(dead_code)]
 impl HttpConnectionPool {
     /// host and port in format: `host-name:port`
     pub(crate) fn new(host_port: &str) -> HttpConnectionPool {
@@ -147,12 +330,16 @@ async fn open_connection(host_port: &str) -> Option<HttpConnection> {
                             eprintln!("Error in connection: {}", e);
                         }
                     });
-                    Some(HttpConnection {
+                    let mut connection = HttpConnection {
                         request_handle: result.0,
                         connection: None,
                         broken: false,
                         join_handle,
-                    })
+                    };
+                    match ready_connection(&mut connection).await {
+                        Ok(_) => Some(connection),
+                        Err(_) => None,
+                    }
                 }
                 Err(err) => {
                     warn!("failed handshaking with: {}, error: {}", host_port, err);
@@ -202,6 +389,7 @@ mod test {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_pool() {
         setup();
         let wire_mock = wiremock::MockServer::start().await;

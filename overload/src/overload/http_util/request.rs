@@ -1,8 +1,8 @@
 #![allow(clippy::upper_case_acronyms)]
 
-use crate::generator::Target;
+use crate::generator::{Elastic, Target};
 use crate::generator::{
-    ArraySpec, Bounded, ConstantRate, Linear, RandomDataRequest, RateScheme, RequestFile,
+    ArraySpec, ConstantRate, Linear, RandomDataRequest, RateScheme, RequestFile,
     RequestGenerator, RequestList, RequestProvider,
 };
 use crate::http_util::GenericError;
@@ -25,7 +25,8 @@ pub(crate) enum ConcurrentConnectionRateSpec {
     ConstantRate(ConstantRate),
     Linear(Linear),
     ArraySpec(ArraySpec),
-    Bounded(Bounded),
+    // Bounded(Bounded),
+    Elastic(Elastic),
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -87,7 +88,7 @@ impl Into<RequestGenerator> for Request {
                 ConcurrentConnectionRateSpec::ArraySpec(spec) => Box::new(spec),
                 ConcurrentConnectionRateSpec::ConstantRate(spec) => Box::new(spec),
                 ConcurrentConnectionRateSpec::Linear(spec) => Box::new(spec),
-                ConcurrentConnectionRateSpec::Bounded(spec) => Box::new(spec),
+                ConcurrentConnectionRateSpec::Elastic(spec) => Box::new(spec),
             };
             Some(rate_spec)
         } else {

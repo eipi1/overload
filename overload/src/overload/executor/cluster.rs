@@ -2,7 +2,7 @@
 #![allow(dead_code)]
 
 use super::HttpReq;
-use crate::executor::{set_job_status, should_stop};
+use crate::executor::{ConnectionCount, QPS, set_job_status, should_stop};
 use crate::generator::{request_generator_stream, ArraySpec, RequestGenerator, Target};
 use crate::http_util::request::{ConcurrentConnectionRateSpec, RateSpec, RequestSpecEnum};
 use crate::{ErrorCode, JobStatus};
@@ -17,8 +17,6 @@ use std::convert::TryInto;
 use std::sync::Arc;
 use tokio_stream::StreamExt;
 
-type ConnectionCount = u32;
-type QPS = u32;
 
 /// Run tests in cluster mode.
 /// Requires `buckets` specification as it needs to be forwarded to
@@ -150,12 +148,12 @@ pub async fn cluster_execute_request_generator(
                 break;
             }
         }
+        info!("primary - finished generating QPS");
+        set_job_status(&job_id, JobStatus::Completed).await;
     } else {
         error!("Node is in secondary mode.");
+        set_job_status(&job_id, JobStatus::Error(ErrorCode::SecondaryClusterNode)).await;
     }
-    info!("primary - finished generating QPS");
-    //todo drop connection pool
-    set_job_status(&job_id, JobStatus::Completed).await;
 }
 
 #[allow(clippy::too_many_arguments)]

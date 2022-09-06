@@ -16,6 +16,7 @@ use std::fmt::Display;
 use std::hash::{Hash, Hasher};
 use std::{env, fmt};
 
+pub const TEST_REQ_TIMEOUT: u8 = 30; // 30 sec hard timeout for requests to test target
 pub const DEFAULT_DATA_DIR: &str = "/tmp";
 pub const PATH_REQUEST_DATA_FILE_DOWNLOAD: &str = "/cluster/data-file";
 
@@ -112,6 +113,7 @@ pub enum ErrorCode {
     InactiveCluster,
     SqliteOpenFailed,
     PreparationFailed,
+    SecondaryClusterNode,
     Others,
 }
 
