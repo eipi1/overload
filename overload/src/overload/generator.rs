@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use futures_util::future::BoxFuture;
 use futures_util::stream::Stream;
 use http::Method;
-use log::trace;
+use log::{debug, trace};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -263,7 +263,7 @@ impl RequestProvider for RequestFile {
         if self.inner.is_none() {
             //open sqlite connection
             let sqlite_file = format!("sqlite://{}", &self.file_name);
-            trace!("Openning sqlite file at: {}", &sqlite_file);
+            debug!("Opening sqlite file at: {}", &sqlite_file);
             let mut connection = SqliteConnectOptions::from_str(sqlite_file.as_str())?
                 .read_only(true)
                 .connect()
@@ -847,6 +847,7 @@ pub(crate) mod test {
             let vec = request.get_n(2).await.unwrap();
             assert_ne!(0, vec.len());
         }
+        let _ = tokio::fs::remove_file("test-data.sqlite").await;
     }
 
     #[test]

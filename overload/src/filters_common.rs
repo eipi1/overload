@@ -1,16 +1,11 @@
 use http::header::CONTENT_TYPE;
 use http::{Response, StatusCode};
 use hyper::Body;
-use lazy_static::lazy_static;
 use overload::http_util::{GenericError, GenericResponse};
-use overload::metrics::MetricsFactory;
+use overload::METRICS_FACTORY;
 use prometheus::{Encoder, TextEncoder};
 use serde::Serialize;
 use warp::{reply, Filter};
-
-lazy_static! {
-    pub static ref METRICS_FACTORY: MetricsFactory = MetricsFactory::default();
-}
 
 pub fn prometheus_metric(
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {

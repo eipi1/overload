@@ -1,4 +1,5 @@
 #![allow(clippy::upper_case_acronyms)]
+#![allow(deprecated)]
 
 mod datagen;
 pub mod executor;
@@ -6,7 +7,9 @@ pub mod generator;
 pub mod http_util;
 pub mod metrics;
 
+use crate::metrics::MetricsFactory;
 use http::Method;
+use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqliteRow;
 use sqlx::Row;
@@ -14,14 +17,26 @@ use std::collections::HashMap;
 use std::convert::TryInto;
 use std::fmt::Display;
 use std::hash::{Hash, Hasher};
+use std::path::PathBuf;
 use std::{env, fmt};
 
 pub const TEST_REQ_TIMEOUT: u8 = 30; // 30 sec hard timeout for requests to test target
 pub const DEFAULT_DATA_DIR: &str = "/tmp";
 pub const PATH_REQUEST_DATA_FILE_DOWNLOAD: &str = "/cluster/data-file";
 
+lazy_static! {
+    pub static ref METRICS_FACTORY: MetricsFactory = MetricsFactory::default();
+}
+
+#[deprecated(note = "use data_dir_path")]
 pub fn data_dir() -> String {
     env::var("DATA_DIR").unwrap_or_else(|_| DEFAULT_DATA_DIR.to_string())
+}
+
+pub fn data_dir_path() -> PathBuf {
+    env::var("DATA_DIR")
+        .map(|env| PathBuf::from("/").join(env))
+        .unwrap_or_else(|_| PathBuf::from(DEFAULT_DATA_DIR))
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -149,12 +164,13 @@ pub mod test_utils {
     use csv_async::AsyncReaderBuilder;
 
     pub async fn generate_sqlite_file(file_path: &str) {
-        let csv_data = r#""url","method","body","headers"
-            "http://httpbin.org/anything/11","GET","","{}"
-            "http://httpbin.org/anything/13","GET","","{}"
-            "http://httpbin.org/anything","POST","{\"some\":\"random data\",\"second-key\":\"more data\"}","{\"Authorization\":\"Bearer 123\"}"
-            "http://httpbin.org/bearer","GET","","{\"Authorization\":\"Bearer 123\"}"
-            "#;
+        let csv_data = r#"
+"url","method","body","headers"
+"http://httpbin.org/anything/11","GET","","{}"
+"http://httpbin.org/anything/13","GET","","{}"
+"http://httpbin.org/anything","POST","{\"some\":\"random data\",\"second-key\":\"more data\"}","{\"Authorization\":\"Bearer 123\"}"
+"http://httpbin.org/bearer","GET","","{\"Authorization\":\"Bearer 123\"}"
+"#;
         let reader = AsyncReaderBuilder::new()
             .escape(Some(b'\\'))
             .create_deserializer(csv_data.as_bytes());

@@ -1,13 +1,18 @@
 use crate::executor::cluster::cluster_execute_request_generator;
 use crate::executor::execute_request_generator;
 use crate::http_util::request::{JobStatusQueryParams, Request, RequestSpecEnum};
-use crate::http_util::{job_id, GenericError, GenericResponse, PATH_JOB_STATUS, PATH_STOP_JOB};
+use crate::http_util::{
+    csv_stream_to_sqlite, job_id, GenericError, GenericResponse, PATH_FILE_UPLOAD, PATH_JOB_STATUS,
+    PATH_STOP_JOB,
+};
 use crate::metrics::MetricsFactory;
-use crate::{data_dir, ErrorCode, JobStatus, Response, PATH_REQUEST_DATA_FILE_DOWNLOAD};
+use crate::{data_dir_path, ErrorCode, JobStatus, Response, PATH_REQUEST_DATA_FILE_DOWNLOAD};
 use bytes::Buf;
 use cluster_mode::{Cluster, RestClusterNode};
 use futures_core::future::BoxFuture;
-use futures_util::{FutureExt, TryStreamExt};
+use futures_core::Stream;
+use futures_util::{FutureExt, StreamExt, TryStreamExt};
+use http::header::CONTENT_LENGTH;
 use hyper::client::HttpConnector;
 use hyper::{Body, Client};
 use log::{error, trace};
@@ -15,9 +20,11 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::collections::HashSet;
 use std::io;
-use std::path::Path;
 use std::sync::Arc;
 use tokio::fs::File;
+use tokio::io::AsyncWriteExt;
+use tracing::debug;
+use url::Url;
 
 type GenericResult<T> = Result<GenericResponse<T>, GenericError>;
 
@@ -197,26 +204,29 @@ async fn download_request_file_from_primary(
     filename: String,
     cluster: Arc<Cluster>,
 ) -> Result<(), anyhow::Error> {
-    let file_path = format!("{}/{}", data_dir(), &filename);
-    if let Ok(true) = Path::new(&file_path).try_exists() {
-        trace!("file {} already exists", &file_path);
+    let file_path = data_dir_path().join(&filename);
+    debug!(
+        "[download_request_file_from_primary] - downloading file {:?} from primary",
+        &file_path
+    );
+    if let Ok(true) = file_path.try_exists() {
+        debug!("file {:?} already exists", &file_path);
         return Ok(());
     }
     if let Some(primaries) = cluster.primaries().await {
         if let Some(node) = primaries.iter().next() {
-            let mut data_file_destination = File::create(&filename).await.map_err(|e| {
-                error!("{:?}", e);
-                anyhow::anyhow!("filed to create file {}", filename)
+            let mut data_file_destination = File::create(&file_path).await.map_err(|e| {
+                error!("[download_request_file_from_primary] - error: {:?}", e);
+                anyhow::anyhow!("filed to create file {:?}", &file_path)
             })?;
             let primary_uri = node
                 .service_instance()
                 .uri()
                 .as_ref()
                 .ok_or_else(|| anyhow::anyhow!("Invalid ServiceInstance URI"))?;
-            trace!(
-                "downloading file {} from primary: {}",
-                &filename,
-                &primary_uri
+            debug!(
+                "downloading file {:?} from primary: {}",
+                &filename, &primary_uri
             );
             download_file_from_url(primary_uri, &filename, &mut data_file_destination).await?
         }
@@ -230,6 +240,7 @@ pub(crate) async fn download_file_from_url(
     data_file_destination: &mut File,
 ) -> Result<(), anyhow::Error> {
     let url = format!("{}{}/{}", &uri, PATH_REQUEST_DATA_FILE_DOWNLOAD, filename);
+    debug!("[download_file_from_url] - downloading file from {}", &url);
     let req = hyper::Request::builder()
         .uri(&url)
         .method("GET")
@@ -249,7 +260,64 @@ pub(crate) async fn download_file_from_url(
             .into_async_read();
     let mut tokio_async_read = to_tokio_async_read(futures_io_async_read);
     tokio::io::copy(&mut tokio_async_read, data_file_destination).await?;
+    let _ = data_file_destination.flush().await;
     Ok(())
+}
+
+pub async fn handle_file_upload<S, B>(
+    data: S,
+    data_dir: &str,
+    cluster: Arc<Cluster>,
+    content_len: u64,
+) -> GenericResult<String>
+where
+    S: Stream<Item = Result<B, warp::Error>> + Unpin + Send + Sync + 'static,
+    B: Buf + Send + Sync,
+{
+    if !cluster.is_active().await {
+        Err(inactive_cluster_error())
+    } else if cluster.is_primary().await {
+        debug!("[handle_file_upload] primary node, saving the file");
+        csv_stream_to_sqlite(data, data_dir).await
+    } else {
+        // forward request to primary
+        let client = Client::new();
+        if let Ok(uri) = primary_uri(&cluster.primaries().await).await {
+            let url = Url::parse(uri)
+                .and_then(|url| url.join(PATH_FILE_UPLOAD))
+                .unwrap();
+            debug!(
+                "[handle_file_upload] secondary node, uploading file to {}",
+                &url
+            );
+            let stream = convert_stream(data);
+            let request = hyper::Request::builder()
+                .uri(url.to_string())
+                .method("POST")
+                .header(CONTENT_LENGTH, content_len)
+                .body(Body::from(stream))?;
+            let resp = client.request(request).await?;
+            let bytes = hyper::body::to_bytes(resp.into_body()).await?.reader();
+            let resp: GenericResponse<String> = serde_json::from_reader(bytes)?;
+            Ok(resp)
+        } else {
+            Err(GenericError::internal_500("Unknown error"))
+        }
+    }
+}
+
+fn convert_stream<S, B>(
+    data: S,
+) -> Box<dyn Stream<Item = Result<bytes::Bytes, Box<(dyn std::error::Error + Send + Sync)>>> + Send>
+where
+    S: Stream<Item = Result<B, warp::Error>> + Unpin + Send + Sync + 'static,
+    B: Buf + Send + Sync,
+{
+    let stream = data.map(move |x| {
+        x.map(|mut y| y.copy_to_bytes(y.remaining()))
+            .map_err(|e| Box::new(e) as _)
+    });
+    Box::new(stream)
 }
 
 fn inactive_cluster_error() -> GenericError {
@@ -273,6 +341,7 @@ mod test {
     use sha2::Digest;
     use std::sync::Once;
     use tokio::fs::File;
+    use tokio::io::AsyncWriteExt;
     use tracing::info;
 
     static ONCE: Once = Once::new();
@@ -298,6 +367,14 @@ mod test {
         );
         info!("mock uri: {}", &mock_uri);
 
+        let mut file = File::open("download_file_from_url_requests.sqlite")
+            .await
+            .unwrap();
+        let mut contents = vec![];
+        use tokio::io::AsyncReadExt;
+        file.read_to_end(&mut contents).await.unwrap();
+        println!("len = {}", contents.len());
+
         let _ = mock_server.mock(|when, then| {
             when.method(httpmock::Method::GET).path(mock_uri);
             then.status(200)
@@ -305,8 +382,6 @@ mod test {
                 .header("Connection", "keep-alive")
                 .body_from_file("download_file_from_url_requests.sqlite");
         });
-
-        let _ = tokio::fs::remove_file("requests.downloaded.sqlite").await;
 
         let mut data_file_destination =
             File::create("download_file_from_url_requests.downloaded.sqlite")
@@ -319,6 +394,7 @@ mod test {
         )
         .await
         .unwrap();
+        data_file_destination.flush().await.unwrap();
 
         let mut file = std::fs::File::open("download_file_from_url_requests.sqlite").unwrap();
         let mut sha256 = sha2::Sha256::new();
@@ -330,6 +406,11 @@ mod test {
         let mut sha256 = sha2::Sha256::new();
         std::io::copy(&mut file, &mut sha256).unwrap();
         let hash_2 = sha256.finalize();
+
+        let _ = tokio::fs::remove_file("download_file_from_url_requests.sqlite").await;
+        let _ = tokio::fs::remove_file("download_file_from_url_requests.downloaded.sqlite").await;
+        println!("{:?}", &hash_1);
+        println!("{:?}", &hash_2);
 
         assert_eq!(hash_1, hash_2);
     }

@@ -5,12 +5,11 @@ pub mod cluster;
 pub mod connection;
 
 use super::HttpReq;
+use crate::executor::connection::HttpConnection;
 use crate::executor::connection::QueuePool;
-use crate::executor::connection::{HttpConnection, HttpConnectionPool};
 use crate::generator::{request_generator_stream, RequestGenerator};
 use crate::metrics::Metrics;
-use crate::{ErrorCode, JobStatus};
-use bb8::Pool;
+use crate::{ErrorCode, JobStatus, METRICS_FACTORY};
 use bytes::Bytes;
 use futures_util::future::BoxFuture;
 use futures_util::stream::FuturesUnordered;
@@ -34,6 +33,11 @@ use tokio::sync::RwLock;
 use tokio::time::sleep;
 use tokio_stream::StreamExt;
 use tracing::{error, info, trace};
+
+#[cfg(feature = "cluster")]
+use tokio::sync::oneshot::{channel, Receiver};
+#[cfg(feature = "cluster")]
+use tokio::time::timeout;
 
 type ConnectionCount = u32;
 type QPS = u32;
@@ -148,13 +152,44 @@ impl Future for HttpRequestFuture<'_> {
 
 lazy_static! {
     pub static ref JOB_STATUS: RwLock<BTreeMap<String, JobStatus>> = RwLock::new(BTreeMap::new());
+}
+
+#[cfg(feature = "cluster")]
+lazy_static! {
     //in cluster mode, secondary nodes receive workloads in small requests and new pools are created everytime.
     //That'll lead to inconsistent number of connections. To avoid that, use global pool collection as hack.
     //Need to find a better way to divide workloads to secondaries, maybe using websocket?
-    pub(crate) static ref CONNECTION_POOLS: RwLock<HashMap<String, Arc<Pool<HttpConnectionPool>>>> = RwLock::new(HashMap::new());
+    pub(crate) static ref CONNECTION_POOLS: RwLock<HashMap<String, QueuePool>> = RwLock::new(HashMap::new());
+    pub(crate) static ref CONNECTION_POOLS_USAGE_LISTENER: RwLock<HashMap<String, Receiver<()>>> = RwLock::new(HashMap::new());
 }
 
 pub async fn init() {
+    #[cfg(feature = "cluster")]
+    tokio::spawn(async {
+        //If the pool hasn't been used for 30 second, drop it
+        let mut interval = tokio::time::interval(Duration::from_secs(15));
+        loop {
+            interval.tick().await;
+            let removable = {
+                CONNECTION_POOLS
+                    .read()
+                    .await
+                    .iter()
+                    .filter(|v| v.1.last_use.elapsed() > Duration::from_secs(30))
+                    .map(|v| v.0.clone())
+                    .collect::<Vec<String>>()
+            };
+            for job_id in removable {
+                CONNECTION_POOLS.write().await.remove(&job_id);
+                METRICS_FACTORY.remove_metrics(&job_id).await;
+                CONNECTION_POOLS_USAGE_LISTENER
+                    .write()
+                    .await
+                    .remove(&job_id);
+            }
+        }
+    });
+
     //start JOB_STATUS clean up task
     let mut interval = tokio::time::interval(Duration::from_secs(1800));
     loop {
@@ -179,20 +214,6 @@ pub async fn init() {
                 write_guard.remove(&id);
             }
         }
-
-        //remove unused pool
-        {
-            let mut write_guard = CONNECTION_POOLS.write().await;
-            // for pool in read_guard.iter() {
-
-            // }
-            write_guard.retain(|_, pool| {
-                let state = pool.state();
-                let remove = state.connections == state.idle_connections;
-                trace!("removing pool: {}", remove);
-                remove
-            })
-        }
     }
 }
 
@@ -212,28 +233,89 @@ pub async fn execute_request_generator(
 
     let host_port = format!("{}:{}", target.host, target.port);
 
-    let mut queue_pool = get_queue_pool(host_port.clone(), &job_id).await;
+    #[cfg(not(feature = "cluster"))]
+    let mut queue_pool = get_new_queue_pool(host_port.clone()).await;
+    #[cfg(feature = "cluster")]
+    let mut queue_pool = {
+        //there's a possibility that pool already exists for this job,
+        // but didn't finish the previous batch and pool hasn't returned to CONNECTION_POOLS
+        // so we need to try a few times
+
+        let pool_usage_notification_rx = {
+            CONNECTION_POOLS_USAGE_LISTENER
+                .write()
+                .await
+                .remove(&job_id)
+        };
+        if let Some(rx) = pool_usage_notification_rx {
+            let mut rx = rx;
+            let result = timeout(Duration::from_millis(9_700), async {
+                loop {
+                    // this loop isn't necessary. added to breakdown time only for debugging purpose
+                    if let Ok(notification) = timeout(Duration::from_millis(100), &mut rx).await {
+                        match notification {
+                            Ok(_) => break Ok(()),
+                            Err(e) => {
+                                error!("Error from notification receiver: {}", e);
+                                break Err(());
+                            }
+                        }
+                    } else {
+                        debug!("pool not found. trying again");
+                    }
+                }
+            })
+            .await;
+            if result.is_err() {
+                error!("pool not found within limit, no request will be sent, returning");
+                //return tx back to container
+                CONNECTION_POOLS_USAGE_LISTENER
+                    .write()
+                    .await
+                    .insert(job_id.clone(), rx);
+                return;
+            }
+            // if received notification
+            get_existing_queue_pool(&job_id).await.unwrap()
+        } else {
+            get_new_queue_pool(host_port.clone()).await
+        }
+    };
 
     {
         let mut write_guard = JOB_STATUS.write().await;
         write_guard.insert(job_id.clone(), JobStatus::InProgress);
     }
+    #[cfg(feature = "cluster")]
+    let tx = {
+        let (tx, rx) = channel::<()>();
+        CONNECTION_POOLS_USAGE_LISTENER
+            .write()
+            .await
+            .insert(job_id.clone(), rx);
+        tx
+    };
 
     let mut prev_connection_count = 0;
 
+    debug!("[{}] - Starting request generation...", &job_id);
     let mut time_offset: i128 = 0;
     while let Some((qps, requests, connection_count)) = stream.next().await {
+        debug!("[{}] - starting a cycle", &job_id);
         let start_of_cycle = Instant::now();
         let stop = should_stop(&job_id).await;
         if stop {
-            delete_pool(&job_id).await;
             break;
         }
         if prev_connection_count != connection_count {
             // customizer.update(connection_count);
-            queue_pool.set_connection_count(connection_count as usize);
+            queue_pool
+                .set_connection_count(connection_count as usize, &metrics)
+                .await;
+            metrics.pool_size(connection_count as f64);
             prev_connection_count = connection_count;
         }
+        queue_pool.last_use = Instant::now();
 
         // let state = pool.state();
         // metrics.pool_state((state.connections, state.idle_connections));
@@ -271,10 +353,23 @@ pub async fn execute_request_generator(
             }
         };
         time_offset = start_of_cycle.elapsed().as_millis() as i128 - CYCLE_LENGTH_IN_MILLIS;
-        debug!("time offset: {}", time_offset);
+        debug!("[{}] - time offset in the cycle: {}", &job_id, time_offset);
     }
-    delete_pool(&job_id).await;
+
     set_job_status(&job_id, JobStatus::Completed).await;
+    #[cfg(feature = "cluster")]
+    {
+        CONNECTION_POOLS
+            .write()
+            .await
+            .insert(job_id.clone(), queue_pool);
+        let _ = tx.send(());
+    }
+    #[cfg(not(feature = "cluster"))]
+    {
+        METRICS_FACTORY.remove_metrics(&job_id).await;
+    }
+    debug!("[{}] - finished request generation", &job_id);
 }
 
 async fn should_stop(job_id: &str) -> bool {
@@ -299,72 +394,6 @@ async fn set_job_status(job_id: &str, new_status: JobStatus) {
         error!("Job Status should be present")
     }
 }
-
-/*
-#[allow(dead_code)]
-async fn send_requests(
-    req: HttpReq,
-    pool: Arc<Pool<HttpConnectionPool>>,
-    count: i32,
-    job_id: String,
-    metrics: Arc<Metrics>,
-    conn_return_pool: Arc<RwLock<Vec<HttpConnection>>>,
-    mut connections: Vec<HttpConnection>,
-) {
-    let body = if let Some(body) = req.body {
-        Bytes::from(body)
-    } else {
-        Bytes::new()
-    };
-    let mut request_futures = FuturesUnordered::new();
-    for _ in 1..=count {
-        //todo remove unwrap
-        let mut request = Request::builder()
-            .uri(req.url.as_str())
-            .method(req.method.clone());
-        let headers = request.headers_mut().unwrap();
-        let _host_header_added = false;
-        for (k, v) in req.headers.iter() {
-            try_add_header(headers, k, v);
-            // if let Some(header_name) =  try_add_header(headers, k, v) {
-            //     if header_name == http::header::HOST {
-            //         host_header_added = true;
-            //     }
-            // }
-        }
-        let request = request.body(body.clone().into()).unwrap();
-        trace!("sending request: {:?}", &request.uri());
-        match connections.pop() {
-            Some(mut con) => {
-                let request = con.request_handle.send_request(request);
-                request_futures.push(HttpRequestFuture {
-                    state: HttpRequestState::INIT,
-                    timer: None,
-                    job_id: job_id.clone(),
-                    request: Pin::new(Box::new(request)),
-                    body: None,
-                    status: None,
-                    metrics: &metrics,
-                    connection: ReturnableConnection::Connection(con),
-                });
-            }
-            None => {
-                warn!("error while getting connection from pool");
-                continue;
-            }
-        }
-    }
-    while let Some(conn) = request_futures.next().await {
-        match conn {
-            ReturnableConnection::Connection(connection) => {
-                // conn_return_pool.write().await.push(connection);
-                QueuePool::return_connection(&conn_return_pool, connection).await;
-            }
-            ReturnableConnection::PlaceHolder => {}
-        }
-    }
-}
- */
 
 async fn send_single_requests(
     req: HttpReq,
@@ -474,7 +503,7 @@ async fn send_multiple_requests(
         //elastic pool
         REQUEST_BUNDLE_SIZE
     } else {
-        min(connection_count, REQUEST_BUNDLE_SIZE)
+        min(count, min(connection_count, REQUEST_BUNDLE_SIZE))
     };
     let mut sleep_time = interval_between_requests(count) * bundle_size as f32;
     //reserve 10% of the time for the internal logic
@@ -491,16 +520,24 @@ async fn send_multiple_requests(
             break; // give up
         }
         let requested_connection = min(bundle_size, total_remaining_qps);
-        let mut connections = queue_pool.get_connections(requested_connection).await;
+        let mut connections = queue_pool
+            .get_connections(requested_connection, &metrics)
+            .await;
         let available_connection = connections.len();
         debug!("connection requested:{}, available connection: {}, request remaining: {}, remaining duration: {}, sleep duration: {}",
             requested_connection, available_connection, total_remaining_qps, remaining_t, sleep_time);
-        if available_connection < 1 {
-            sleep(Duration::from_millis(10)).await; //retry every 10 ms
-                                                    //adjust sleep time
-            sleep_time = (interval_between_requests(count) * bundle_size as f32).floor();
+        if available_connection < requested_connection as usize {
+            if available_connection < 1 {
+                //adjust sleep time
+                sleep(Duration::from_millis(10)).await; //retry every 10 ms
+                sleep_time =
+                    (interval_between_requests(total_remaining_qps) * bundle_size as f32).floor();
+                continue;
+            }
+            //adjust sleep time
+            sleep_time =
+                (interval_between_requests(total_remaining_qps) * bundle_size as f32).floor();
             debug!("resetting sleep time: after: {}", sleep_time);
-            continue;
         }
 
         {
@@ -524,7 +561,7 @@ async fn send_multiple_requests(
                     })
                     .collect();
                 while let Some(connection) = requests.next().await {
-                    QueuePool::return_connection(&rp, connection).await;
+                    QueuePool::return_connection(&rp, connection, &m).await;
                 }
             });
         }
@@ -542,114 +579,6 @@ async fn send_multiple_requests(
         }
         sleep(Duration::from_millis(sleep_time as u64)).await;
     }
-
-    /*
-    // handle reminder first so that we can drain the requests later
-    if remainder > 0 {
-        //todo 0 is getting preference. Choosing random index instead of 0 should be better
-        if let Some(req) = requests.get(0) {
-            let mut to_be_sent = remainder;
-            loop {
-                let conn_count = if connection_count == 0 {
-                    to_be_sent
-                } else {
-                    min(to_be_sent, connection_count)
-                };
-                let connections = queue_pool.get_connections(conn_count).await;
-                let request_sent = connections.len() as u32;
-                if time_remaining() < 0 {
-                    // give up
-                    return;
-                }
-                if request_sent == 0 {
-                    sleep(Duration::from_millis(10)).await; //retry every 10 ms
-                    continue;
-                }
-                tokio::spawn(send_requests(
-                    req.clone(),
-                    pool.clone(),
-                    request_sent as i32,
-                    job_id.clone(),
-                    metrics.clone(),
-                    return_pool.clone(),
-                    connections,
-                ));
-                // total_remaining_qps -= request_sent;
-                to_be_sent -= request_sent;
-                // let between_requests = interval_between_requests(total_remaining_qps);
-                // let sleep_for = (between_requests * request_sent as f32).floor() as u64;
-                // Sep 04 02:39:40.932 TRACE overload::executor: sleeping for 18446744073709551615 ms after sending 3 request
-                // trace!(
-                //     "sleeping for {} ms after sending {} request from reminder, between requests: {}",
-                //     sleep_for,
-                //     request_sent, between_requests
-                // );
-                // sleep(Duration::from_millis(sleep_for)).await;
-                if to_be_sent < 1 {
-                    break;
-                }
-            }
-        }
-    }
-    // let mut first=true;
-    // let request_interval = interval_between_requests(count);
-    // let iteration_required = count.div_ceil(connection_count);
-    // let sleep_between_iteration = (request_interval*iteration_required as f32).floor() as u64;
-    let mut requests = requests;
-    if qps_per_req > 0 {
-        let drain = requests.drain(..);
-        for req in drain {
-            let mut to_be_sent = qps_per_req;
-            loop {
-                let conn_count = if connection_count == 0 {
-                    to_be_sent
-                } else {
-                    min(to_be_sent, connection_count)
-                };
-                let connections = queue_pool
-                    .get_connections(min(qps_per_req, conn_count))
-                    .await;
-                let request_sent = connections.len() as u32;
-                if time_remaining() < 0 {
-                    return;
-                }
-                // let between_requests = interval_between_requests(count);
-                if request_sent == 0 {
-                    //sleep for 10ms or 10 requests duration and then continue
-                    // sleep(Duration::from_millis(min(
-                    //     10,
-                    //     (between_requests * 10.0).floor() as u64,
-                    // )))
-                    sleep(Duration::from_millis(10)).await; //retry every 10 ms
-                                                            //todo reset request interval due to time wasted in waiting for connection
-                    continue;
-                }
-                tokio::spawn(send_requests(
-                    req.clone(),
-                    pool.clone(),
-                    request_sent as i32,
-                    job_id.clone(),
-                    metrics.clone(),
-                    return_pool.clone(),
-                    connections,
-                ));
-                // trace!(
-                //     "sleeping for {} ms, remaining requests {}, between requests: {}",
-                //     sleep_between_iteration,
-                //     total_remaining_qps,
-                //     between_requests
-                // );
-                // sleep(Duration::from_millis(sleep_for)).await;
-                // sleep(Duration::from_millis(sleep_between_iteration)).await;
-                // total_remaining_qps -= request_sent;
-                to_be_sent -= request_sent;
-                if to_be_sent < 1 {
-                    break;
-                }
-            }
-        }
-    }
-    */
 }
 
 pub(crate) async fn send_stop_signal(job_id: &str) -> String {
@@ -711,11 +640,12 @@ pub(crate) async fn get_job_status(
     job_status
 }
 
-async fn get_queue_pool(host_port: String, _job_id: &str) -> QueuePool {
+async fn get_new_queue_pool(host_port: String) -> QueuePool {
+    debug!("Creating new pool for: {}", &host_port);
     QueuePool::new(host_port)
 }
 
-async fn delete_pool(job_id: &str) {
-    let mut write_guard = CONNECTION_POOLS.write().await;
-    write_guard.remove(job_id);
+#[cfg(feature = "cluster")]
+async fn get_existing_queue_pool(job_id: &str) -> Option<QueuePool> {
+    CONNECTION_POOLS.write().await.remove(job_id)
 }

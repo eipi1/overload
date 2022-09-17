@@ -5,6 +5,7 @@ use http::StatusCode;
 use log::trace;
 use overload::http_util::handle_history_all;
 use overload::http_util::request::{JobStatusQueryParams, Request};
+use overload::METRICS_FACTORY;
 use overload::{data_dir, http_util};
 use std::collections::HashMap;
 use std::convert::{Infallible, TryFrom};
@@ -95,8 +96,7 @@ async fn stop(job_id: String) -> Result<impl Reply, Infallible> {
 
 pub async fn execute(request: Request) -> Result<impl Reply, Infallible> {
     trace!("req: execute: {:?}", &request);
-    let response =
-        overload::http_util::handle_request(request, &filters_common::METRICS_FACTORY).await;
+    let response = overload::http_util::handle_request(request, &METRICS_FACTORY).await;
     let json = reply::json(&response);
     trace!("resp: execute: {:?}", &response);
     Ok(json)

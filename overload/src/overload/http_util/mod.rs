@@ -32,7 +32,7 @@ use log::{error, trace};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqliteConnectOptions;
-use sqlx::ConnectOptions;
+use sqlx::{ConnectOptions, Connection};
 use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
 use std::error::Error as StdError;
@@ -171,6 +171,7 @@ where
     response
         .data
         .insert("valid_count".into(), success.to_string());
+    connection.close();
     Ok(response)
 }
 
@@ -355,6 +356,7 @@ impl Into<StdIoError> for WarpStdIoError {
 
 pub const PATH_JOB_STATUS: &str = "/test/status";
 pub const PATH_STOP_JOB: &str = "/test/stop";
+pub const PATH_FILE_UPLOAD: &str = "/test/requests-bin";
 
 #[cfg(test)]
 #[allow(dead_code)]
@@ -392,6 +394,7 @@ mod test {
             .create_deserializer(csv_data.as_bytes());
         let to_sqlite = csv_reader_to_sqlite(reader, "requests.sqlite".to_string()).await;
         log_error!(to_sqlite);
+        let _ = tokio::fs::remove_file("requests.sqlite").await;
     }
 
     async fn create_csv() {

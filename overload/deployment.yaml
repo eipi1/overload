@@ -16,14 +16,12 @@ spec:
         app: overload
     spec:
       containers:
-        - image: 10.1.64.1:5000/overload-cluster
+        - image: ghcr.io/eipi1/overload:cluster-latest-snapshot
           imagePullPolicy: "Always"
           name: overload
           ports:
             - containerPort: 3030
           env:
-            - name: LOG_LEVEL
-              value: "info"
             - name: DATA_DIR
               value: "/tmp"
             - name: RUST_BACKTRACE

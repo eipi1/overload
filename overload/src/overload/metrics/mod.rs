@@ -1,3 +1,5 @@
+use crate::log_error;
+use prometheus::process_collector::ProcessCollector;
 use prometheus::{Gauge, HistogramOpts, HistogramVec, IntCounter, IntCounterVec, Opts, Registry};
 use smallvec::SmallVec;
 use std::collections::HashMap;
@@ -21,10 +23,21 @@ use tokio::sync::RwLock;
 
 pub const DEFAULT_HISTOGRAM_BUCKET: [f64; 6] = [20f64, 50f64, 100f64, 300f64, 700f64, 1100f64];
 
-#[derive(Default)]
 pub struct MetricsFactory {
     registry: Registry,
     metrics: RwLock<HashMap<String, Arc<Metrics>>>,
+}
+
+impl Default for MetricsFactory {
+    fn default() -> Self {
+        let registry = Registry::default();
+        let pc = ProcessCollector::for_self();
+        let _ = registry.register(Box::new(pc));
+        Self {
+            registry,
+            metrics: RwLock::default(),
+        }
+    }
 }
 
 impl MetricsFactory {
@@ -67,18 +80,53 @@ impl MetricsFactory {
         let upstream_request_count = IntCounter::with_opts(opts).unwrap();
 
         let opts = Opts::new(
-            "connection_pool_connections",
-            "total number of connections in the pool",
+            "connection_pool_new_connection_attempt",
+            "total number of connections attempted to create",
         );
         let opts = opts.const_label("job_id", job_id);
-        let connection_pool_connections = Gauge::with_opts(opts).unwrap();
+        let connection_pool_new_connection_attempt = IntCounter::with_opts(opts).unwrap();
 
         let opts = Opts::new(
-            "connection_pool_idle_connections",
-            "number of idle connections in the pool",
+            "connection_pool_new_connection_success",
+            "total number of connections created successfully",
         );
         let opts = opts.const_label("job_id", job_id);
-        let connection_pool_idle_connections = Gauge::with_opts(opts).unwrap();
+        let connection_pool_new_connection_success = IntCounter::with_opts(opts).unwrap();
+
+        let opts = Opts::new(
+            "connection_pool_connection_broken",
+            "Number of broken connections",
+        );
+        let opts = opts.const_label("job_id", job_id);
+        let connection_pool_connection_broken = IntCounter::with_opts(opts).unwrap();
+
+        let opts = Opts::new(
+            "connection_pool_connection_dropped",
+            "Number of dropped connections",
+        );
+        let opts = opts.const_label("job_id", job_id);
+        let connection_pool_connection_dropped = IntCounter::with_opts(opts).unwrap();
+
+        let opts = Opts::new(
+            "connection_pool_size",
+            "Connections pool size or connection per second",
+        );
+        let opts = opts.const_label("job_id", job_id);
+        let connection_pool_size = Gauge::with_opts(opts).unwrap();
+
+        let opts = Opts::new(
+            "connection_pool_connection_idle",
+            "Number of idle unbroken connection",
+        );
+        let opts = opts.const_label("job_id", job_id);
+        let connection_pool_connection_idle = Gauge::with_opts(opts).unwrap();
+
+        let opts = Opts::new(
+            "connection_pool_connection_busy",
+            "Number of busy/borrowed connection from pool",
+        );
+        let opts = opts.const_label("job_id", job_id);
+        let connection_pool_connection_busy = Gauge::with_opts(opts).unwrap();
 
         self.registry
             .register(Box::new(upstream_response_time.clone()))
@@ -90,22 +138,91 @@ impl MetricsFactory {
             .register(Box::new(upstream_request_count.clone()))
             .unwrap();
         self.registry
-            .register(Box::new(connection_pool_connections.clone()))
+            .register(Box::new(connection_pool_new_connection_attempt.clone()))
             .unwrap();
         self.registry
-            .register(Box::new(connection_pool_idle_connections.clone()))
+            .register(Box::new(connection_pool_new_connection_success.clone()))
+            .unwrap();
+        self.registry
+            .register(Box::new(connection_pool_connection_broken.clone()))
+            .unwrap();
+        self.registry
+            .register(Box::new(connection_pool_connection_dropped.clone()))
+            .unwrap();
+        self.registry
+            .register(Box::new(connection_pool_connection_idle.clone()))
+            .unwrap();
+        self.registry
+            .register(Box::new(connection_pool_connection_busy.clone()))
+            .unwrap();
+        self.registry
+            .register(Box::new(connection_pool_size.clone()))
             .unwrap();
 
         let metrics = Metrics {
             upstream_request_count,
             upstream_request_status_count,
             upstream_response_time,
-            connection_pool_connections,
-            connection_pool_idle_connections,
+            connection_pool_new_connection_attempt,
+            connection_pool_new_connection_success,
+            connection_pool_connection_broken,
+            connection_pool_connection_dropped,
+            connection_pool_size,
+            connection_pool_connection_idle,
+            connection_pool_connection_busy,
         };
         let metrics = Arc::new(metrics);
         write_guard.insert(String::from(job_id), metrics.clone());
         metrics
+    }
+
+    pub async fn remove_metrics(&self, job_id: &str) {
+        let metrics = { self.metrics.write().await.remove(job_id) };
+        match metrics {
+            Some(m) => {
+                let result = self
+                    .registry
+                    .unregister(Box::new(m.connection_pool_size.clone()));
+                log_error!(result);
+                let result = self
+                    .registry
+                    .unregister(Box::new(m.connection_pool_connection_idle.clone()));
+                log_error!(result);
+                let result = self
+                    .registry
+                    .unregister(Box::new(m.upstream_request_count.clone()));
+                log_error!(result);
+                let result = self
+                    .registry
+                    .unregister(Box::new(m.connection_pool_connection_busy.clone()));
+                log_error!(result);
+                let result = self
+                    .registry
+                    .unregister(Box::new(m.connection_pool_connection_dropped.clone()));
+                log_error!(result);
+                let result = self
+                    .registry
+                    .unregister(Box::new(m.connection_pool_connection_broken.clone()));
+                log_error!(result);
+                let result = self
+                    .registry
+                    .unregister(Box::new(m.connection_pool_new_connection_success.clone()));
+                log_error!(result);
+                let result = self
+                    .registry
+                    .unregister(Box::new(m.connection_pool_new_connection_attempt.clone()));
+                log_error!(result);
+                let result = self
+                    .registry
+                    .unregister(Box::new(m.upstream_request_status_count.clone()));
+                log_error!(result);
+                let result = self
+                    .registry
+                    .unregister(Box::new(m.upstream_response_time.clone()));
+                log_error!(result);
+            }
+            None => {}
+        }
     }
 }
 
@@ -113,8 +230,13 @@ pub struct Metrics {
     upstream_request_status_count: IntCounterVec,
     upstream_request_count: IntCounter,
     upstream_response_time: HistogramVec,
-    connection_pool_connections: Gauge,
-    connection_pool_idle_connections: Gauge,
+    connection_pool_new_connection_attempt: IntCounter,
+    connection_pool_new_connection_success: IntCounter,
+    connection_pool_connection_broken: IntCounter,
+    connection_pool_connection_dropped: IntCounter,
+    connection_pool_size: Gauge,
+    connection_pool_connection_idle: Gauge,
+    connection_pool_connection_busy: Gauge,
 }
 
 impl Metrics {
@@ -133,9 +255,33 @@ impl Metrics {
             .with_label_values(&[status])
             .observe(elapsed);
     }
-    pub fn pool_state(&self, state: (u32, u32)) {
-        self.connection_pool_connections.set(state.0.into());
-        self.connection_pool_idle_connections.set(state.1.into());
+    pub fn pool_connection_attempt(&self, count: u64) {
+        self.connection_pool_new_connection_attempt.inc_by(count);
+        // debug!("connection_pool_new_connection_attempt: {}", self.connection_pool_new_connection_attempt.get());
+    }
+
+    pub fn pool_connection_success(&self, count: u64) {
+        self.connection_pool_new_connection_success.inc_by(count);
+    }
+
+    pub fn pool_connection_broken(&self, count: u64) {
+        self.connection_pool_connection_broken.inc_by(count);
+    }
+
+    pub fn pool_connection_dropped(&self, count: u64) {
+        self.connection_pool_connection_dropped.inc_by(count);
+    }
+
+    pub fn pool_connection_busy(&self, count: f64) {
+        self.connection_pool_connection_busy.add(count);
+    }
+
+    pub fn pool_connection_idle(&self, count: f64) {
+        self.connection_pool_connection_idle.add(count);
+    }
+
+    pub fn pool_size(&self, count: f64) {
+        self.connection_pool_size.set(count);
     }
 }
 

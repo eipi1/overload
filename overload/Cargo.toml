@@ -141,6 +141,7 @@ version = "1.0"
 
 [dependencies.prometheus]
 version = "0.13"
+features = ["process"]
 
 [dependencies.log]
 version = "0.4"

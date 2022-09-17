@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 #[cfg(feature = "cluster")]
 use cloud_discovery_kubernetes::KubernetesDiscoverService;
 use log::info;

@@ -1,3 +1,4 @@
+use crate::metrics::Metrics;
 use async_trait::async_trait;
 use bb8::ManageConnection;
 use bb8::PoolCustomizer;
@@ -9,6 +10,7 @@ use log::{debug, trace, warn};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::net::TcpStream;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
@@ -23,6 +25,7 @@ pub(crate) struct QueuePool {
     pub(crate) connections: VecDeque<HttpConnection>,
     pub(crate) recyclable_connections: SharedMutableVec,
     pub(crate) new_connections: SharedMutableVec,
+    busy_connections: usize,
     _total_connection: AtomicU32,
     _new_connection: AtomicU32,
     _recyclable_connection: AtomicU32,
@@ -31,6 +34,7 @@ pub(crate) struct QueuePool {
     // the pool starts with max_connection =0 and never changes.
     // once it changes max_connection, it'll become non-elastic
     elastic: bool,
+    pub(crate) last_use: Instant,
 }
 
 impl QueuePool {
@@ -40,16 +44,17 @@ impl QueuePool {
             connections: VecDeque::new(),
             recyclable_connections: Arc::new(RwLock::new(Vec::new())),
             new_connections: Arc::new(RwLock::new(Vec::new())),
+            busy_connections: 0,
             _total_connection: AtomicU32::new(0),
             _new_connection: AtomicU32::new(0),
             _recyclable_connection: AtomicU32::new(0),
             host_port,
             elastic: true,
+            last_use: Instant::now(),
         }
     }
 
-    pub fn set_connection_count(&mut self, connection_count: usize) {
-        trace!("setting pool size to {}", &connection_count);
+    pub async fn set_connection_count(&mut self, connection_count: usize, metrics: &Arc<Metrics>) {
         if self.elastic && connection_count != self.max_connection as usize {
             self.elastic = false; // make it non-elastic as max_connection has changed
         }
@@ -58,32 +63,81 @@ impl QueuePool {
                 .drain(0..(self.connections.len() - connection_count));
         }
         let connection_count = connection_count as i64;
-        let diff = connection_count - self.max_connection;
+        let mut diff = connection_count - self.max_connection;
+        if diff > 0 {
+            let nc = self.new_connections.read().await.len();
+            let rc = self.recyclable_connections.read().await.len();
+            let active_con = nc + rc + self.busy_connections;
+            diff = std::cmp::max(0, connection_count - active_con as i64);
+        };
+        debug!(
+            "setting pool size to {}, previous: {}, diff: {}",
+            &connection_count, self.max_connection, diff
+        );
         self.max_connection = connection_count;
         let new_connections = self.new_connections.clone();
         let recycled = self.recyclable_connections.clone();
         let host_port = self.host_port.clone();
-        let resizer = QueuePool::resize_connection_pool(new_connections, recycled, host_port, diff);
+        let resizer = QueuePool::resize_connection_pool(
+            new_connections,
+            recycled,
+            host_port,
+            diff,
+            metrics.clone(),
+        );
         tokio::spawn(resizer);
     }
 
-    pub async fn get_connections(&mut self, count: u32) -> Vec<HttpConnection> {
-        trace!("request received for {} connections", count);
-        let broken = self
-            .claim_connections(self.recyclable_connections.clone())
+    pub async fn get_connections(
+        &mut self,
+        count: u32,
+        metrics: &Arc<Metrics>,
+    ) -> Vec<HttpConnection> {
+        debug!("request received for {} connections", count);
+        let (returned_to_pool, broken) = self
+            .claim_connections(self.recyclable_connections.clone(), metrics)
             .await;
-        self.claim_connections(self.new_connections.clone()).await;
+        self.claim_connections(self.new_connections.clone(), metrics)
+            .await;
+        self.busy_connections -= returned_to_pool;
         if self.elastic {
             let diff = self.connections.len() as i64 - count as i64;
             if diff < 0 {
+                let diff = diff.abs();
+                debug!("elastic pool, requesting {} more connections", diff);
                 // need more connections
-                self.add_new_connection_mut(diff.abs());
+                self.add_new_connection_mut(diff, metrics);
+            }
+        } else {
+            //re-enforce the pool size
+            let available = self.connections.len();
+            let current_active = available + self.busy_connections;
+            let diff = current_active as i64 - self.max_connection;
+            if diff > 0 {
+                debug!(
+                    "re-enforce the pool size - busy: {}, available: {}, pool size: {}",
+                    self.busy_connections, available, self.max_connection
+                );
+                //has extra connections, drop them
+                self.connections
+                    .truncate((std::cmp::max(0, available as i64 - diff)) as usize);
+                let change = available - self.connections.len();
+                if change > 0 {
+                    metrics.pool_connection_dropped((change) as u64);
+                    metrics.pool_connection_idle(-(change as f64));
+                }
+            } else {
+                // need to refill the broken connections if we have less connections
+                if broken != 0 {
+                    debug!(
+                        "broken connections found, requesting {} more connections",
+                        broken
+                    );
+                    self.add_new_connection_mut(broken, metrics);
+                }
             }
         }
-        if broken != 0 {
-            //refill broken connections
-            self.add_new_connection_mut(broken);
-        }
+
         let mut vec = Vec::with_capacity(std::cmp::min(count as usize, self.connections.len()));
         for _ in 0..count {
             if let Some(con) = self.connections.pop_front() {
@@ -92,13 +146,18 @@ impl QueuePool {
                 break;
             }
         }
+        let len = vec.len();
+        self.busy_connections += len;
+        let len = len as f64;
+        metrics.pool_connection_busy(len);
+        metrics.pool_connection_idle(-(len));
         vec
     }
 
-    fn add_new_connection_mut(&mut self, count: i64) {
+    fn add_new_connection_mut(&mut self, count: i64, metrics: &Arc<Metrics>) {
         let new_connections = self.new_connections.clone();
         let host_port = self.host_port.clone();
-        let conn_gen = Self::add_new_connection(new_connections, host_port, count);
+        let conn_gen = Self::add_new_connection(new_connections, host_port, count, metrics.clone());
         tokio::spawn(conn_gen);
     }
 
@@ -107,32 +166,42 @@ impl QueuePool {
     }
 
     /// Add or remove connections
+    #[allow(clippy::comparison_chain)]
     async fn resize_connection_pool(
         new_connections: SharedMutableVec,
         recycle_connections: SharedMutableVec,
         host_port: String,
         diff: i64,
+        metrics: Arc<Metrics>,
     ) {
-        trace!("resizing pool to: {}", &diff);
+        debug!("resizing pool by: {}", &diff);
         if diff < 0 {
             // remove connections from the pool
             let diff = diff.unsigned_abs() as usize;
             // try removing recycled connection first
             let removed = QueuePool::resize_conn_container(recycle_connections, diff).await;
-            trace!("removed {} connections from recycled pool", &removed);
+            debug!("removed {} connections from recycled pool", &removed);
             // didn't have enough connections in recycle_connections, try removing from new connection
             if removed < diff {
                 let removed =
                     QueuePool::resize_conn_container(new_connections, diff - removed).await;
-                trace!("removed {} connections from new connection pool", &removed);
+                debug!("removed {} connections from new connection pool", &removed);
             }
-        } else {
+        } else if diff > 0 {
             // need to add new connections
-            Self::add_new_connection(new_connections, host_port, diff).await;
+            debug!("resizing, requesting {} more connections", diff);
+            Self::add_new_connection(new_connections, host_port, diff, metrics).await;
+        } else {
         }
     }
 
-    async fn add_new_connection(new_connections: SharedMutableVec, host_port: String, count: i64) {
+    async fn add_new_connection(
+        new_connections: SharedMutableVec,
+        host_port: String,
+        count: i64,
+        metrics: Arc<Metrics>,
+    ) {
+        metrics.pool_connection_attempt(count as u64);
         let mut futures = FuturesUnordered::new();
         for _ in 0..count {
             let connection_future = open_connection(&host_port);
@@ -145,7 +214,10 @@ impl QueuePool {
                 None => {}
             }
         }
-        debug!("Adding {} new connections", conn.len());
+        let len = conn.len();
+        debug!("Adding {} new connections", len);
+        metrics.pool_connection_success(len as u64);
+        metrics.pool_connection_idle(len as f64);
         new_connections.write().await.append(&mut conn);
     }
 
@@ -160,7 +232,17 @@ impl QueuePool {
             to_be_removed
         }
     }
-    async fn claim_connections(&mut self, con_container: SharedMutableVec) -> i64 {
+    async fn claim_connections(
+        &mut self,
+        con_container: SharedMutableVec,
+        metrics: &Arc<Metrics>,
+    ) -> (usize, i64) {
+        {
+            // to minimize write lock, check if there's any element in the vector
+            if con_container.read().await.len() == 0 {
+                return (0, 0);
+            }
+        }
         let mut write_guard = con_container.write().await;
         let len = write_guard.len();
         let drain = write_guard.drain(..);
@@ -173,18 +255,26 @@ impl QueuePool {
             }
             self.connections.push_back(conn);
         }
-        broken
+        if broken != 0 {
+            metrics.pool_connection_dropped(broken as u64);
+        }
+        (len, broken)
     }
 
     #[inline]
     pub(crate) async fn return_connection(
         return_pool: &SharedMutableVec,
         mut connection: HttpConnection,
+        metrics: &Arc<Metrics>,
     ) {
+        metrics.pool_connection_busy(-1_f64);
         let handle = connection.request_handle.ready().await;
         if let Err(e) = handle {
-            warn!("error - connection not ready, error: {:?}", e);
+            debug!("error - connection not ready, error: {:?}", e);
             connection.broken = true;
+            metrics.pool_connection_broken(1);
+        } else {
+            metrics.pool_connection_idle(1_f64);
         }
         return_pool.write().await.push(connection)
     }
