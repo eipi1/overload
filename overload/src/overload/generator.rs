@@ -105,6 +105,7 @@ impl RateScheme for ConstantRate {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ArraySpec {
     count_per_sec: Vec<u32>,
 }
