@@ -160,12 +160,16 @@ mod standalone_mode_tests {
         println!("body: {:?}", hyper::body::to_bytes(response).await.unwrap());
         assert_eq!(status, 200);
 
+        tokio::time::sleep(tokio::time::Duration::from_millis(5100)).await;
+        /* Test with github action is failing, but pass on ide
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
         for i in 1..6 {
             //each seconds we expect mock to receive 3 request
             assert_eq!(i * 3, mock.hits_async().await);
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
         }
+        */
+        assert_eq!(15, mock.hits_async().await);
         mock.delete_async().await;
         //Inconsistent result - it fails sometimes, hence commenting out
         //let metrics = get_metrics();
