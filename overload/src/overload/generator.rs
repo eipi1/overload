@@ -742,7 +742,7 @@ pub(crate) mod test {
         //assert first element
         assert_eq!(arg.0, 3);
         assert_eq!(arg.1.unwrap().len(), 3);
-        assert_eq!(arg.2, 2);
+        assert_eq!(arg.2, 1);
         tokio::time::pause();
 
         let _arg = generator.next().await.unwrap();
@@ -753,7 +753,7 @@ pub(crate) mod test {
         // assert third element
         assert_eq!(arg.0, 3);
         assert_eq!(arg.1.unwrap().len(), 3);
-        assert_eq!(arg.2, 3);
+        assert_eq!(arg.2, 2);
 
         for _ in 0..26 {
             let arg = generator.next().await;
