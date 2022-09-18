@@ -109,10 +109,9 @@ mod standalone_mode_tests {
     use log::trace;
     use regex::Regex;
     use serde_json::json;
-    use tokio::sync::OnceCell;
     use wiremock::MockServer;
 
-    pub async fn init_env() -> (MockServer, url::Url, tokio::sync::oneshot::Sender<()>) {
+    pub async fn init_env() -> (MockServer, url::Url, tokio::sync::oneshot::Sender<()>, u16) {
         let wire_mock = wiremock::MockServer::start().await;
         let wire_mock_uri = wire_mock.uri();
         let url = url::Url::parse(&wire_mock_uri).unwrap();
@@ -120,23 +119,21 @@ mod standalone_mode_tests {
         let route = super::get_routes();
 
         let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let port = portpicker::pick_unused_port().unwrap();
         let (_addr, server) =
-            warp::serve(route).bind_with_graceful_shutdown(([127, 0, 0, 1], 3030), async {
+            warp::serve(route).bind_with_graceful_shutdown(([127, 0, 0, 1], port), async {
                 rx.await.ok();
             });
         // Spawn the server into a runtime
         tokio::task::spawn(server);
 
-        (wire_mock, url, tx)
+        (wire_mock, url, tx, port)
     }
-
-    pub static ASYNC_ONCE: OnceCell<(MockServer, url::Url, tokio::sync::oneshot::Sender<()>)> =
-        OnceCell::const_new();
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_request_random_constant() {
         setup();
-        let (_, _, _) = ASYNC_ONCE.get_or_init(init_env).await;
+        let (_, _, tx, port) = init_env().await;
 
         let (mock_server, url) = ASYNC_ONCE_HTTP_MOCK.get_or_init(init_http_mock).await;
 
@@ -149,10 +146,10 @@ mod standalone_mode_tests {
                 .body(r#"{"hello": "world"}"#);
         });
 
-        let response = send_request(json_request_random_constant(
-            url.host().unwrap().to_string(),
-            url.port().unwrap(),
-        ))
+        let response = send_request(
+            json_request_random_constant(url.host().unwrap().to_string(), url.port().unwrap()),
+            port,
+        )
         .await
         .unwrap();
         println!("{:?}", response);
@@ -171,12 +168,13 @@ mod standalone_mode_tests {
         //Inconsistent result - it fails sometimes, hence commenting out
         //let metrics = get_metrics();
         // assert_eq!(get_value_for_metrics("connection_pool_idle_connections", &metrics), 3);
+        let _ = tx.send(());
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_request_list_constant() {
         setup();
-        let (_, _, _) = ASYNC_ONCE.get_or_init(init_env).await;
+        let (_, _, tx, port) = init_env().await;
 
         let (mock_server, url) = ASYNC_ONCE_HTTP_MOCK.get_or_init(init_http_mock).await;
 
@@ -188,12 +186,15 @@ mod standalone_mode_tests {
                 .body(r#"{"hello": "list"}"#);
         });
 
-        let response = send_request(json_request_list_constant(
-            url.host().unwrap().to_string(),
-            url.port().unwrap(),
-            3,
-            "/list/data",
-        ))
+        let response = send_request(
+            json_request_list_constant(
+                url.host().unwrap().to_string(),
+                url.port().unwrap(),
+                3,
+                "/list/data",
+            ),
+            port,
+        )
         .await
         .unwrap();
         println!("{:?}", response);
@@ -207,12 +208,13 @@ mod standalone_mode_tests {
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
         }
         mock.delete_async().await;
+        let _ = tx.send(());
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_request_list_constant_with_connection_lt_qps() {
         setup();
-        let (_, _, _) = ASYNC_ONCE.get_or_init(init_env).await;
+        let (_, _, tx, port) = init_env().await;
 
         let (mock_server, url) = ASYNC_ONCE_HTTP_MOCK.get_or_init(init_http_mock).await;
 
@@ -224,12 +226,15 @@ mod standalone_mode_tests {
                 .body(r#"{"hello": "list"}"#);
         });
 
-        let response = send_request(json_request_list_constant(
-            url.host().unwrap().to_string(),
-            url.port().unwrap(),
-            1,
-            "/list/data2",
-        ))
+        let response = send_request(
+            json_request_list_constant(
+                url.host().unwrap().to_string(),
+                url.port().unwrap(),
+                1,
+                "/list/data2",
+            ),
+            port,
+        )
         .await
         .unwrap();
         println!("{:?}", response);
@@ -244,6 +249,7 @@ mod standalone_mode_tests {
             tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
         }
         mock.delete_async().await;
+        let _ = tx.send(());
     }
 
     fn json_request_list_constant(

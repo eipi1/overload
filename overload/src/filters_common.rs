@@ -67,10 +67,9 @@ pub(crate) mod test_common {
 
     pub fn setup() {
         ONCE.call_once(|| {
-            tracing_subscriber::fmt()
+            let _ = tracing_subscriber::fmt()
                 .with_env_filter("trace")
-                .try_init()
-                .unwrap();
+                .try_init();
 
             // let _ = tracing_subscriber::fmt()
             //     .with_env_filter(format!(
@@ -82,11 +81,11 @@ pub(crate) mod test_common {
         });
     }
 
-    pub fn send_request(body: String) -> hyper::client::ResponseFuture {
+    pub fn send_request(body: String, port: u16) -> hyper::client::ResponseFuture {
         let client = hyper::Client::new();
         let req = Request::builder()
             .method("POST")
-            .uri("http://127.0.0.1:3030/test")
+            .uri(format!("http://127.0.0.1:{}/test", port))
             .body(Body::from(body))
             .expect("request builder");
         client.request(req)

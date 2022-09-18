@@ -635,10 +635,10 @@ mod cluster_test {
         tokio::time::sleep(Duration::from_millis(30000)).await;
 
         for _ in 0..10 {
-            let response = send_request(json_request_random_constant(
-                url.host().unwrap().to_string(),
-                url.port().unwrap(),
-            ))
+            let response = send_request(
+                json_request_random_constant(url.host().unwrap().to_string(), url.port().unwrap()),
+                3030,
+            )
             .await
             .unwrap();
             println!("{:?}", response);
@@ -719,7 +719,7 @@ mod cluster_test {
             url.port().unwrap(),
             response.get("file").unwrap().as_str().unwrap().to_string(),
         );
-        let response = send_request(json).await.unwrap();
+        let response = send_request(json, 3030).await.unwrap();
         let status = response.status();
         let response = hyper::body::to_bytes(response).await.unwrap();
         info!("body: {:?}", &response);

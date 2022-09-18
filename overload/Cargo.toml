@@ -180,6 +180,9 @@ version = "0.10"
 [dev-dependencies.serial_test]
 version = "0.9"
 
+[dev-dependencies.portpicker]
+version = "0.1"
+
 [features]
 default = ["debug"]
 
