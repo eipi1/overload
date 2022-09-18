@@ -1,9 +1,11 @@
+#![allow(deprecated)]
 #[cfg(feature = "cluster")]
 use cloud_discovery_kubernetes::KubernetesDiscoverService;
 use log::info;
 use overload::data_dir;
 #[cfg(feature = "cluster")]
 use rust_cloud_discovery::DiscoveryClient;
+#[cfg(feature = "cluster")]
 use std::env;
 
 #[cfg_attr(feature = "cluster", path = "filters_cluster.rs")]
@@ -13,16 +15,7 @@ mod filters_common;
 #[tokio::main]
 async fn main() {
     //init logging
-    let log_level = env::var("LOG_LEVEL").unwrap_or_else(|_| "info".to_string());
-    tracing_subscriber::fmt()
-        .with_env_filter(format!(
-            "overload={},rust_cloud_discovery={},cloud_discovery_kubernetes={},cluster_mode={},\
-            almost_raft={}",
-            &log_level, &log_level, &log_level, &log_level, &log_level
-        ))
-        .try_init()
-        .unwrap();
-    info!("log level: {}", &log_level);
+    tracing_subscriber::fmt::init();
     info!("data directory: {}", data_dir());
 
     let mut _cluster_up = true;

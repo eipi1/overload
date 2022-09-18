@@ -1,16 +1,11 @@
 use http::header::CONTENT_TYPE;
 use http::{Response, StatusCode};
 use hyper::Body;
-use lazy_static::lazy_static;
 use overload::http_util::{GenericError, GenericResponse};
-use overload::metrics::MetricsFactory;
+use overload::METRICS_FACTORY;
 use prometheus::{Encoder, TextEncoder};
 use serde::Serialize;
 use warp::{reply, Filter};
-
-lazy_static! {
-    pub static ref METRICS_FACTORY: MetricsFactory = MetricsFactory::default();
-}
 
 pub fn prometheus_metric(
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
@@ -72,27 +67,25 @@ pub(crate) mod test_common {
 
     pub fn setup() {
         ONCE.call_once(|| {
-            // tracing_subscriber::fmt()
-            //     .with_env_filter("trace")
-            //     .try_init()
-            //     .unwrap();
+            let _ = tracing_subscriber::fmt()
+                .with_env_filter("trace")
+                .try_init();
 
-            tracing_subscriber::fmt()
-                .with_env_filter(format!(
-                    "overload={},rust_cloud_discovery={},cloud_discovery_kubernetes={},cluster_mode={},\
-                    almost_raft={}, hyper={}",
-                    "trace", "info", "info", "info", "info", "info"
-                ))
-                .try_init()
-                .unwrap();
+            // let _ = tracing_subscriber::fmt()
+            //     .with_env_filter(format!(
+            //         "overload={},rust_cloud_discovery={},cloud_discovery_kubernetes={},cluster_mode={},\
+            //         almost_raft={}, hyper={}",
+            //         "trace", "info", "info", "info", "info", "info"
+            //     ))
+            //     .try_init();
         });
     }
 
-    pub fn send_request(body: String) -> hyper::client::ResponseFuture {
+    pub fn send_request(body: String, port: u16) -> hyper::client::ResponseFuture {
         let client = hyper::Client::new();
         let req = Request::builder()
             .method("POST")
-            .uri("http://127.0.0.1:3030/test")
+            .uri(format!("http://127.0.0.1:{}/test", port))
             .body(Body::from(body))
             .expect("request builder");
         client.request(req)

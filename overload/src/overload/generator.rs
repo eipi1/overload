@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use futures_util::future::BoxFuture;
 use futures_util::stream::Stream;
 use http::Method;
-use log::trace;
+use log::{debug, trace};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -105,6 +105,7 @@ impl RateScheme for ConstantRate {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ArraySpec {
     count_per_sec: Vec<u32>,
 }
@@ -144,6 +145,17 @@ impl Default for Bounded {
 impl RateScheme for Bounded {
     fn next(&self, _nth: u32, _last_value: Option<u32>) -> u32 {
         self.max
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct Elastic {
+    max: u32,
+}
+
+impl RateScheme for Elastic {
+    fn next(&self, _nth: u32, _last_qps: Option<u32>) -> u32 {
+        0
     }
 }
 
@@ -252,7 +264,7 @@ impl RequestProvider for RequestFile {
         if self.inner.is_none() {
             //open sqlite connection
             let sqlite_file = format!("sqlite://{}", &self.file_name);
-            trace!("Openning sqlite file at: {}", &sqlite_file);
+            debug!("Opening sqlite file at: {}", &sqlite_file);
             let mut connection = SqliteConnectOptions::from_str(sqlite_file.as_str())?
                 .read_only(true)
                 .connect()
@@ -449,7 +461,7 @@ impl RequestGenerator {
         let time_scale: u8 = 1;
         let total = duration * time_scale as u32;
         let concurrent_connection =
-            concurrent_connection.unwrap_or_else(|| Box::new(Bounded::default()));
+            concurrent_connection.unwrap_or_else(|| Box::new(Elastic::default()));
         RequestGenerator {
             duration,
             time_scale,
@@ -498,8 +510,8 @@ impl Stream for RequestGenerator {
                     Poll::Ready((provider, result)) => {
                         let qps = self.current_qps;
                         self.current_qps = 0;
-                        self.current_count += 1;
                         let conn = self.concurrent_connection.next(self.current_count, None);
+                        self.current_count += 1;
                         self.provider_or_future = ProviderOrFuture::Provider(provider);
                         Poll::Ready(Some((qps, result, conn)))
                     }
@@ -692,18 +704,18 @@ pub(crate) mod test {
         let arg = generator.next().await.unwrap();
         assert_eq!(arg.0, 3);
         assert_eq!(arg.1.unwrap().len(), 3);
-        assert_eq!(arg.2, 500);
+        assert_eq!(arg.2, 0);
         tokio::time::pause();
         let arg = generator.next().await.unwrap();
         tokio::time::advance(Duration::from_millis(1001)).await;
         assert_eq!(arg.0, 3);
         assert_eq!(arg.1.unwrap().len(), 3);
-        assert_eq!(arg.2, 500);
+        assert_eq!(arg.2, 0);
         let arg = generator.next().await.unwrap();
         tokio::time::advance(Duration::from_millis(1001)).await;
         assert_eq!(arg.0, 3);
         assert_eq!(arg.1.unwrap().len(), 3);
-        assert_eq!(arg.2, 500);
+        assert_eq!(arg.2, 0);
         let arg = generator.next().await;
         tokio::time::advance(Duration::from_millis(1001)).await;
         assert!(arg.is_none())
@@ -731,7 +743,7 @@ pub(crate) mod test {
         //assert first element
         assert_eq!(arg.0, 3);
         assert_eq!(arg.1.unwrap().len(), 3);
-        assert_eq!(arg.2, 2);
+        assert_eq!(arg.2, 1);
         tokio::time::pause();
 
         let _arg = generator.next().await.unwrap();
@@ -742,7 +754,7 @@ pub(crate) mod test {
         // assert third element
         assert_eq!(arg.0, 3);
         assert_eq!(arg.1.unwrap().len(), 3);
-        assert_eq!(arg.2, 3);
+        assert_eq!(arg.2, 2);
 
         for _ in 0..26 {
             let arg = generator.next().await;
@@ -836,6 +848,7 @@ pub(crate) mod test {
             let vec = request.get_n(2).await.unwrap();
             assert_ne!(0, vec.len());
         }
+        let _ = tokio::fs::remove_file("test-data.sqlite").await;
     }
 
     #[test]

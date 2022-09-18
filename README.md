@@ -20,7 +20,7 @@
 A distributed load testing utility written in Rust
 
 
-* [Usage](#usage)
+* [Getting Started](#getting-started)
 * [Environment variables](#environment-variables)
 * [APIs](#apis)
 * [Monitoring](#monitoring)
@@ -77,7 +77,7 @@ spec:
 ```
 
 ### Start Test
-The following request will send two `GET` request per second(`"countPerSec": 2`) to `httpbin.org/get` a test for 60 
+The following request will send two `GET` request per second(`"countPerSec": 2`) to `httpbin.org/get` for 120
 seconds(`"duration": 60`).
 ```shell
 curl --location --request POST 'localhost:3030/test' \
@@ -160,7 +160,7 @@ docker run -p 3030:3030 mdsarowar/overload:latest-standalone-snapshot
 
 | variable           | desc                                                                            | default  |
 |--------------------|---------------------------------------------------------------------------------|----------|
-| LOG_LEVEL          | application log level                                                           | info     |
+| RUST_LOG           | application log level                                                           | info     |
 | DATA_DIR           | path to store uploaded CSV, should be shared among all instance in cluster mode | /tmp     |
 | K8S_ENDPOINT_NAME  | name of the [endpoints][endpoint-api] (cluster mode only)                       | overload |
 | K8S_NAMESPACE_NAME | kubernetes namespace                                                            | default  |
@@ -170,12 +170,15 @@ docker run -p 3030:3030 mdsarowar/overload:latest-standalone-snapshot
 ### Request
 Test specification
 
-| Field    | Required | Default | Description                                                         | Data type                           |
-|----------|----------|---------|---------------------------------------------------------------------|-------------------------------------|
-| name     | ❎        | UUID    | Test name, application will append UUID to ensure unique identifier | String                              |
-| duration | ✅        |         | Test duration                                                       | uint32                              |
-| req      | ✅        |         | Request provider Spec                                               | [RequestProvider](#requestprovider) |
-| qps      | ✅        |         | Request per second specification                                    | [QPSSpec](#qpsspec)                 |
+| Field                | Required | Default                       | Data type                                                     | Description                                                                                |
+|----------------------|----------|-------------------------------|---------------------------------------------------------------|--------------------------------------------------------------------------------------------|
+| name                 | ❎        | UUID                          | String                                                        | Test name, application will append UUID to ensure unique identifier                        |
+| duration             | ✅        |                               | uint32                                                        | Test duration                                                                              |
+| target               | ✅        |                               | [Target](#target)                                             | Target details                                                                             |
+| req                  | ✅        |                               | [RequestProvider](#requestprovider)                           | Request provider Spec                                                                      |
+| qps                  | ✅        |                               | [QPSSpec](#qpsspec)                                           | Request per second specification                                                           |
+| concurrentConnection | ❎        | Elastic                       | [ConcurrentConnectionRateSpec](#concurrentconnectionratespec) | Concurrent number of requests to use to send request                                       |
+| histogramBuckets     | ❎        | [20, 50, 100, 300, 700, 1100] | [uint16]                                                      | Prometheus histogram buckets. For details https://prometheus.io/docs/practices/histograms/ |
 
 ```http request
 POST /test HTTP/1.1
@@ -225,6 +228,15 @@ This will run the test for 120 seconds with a linear increase in request per sec
   "status": "Starting"
 }
 ```
+
+### Target
+Specify target details
+
+| field    | Required | Description                        | data type |
+|----------|----------|------------------------------------|-----------|
+| host     | ✅        | Target domain name or IP           | Domain    |
+| port     | ✅        | Target port                        | uint16    |
+| protocol | ✅        | Target protocol, support http only | "HTTP"    |
 
 ### RequestProvider
 
@@ -382,23 +394,33 @@ Generate request with random data based on constraints, can be specified using J
 
 ### QPSSpec
 
-Currently, supports the following specifications
+Currently, supported specifications are - [ConstantRate](#constantrate), [Linear](#linear), [ArraySpec](#arrayspec)
+
+### ConcurrentConnectionRateSpec
+
+#### Elastic
+The default configuration, if nothing specified in the request, this will be used. 
+
+Other supported configurations are - [ConstantRate](#constantrate), [Linear](#linear), [ArraySpec](#arrayspec)
+
+### Rate configurations
 
 #### ConstantRate
 
-| field         | Description                        | data type |
-|---------------|------------------------------------|-----------|
-| countPerSec   | QPS to maintain for the `duration` | uint32    |
+| field         | data type | Description                                              |
+|---------------|-----------|----------------------------------------------------------|
+| countPerSec   | uint32    | Constant rate is maintain for the `duration` of the test |
 
 #### Linear
 
-Increase QPS linearly; QPS for any time is calculated using eq. qps = ax + b, where x being the n-th second.
+Increase rate(QPS/ConnPerSec) linearly; rate for any time is calculated using eq. rate(QPS/ConnectionPS) = ax + b, 
+where x being duration(in seconds) passed since the start of the test.
 
-| field | Description       | data type |
-|-------|-------------------|-----------|
-| a     | Slope of the line | float     |
-| b     | Intercept         | uint32    |
-| max   | max QPS           | uint32    |
+| field | data type | Description       |
+|-------|-----------|-------------------|
+| a     | float     | Slope of the line |
+| b     | uint32    | Intercept         |
+| max   | uint32    | max QPS           |
 
 ##### Example
 
@@ -416,21 +438,21 @@ Increase QPS linearly; QPS for any time is calculated using eq. qps = ax + b, wh
 
 If a test runs for 10 seconds, the generated RPS will be [1, 5, 7, 9, 11, 12, 12, 12, 12, 12]
 
-#### ArrayQPS
+#### ArraySpec
 
-Specify RPS directly
+Specify QPS directly for a certain period of time, not recommended to use.
 
-| field | Description  | data type |
-|-------|--------------|-----------|
-| qps   | Array of qps | [uint32]  |
+| field       | data type | Description    |
+|-------------|-----------|----------------|
+| countPerSec | [uint32]  | Array of rates |
 
 ##### Example
 
 ```json
 {
   "qps": {
-    "ArrayQPS": {
-      "qps": [1, 4, 6, 10, 20, 10]
+    "ArraySpec": {
+      "countPerSec": [1, 4, 6, 10, 20, 10]
     }
   }
 }
@@ -594,7 +616,8 @@ The application provides [sample Grafana dashboard](overload/docs/monitoring/gra
 graphs for Request Per Seconds, Response Status count, Average response time and Response 
 time quantiles.
 
-![Grafana Dashboard](overload/docs/monitoring/grafana-dashboard.png)
+![Grafana Dashboard - RPS](overload/docs/monitoring/grafana-dashboard.png)
+![Grafana Dashboard - ResponseTime, Connection pool](overload/docs/monitoring/grafana-dashboard-rt-pool.png)
 
 
 ## Build yourself
