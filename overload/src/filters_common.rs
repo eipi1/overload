@@ -67,18 +67,18 @@ pub(crate) mod test_common {
 
     pub fn setup() {
         ONCE.call_once(|| {
-            // tracing_subscriber::fmt()
-            //     .with_env_filter("trace")
-            //     .try_init()
-            //     .unwrap();
+            tracing_subscriber::fmt()
+                .with_env_filter("trace")
+                .try_init()
+                .unwrap();
 
-            let _ = tracing_subscriber::fmt()
-                .with_env_filter(format!(
-                    "overload={},rust_cloud_discovery={},cloud_discovery_kubernetes={},cluster_mode={},\
-                    almost_raft={}, hyper={}",
-                    "trace", "info", "info", "info", "info", "info"
-                ))
-                .try_init();
+            // let _ = tracing_subscriber::fmt()
+            //     .with_env_filter(format!(
+            //         "overload={},rust_cloud_discovery={},cloud_discovery_kubernetes={},cluster_mode={},\
+            //         almost_raft={}, hyper={}",
+            //         "trace", "info", "info", "info", "info", "info"
+            //     ))
+            //     .try_init();
         });
     }
 
