@@ -509,8 +509,8 @@ impl Stream for RequestGenerator {
                     Poll::Ready((provider, result)) => {
                         let qps = self.current_qps;
                         self.current_qps = 0;
-                        self.current_count += 1;
                         let conn = self.concurrent_connection.next(self.current_count, None);
+                        self.current_count += 1;
                         self.provider_or_future = ProviderOrFuture::Provider(provider);
                         Poll::Ready(Some((qps, result, conn)))
                     }

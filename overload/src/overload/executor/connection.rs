@@ -58,16 +58,20 @@ impl QueuePool {
         if self.elastic && connection_count != self.max_connection as usize {
             self.elastic = false; // make it non-elastic as max_connection has changed
         }
-        if self.connections.len() > connection_count {
+        let avail_con_len = self.connections.len();
+        if avail_con_len > connection_count {
             self.connections
-                .drain(0..(self.connections.len() - connection_count));
+                .drain(0..(avail_con_len - connection_count));
         }
+        let avail_con_len = self.connections.len();
         let connection_count = connection_count as i64;
         let mut diff = connection_count - self.max_connection;
         if diff > 0 {
             let nc = self.new_connections.read().await.len();
-            let rc = self.recyclable_connections.read().await.len();
-            let active_con = nc + rc + self.busy_connections;
+            // no need to take recyclable_connections into consideration as they're already getting
+            // counted in busy_connections.
+            // let rc = self.recyclable_connections.read().await.len();
+            let active_con = nc + self.busy_connections + avail_con_len;
             diff = std::cmp::max(0, connection_count - active_con as i64);
         };
         debug!(
