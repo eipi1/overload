@@ -32,6 +32,6 @@ jobs:
     - name: Lint
       run: cargo fmt --all -- --check
     - name: Run standalone tests
-      run: cargo test test_request_random_constant --verbose
+      run: cargo test --verbose
     - name: Run cluster tests
       run: cargo test --all-features --verbose
