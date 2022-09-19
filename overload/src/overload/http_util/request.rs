@@ -2,7 +2,7 @@
 
 use crate::generator::{
     ArraySpec, ConstantRate, Linear, RandomDataRequest, RateScheme, RequestFile, RequestGenerator,
-    RequestList, RequestProvider,
+    RequestList, RequestProvider, Steps,
 };
 use crate::generator::{Elastic, Target};
 use crate::http_util::GenericError;
@@ -18,6 +18,7 @@ pub(crate) enum RateSpec {
     ConstantRate(ConstantRate),
     Linear(Linear),
     ArraySpec(ArraySpec),
+    Steps(Steps),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -25,7 +26,7 @@ pub(crate) enum ConcurrentConnectionRateSpec {
     ConstantRate(ConstantRate),
     Linear(Linear),
     ArraySpec(ArraySpec),
-    // Bounded(Bounded),
+    Steps(Steps),
     Elastic(Elastic),
 }
 
@@ -72,6 +73,7 @@ impl Into<RequestGenerator> for Request {
             RateSpec::ConstantRate(qps) => Box::new(qps),
             RateSpec::Linear(qps) => Box::new(qps),
             RateSpec::ArraySpec(qps) => Box::new(qps),
+            RateSpec::Steps(qps) => Box::new(qps),
         };
         let req: Box<dyn RequestProvider + Send> = match self.req {
             RequestSpecEnum::RequestList(req) => Box::new(req),
@@ -89,6 +91,7 @@ impl Into<RequestGenerator> for Request {
                 ConcurrentConnectionRateSpec::ConstantRate(spec) => Box::new(spec),
                 ConcurrentConnectionRateSpec::Linear(spec) => Box::new(spec),
                 ConcurrentConnectionRateSpec::Elastic(spec) => Box::new(spec),
+                ConcurrentConnectionRateSpec::Steps(spec) => Box::new(spec),
             };
             Some(rate_spec)
         } else {

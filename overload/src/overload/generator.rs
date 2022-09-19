@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use futures_util::future::BoxFuture;
 use futures_util::stream::Stream;
 use http::Method;
-use log::{debug, trace};
+use log::{debug, trace, warn};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -17,6 +17,7 @@ use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{ConnectOptions, SqliteConnection};
 use std::cmp::{min, Ordering};
 use std::collections::{BinaryHeap, HashMap};
+use std::convert::TryFrom;
 use std::iter::repeat_with;
 use std::pin::Pin;
 use std::str::FromStr;
@@ -88,7 +89,7 @@ impl RequestGenerator {
 }
 
 pub trait RateScheme {
-    fn next(&self, nth: u32, last_qps: Option<u32>) -> u32;
+    fn next(&mut self, nth: u32, last_qps: Option<u32>) -> u32;
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -99,7 +100,7 @@ pub struct ConstantRate {
 
 impl RateScheme for ConstantRate {
     #[inline]
-    fn next(&self, _nth: u32, _last_qps: Option<u32>) -> u32 {
+    fn next(&mut self, _nth: u32, _last_qps: Option<u32>) -> u32 {
         self.count_per_sec
     }
 }
@@ -118,7 +119,7 @@ impl ArraySpec {
 
 impl RateScheme for ArraySpec {
     #[inline]
-    fn next(&self, nth: u32, _last_qps: Option<u32>) -> u32 {
+    fn next(&mut self, nth: u32, _last_qps: Option<u32>) -> u32 {
         let len = self.count_per_sec.len();
         if len != 0 {
             let idx = nth as usize % len;
@@ -143,7 +144,7 @@ impl Default for Bounded {
 }
 
 impl RateScheme for Bounded {
-    fn next(&self, _nth: u32, _last_value: Option<u32>) -> u32 {
+    fn next(&mut self, _nth: u32, _last_value: Option<u32>) -> u32 {
         self.max
     }
 }
@@ -154,7 +155,7 @@ pub struct Elastic {
 }
 
 impl RateScheme for Elastic {
-    fn next(&self, _nth: u32, _last_qps: Option<u32>) -> u32 {
+    fn next(&mut self, _nth: u32, _last_qps: Option<u32>) -> u32 {
         0
     }
 }
@@ -490,7 +491,8 @@ impl Stream for RequestGenerator {
                 std::mem::replace(&mut self.provider_or_future, ProviderOrFuture::Dummy);
             match provider_or_future {
                 ProviderOrFuture::Provider(mut provider) => {
-                    let qps = self.qps_scheme.next(self.current_count, None);
+                    let current_count = self.current_count;
+                    let qps = self.qps_scheme.next(current_count, None);
                     let len = provider.size_hint();
                     let req_size = min(qps as usize, min(len, MAX_REQ_RET_SIZE));
                     trace!("request size: {}, qps: {}, len: {}", req_size, qps, len);
@@ -510,7 +512,8 @@ impl Stream for RequestGenerator {
                     Poll::Ready((provider, result)) => {
                         let qps = self.current_qps;
                         self.current_qps = 0;
-                        let conn = self.concurrent_connection.next(self.current_count, None);
+                        let current_count = self.current_count;
+                        let conn = self.concurrent_connection.next(current_count, None);
                         self.current_count += 1;
                         self.provider_or_future = ProviderOrFuture::Provider(provider);
                         Poll::Ready(Some((qps, result, conn)))
@@ -551,17 +554,17 @@ pub struct Linear {
 }
 
 impl RateScheme for Linear {
-    fn next(&self, nth: u32, _last_qps: Option<u32>) -> u32 {
+    fn next(&mut self, nth: u32, _last_qps: Option<u32>) -> u32 {
         min((self.a * nth as f32).ceil() as u32 + self.b, self.max)
     }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-#[serde(try_from="StepShadowType")]
+#[serde(try_from = "StepShadowType")]
 pub struct Step {
     pub(crate) start: u32,
     pub(crate) end: u32,
-    pub(crate) qps: u32,
+    pub(crate) rate: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -572,26 +575,23 @@ pub struct Steps {
     steps: Vec<Step>,
 }
 
-impl QPSScheme for Steps {
+impl RateScheme for Steps {
     fn next(&mut self, nth: u32, _last_qps: Option<u32>) -> u32 {
         let x = if let Some(step) = self.steps.get(self.current_step) {
-            // println!("{:?}", step);
-            // println!("{}", (step.start >= nth));
-            // println!("{}", (step.end <= nth));
             if step.start <= nth && step.end >= nth {
-                (step.qps, false)
+                (step.rate, false)
             } else {
                 //not found in current_step, check next
                 self.steps.get(self.current_step + 1).map_or_else(
                     || {
                         (
                             //not found in current_step+1, use last step as fallback
-                            self.steps.last().map_or(0, |s| s.qps),
+                            self.steps.last().map_or(0, |s| s.rate),
                             // (self.steps.len() - 1) - self.current_step,
-                            false
+                            false,
                         )
                     },
-                    |s| (s.qps, true),
+                    |s| (s.rate, true),
                 )
             }
         } else {
@@ -609,7 +609,7 @@ impl QPSScheme for Steps {
 pub struct StepShadowType {
     start: u32,
     end: u32,
-    qps: u32,
+    rate: u32,
 }
 
 impl TryFrom<StepShadowType> for Step {
@@ -626,7 +626,7 @@ impl TryFrom<StepShadowType> for Step {
         Ok(Step {
             start: value.start,
             end: value.end,
-            qps: value.qps,
+            rate: value.rate,
         })
     }
 }
@@ -656,7 +656,8 @@ impl TryFrom<StepsShadowType> for Steps {
         let first = iter.next().unwrap();
         if first.start != 0 {
             return Err(anyhow::anyhow!(
-                "Steps shoudl start from 0, but starts from {} instead.", first.start
+                "Steps should start from 0, but starts from {} instead.",
+                first.start
             ));
         }
 
@@ -679,13 +680,14 @@ impl TryFrom<StepsShadowType> for Steps {
 #[cfg(test)]
 pub(crate) mod test {
     use crate::datagen::{data_schema_from_value, generate_data};
-    use crate::generator::Linear;
+    use crate::generator::RateScheme;
     use crate::generator::Scheme;
     use crate::generator::Target;
     use crate::generator::{
         request_generator_stream, ConstantRate, RandomDataRequest, RequestFile, RequestGenerator,
         RequestList, RequestProvider, MAX_REQ_RET_SIZE,
     };
+    use crate::generator::{Linear, Steps};
     use crate::HttpReq;
     use http::Method;
     use regex::Regex;
@@ -719,17 +721,17 @@ pub(crate) mod test {
               {
                 "start": 0,
                 "end": 5,
-                "qps": 1
+                "rate": 1
               },
               {
                 "start": 9,
                 "end": 10,
-                "qps": 3
+                "rate": 3
               },
               {
                 "start": 6,
                 "end": 8,
-                "qps": 2
+                "rate": 2
               }
             ]
           }
@@ -749,31 +751,34 @@ pub(crate) mod test {
     }
 
     #[test]
-    fn serialize_steps_qps_start_from_zero() {
+    fn serialize_steps_qps_not_start_from_zero() {
         let json_str = r#"
         {
             "steps": [
               {
                 "start": 1,
                 "end": 5,
-                "qps": 1
+                "rate": 1
               },
               {
                 "start": 9,
                 "end": 10,
-                "qps": 3
+                "rate": 3
               },
               {
                 "start": 6,
                 "end": 8,
-                "qps": 2
+                "rate": 2
               }
             ]
           }
         "#;
         let steps = serde_json::from_str::<Steps>(json_str);
         assert!(steps.is_err());
-        assert_eq!(steps.err().unwrap().to_string(),"Steps shoudl start from 0, but starts from 1 instead.");
+        assert_eq!(
+            steps.err().unwrap().to_string(),
+            "Steps should start from 0, but starts from 1 instead."
+        );
     }
 
     #[test]
@@ -784,24 +789,28 @@ pub(crate) mod test {
               {
                 "start": 0,
                 "end": 5,
-                "qps": 1
+                "rate": 1
               },
               {
                 "start": 9,
                 "end": 9,
-                "qps": 3
+                "rate": 3
               },
               {
                 "start": 6,
                 "end": 8,
-                "qps": 2
+                "rate": 2
               }
             ]
           }
         "#;
         let steps = serde_json::from_str::<Steps>(json_str);
         assert!(steps.is_err());
-        assert!(steps.err().unwrap().to_string().starts_with("start(9) can not be greater than or equal to end(9)"));
+        assert!(steps
+            .err()
+            .unwrap()
+            .to_string()
+            .starts_with("start(9) can not be greater than or equal to end(9)"));
     }
 
     #[tokio::test]
