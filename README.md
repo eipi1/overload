@@ -394,14 +394,16 @@ Generate request with random data based on constraints, can be specified using J
 
 ### QPSSpec
 
-Currently, supported specifications are - [ConstantRate](#constantrate), [Linear](#linear), [ArraySpec](#arrayspec)
+Currently, supported configurations are - [ConstantRate](#constantrate), [Linear](#linear), [ArraySpec](#arrayspec), 
+[Steps/Staircase](#stepsstaircase-qps).
 
 ### ConcurrentConnectionRateSpec
 
 #### Elastic
 The default configuration, if nothing specified in the request, this will be used. 
 
-Other supported configurations are - [ConstantRate](#constantrate), [Linear](#linear), [ArraySpec](#arrayspec)
+Other supported configurations are - [ConstantRate](#constantrate), [Linear](#linear), [ArraySpec](#arrayspec),
+[Steps/Staircase](#stepsstaircase-qps).
 
 ### Rate configurations
 
@@ -461,6 +463,53 @@ Specify QPS directly for a certain period of time, not recommended to use.
 If a test runs for 10 seconds, generated RPS will be 1 on the first second, 4 on second, 6 on third seconds and
 10, 20, 10 on 4, 5, 6th second. It'll restart from 0 position once reaches the end of the array, so on the 7th seconds,
 QPS will go down back to 1 and 4, 6, 10 on 8, 9, 10th seconds, respectively.
+
+#### Steps/Staircase QPS
+
+Specify RPS in steps
+
+| field | Description   | data type     |
+|-------|---------------|---------------|
+| steps | Array of Step | [Step](#step) |
+
+##### Step
+
+| field | Description          | data type |
+|-------|----------------------|-----------|
+| start | Start of the step    | [uint32]  |
+| end   | end of the step      | [uint32]  |
+| qps   | QPS during this step | [uint32]  |
+
+##### Example
+
+```json
+{
+  "qps": {
+    "Steps" : {
+      "steps": [
+        {
+          "start": 0,
+          "end": 5,
+          "qps": 1
+        },
+        {
+          "start": 6,
+          "end": 8,
+          "qps": 4
+        },
+        {
+          "start": 9,
+          "end": 10,
+          "qps": 7
+        }
+      ]
+    }
+  }
+}
+```
+
+If the test run for 15 seconds, from 0 to 5th seconds, generated QPS is 1, from 6th to 8th seconds,
+generated QPS is 4, from 9 to 10th and 11th to 15th seconds, generated QPS is 7
 
 ### Upload Request Data File
 
