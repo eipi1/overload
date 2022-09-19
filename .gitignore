@@ -5,3 +5,4 @@ Cargo.lock
 scribbles
 *.csv
 *.db
+*.sqlite*

@@ -1,30 +1,3 @@
-apiVersion: v1
-kind: PersistentVolume
-metadata:
-  name: overload-vol01
-  labels:
-    type: local
-spec:
-  storageClassName: manual
-  capacity:
-    storage: 100Mi
-  accessModes:
-    - ReadWriteOnce
-  hostPath:
-    path: /tmp/k8s/volumes
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: overload-vol-claim
-spec:
-  storageClassName: manual
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: 50Mi
----
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -42,30 +15,30 @@ spec:
       labels:
         app: overload
     spec:
-      volumes:
-        - name: overload-data-storage
-          persistentVolumeClaim:
-            claimName: overload-vol-claim
       containers:
-        - image: mdsarowar/overload:latest-cluster-snapshot
+        - image: ghcr.io/eipi1/overload:cluster-latest-snapshot
           imagePullPolicy: "Always"
           name: overload
           ports:
             - containerPort: 3030
-          volumeMounts:
-            - mountPath: "/data"
-              name: overload-data-storage
           env:
-            - name: LOG_LEVEL
-              value: "info"
             - name: DATA_DIR
-              value: "/data"
+              value: "/tmp"
             - name: RUST_BACKTRACE
               value: "1"
             - name: K8S_ENDPOINT_NAME
               value: "overload"
             - name: K8S_NAMESPACE_NAME
               value: "default"
+            - name: RUST_LOG
+              value: info
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "250m"
+            limits:
+              memory: "1024Mi"
+              cpu: "2000m"
 ---
 apiVersion: v1
 kind: Service

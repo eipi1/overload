@@ -1,0 +1,41 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: overload
+  name: overload
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: overload
+  template:
+    metadata:
+      labels:
+        app: overload
+    spec:
+      containers:
+        - image: ghcr.io/eipi1/overload:latest-standalone-snapshot
+          imagePullPolicy: "Always"
+          name: overload
+          ports:
+            - containerPort: 3030
+          env:
+            - name: LOG_LEVEL
+              value: "info"
+            - name: DATA_DIR
+              value: "/tmp"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: overload
+spec:
+#  type: LoadBalancer
+  selector:
+    app: overload
+  ports:
+    - protocol: TCP
+      port: 3030
+      targetPort: 3030

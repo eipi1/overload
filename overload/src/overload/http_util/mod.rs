@@ -1,5 +1,10 @@
 #[cfg(feature = "cluster")]
-mod cluster;
+pub mod cluster;
+#[cfg(feature = "cluster")]
+pub use self::cluster::handle_request_cluster;
+#[cfg(feature = "cluster")]
+pub use self::cluster::handle_request_from_primary;
+
 pub mod request;
 mod standalone;
 
@@ -13,32 +18,21 @@ pub use cluster::stop;
 #[cfg(not(feature = "cluster"))]
 pub use standalone::stop;
 
-#[cfg(feature = "cluster")]
-use crate::executor::cluster::cluster_execute_request_generator;
 use crate::executor::execute_request_generator;
 use crate::http_util::request::Request;
 use crate::metrics::MetricsFactory;
-#[cfg(feature = "cluster")]
-use crate::ErrorCode;
 use crate::{HttpReq, JobStatus, Response};
 use anyhow::Error as AnyError;
 use bytes::Buf;
-#[cfg(feature = "cluster")]
-use cluster_mode::Cluster;
 use csv_async::{AsyncDeserializer, AsyncReaderBuilder};
 use futures_core::ready;
-use futures_util::Stream;
+use futures_util::{FutureExt, Stream};
 use http::{Method, Uri};
-#[cfg(feature = "cluster")]
-use hyper::client::HttpConnector;
-#[cfg(feature = "cluster")]
-use hyper::{Body, Client};
-#[allow(unused_imports)]
 use log::{error, trace};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqliteConnectOptions;
-use sqlx::ConnectOptions;
+use sqlx::{ConnectOptions, Connection};
 use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
 use std::error::Error as StdError;
@@ -48,8 +42,6 @@ use std::io::Error as StdIoError;
 use std::io::ErrorKind;
 use std::pin::Pin;
 use std::str::FromStr;
-#[cfg(feature = "cluster")]
-use std::sync::Arc;
 use std::task::{Context, Poll};
 use tokio::io::AsyncRead;
 use tokio_stream::StreamExt;
@@ -67,76 +59,13 @@ pub async fn handle_request(request: Request, metrics: &'static MetricsFactory) 
         metrics
             .metrics_with_buckets(buckets.to_vec(), &*job_id)
             .await,
+        noop().boxed(),
     ));
     Response::new(job_id, JobStatus::Starting)
 }
 
-#[cfg(feature = "cluster")]
-pub async fn handle_request_cluster(request: Request, cluster: Arc<Cluster>) -> Response {
-    let job_id = job_id(&request);
-    let buckets = request.histogram_buckets.clone();
-    if !cluster.is_active().await {
-        Response::new(job_id, JobStatus::Error(ErrorCode::InactiveCluster))
-    } else if cluster.is_primary().await {
-        let generator = request.into();
-        tokio::spawn(cluster_execute_request_generator(
-            generator,
-            job_id.clone(),
-            cluster,
-            buckets,
-        ));
-        Response::new(job_id, JobStatus::Starting)
-    } else {
-        //forward request to primary
-        let client = Client::new();
-        let job_id = request
-            .name
-            .clone()
-            .unwrap_or_else(|| "unknown_job".to_string());
-        match forward_test_request(request, cluster, client).await {
-            Ok(resp) => resp,
-            Err(err) => {
-                error!("{}", err);
-                unknown_error_resp(job_id)
-            }
-        }
-    }
-}
-
-#[cfg(feature = "cluster")]
-async fn forward_test_request(
-    request: Request,
-    cluster: Arc<Cluster>,
-    client: Client<HttpConnector>,
-) -> anyhow::Result<Response> {
-    let primaries = cluster
-        .primaries()
-        .await
-        .ok_or_else(|| anyhow::anyhow!("Primary returns None"))?;
-    if let Some(primary) = primaries.iter().next() {
-        let uri = primary
-            .service_instance()
-            .uri()
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("Invalid ServiceInstance URI"))?;
-        trace!("forwarding request to primary: {}", &uri);
-        let req = hyper::Request::builder()
-            .uri(format!("{}/test", &uri))
-            .method("POST")
-            .body(Body::from(serde_json::to_string(&request)?))?;
-        let resp = client.request(req).await?;
-        let bytes = hyper::body::to_bytes(resp.into_body()).await?;
-        let resp = serde_json::from_slice::<Response>(bytes.as_ref())?;
-        return Ok(resp);
-    };
-    Ok(unknown_error_resp(
-        request.name.unwrap_or_else(|| "unknown_job".to_string()),
-    ))
-}
-
-#[cfg(feature = "cluster")]
-fn unknown_error_resp(job_id: String) -> Response {
-    Response::new(job_id, JobStatus::Error(ErrorCode::Others))
+pub async fn noop() -> Result<(), anyhow::Error> {
+    Ok(())
 }
 
 //todo verify for cluster mode. using job id as name for secondary request
@@ -187,7 +116,7 @@ where
     }
 }
 
-async fn csv_reader_to_sqlite<R>(
+pub async fn csv_reader_to_sqlite<R>(
     mut reader: AsyncDeserializer<R>,
     dest_file: String,
 ) -> anyhow::Result<GenericResponse<String>>
@@ -214,7 +143,7 @@ where
     while let Some(req) = reader.next().await {
         match req {
             Ok(csv_req) => {
-                trace!("{:?}", &csv_req);
+                trace!("csv row: {:?}", &csv_req);
                 //todo use TryInto
                 let req: Result<HttpReq, AnyError> = csv_req.try_into();
                 match req {
@@ -242,6 +171,7 @@ where
     response
         .data
         .insert("valid_count".into(), success.to_string());
+    connection.close();
     Ok(response)
 }
 
@@ -326,6 +256,7 @@ macro_rules! from_error {
 from_error!(hyper::Error);
 from_error!(AnyError);
 from_error!(serde_json::Error);
+from_error!(StdIoError);
 
 impl Default for GenericError {
     fn default() -> Self {
@@ -393,8 +324,6 @@ where
     type Item = Result<B, WarpStdIoError>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        // let opt_item = ready!(Pin::new(&mut self.get_mut().body).poll_next(cx));
-
         match ready!(Pin::new(&mut self.get_mut().inner).poll_next(cx)) {
             None => Poll::Ready(None),
             Some(data) => {
@@ -427,6 +356,7 @@ impl Into<StdIoError> for WarpStdIoError {
 
 pub const PATH_JOB_STATUS: &str = "/test/status";
 pub const PATH_STOP_JOB: &str = "/test/stop";
+pub const PATH_FILE_UPLOAD: &str = "/test/requests-bin";
 
 #[cfg(test)]
 #[allow(dead_code)]
@@ -464,6 +394,7 @@ mod test {
             .create_deserializer(csv_data.as_bytes());
         let to_sqlite = csv_reader_to_sqlite(reader, "requests.sqlite".to_string()).await;
         log_error!(to_sqlite);
+        let _ = tokio::fs::remove_file("requests.sqlite").await;
     }
 
     async fn create_csv() {

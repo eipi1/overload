@@ -1,0 +1,191 @@
+[package]
+name = "overload"
+version = "0.3.0"
+authors = ["Md Sarowar Alam <sarowar.cse@gmail.com>"]
+edition = "2018"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/eipi1/overload"
+description = """
+A distributed load testing application with kubernetes support
+"""
+categories = ["development-tools"]
+keywords = ["load-testing", "cluster"]
+
+[lib]
+name = "overload"
+path = "src/overload/lib.rs"
+
+[dependencies.rust-cloud-discovery]
+version = "0.1"
+optional = true
+
+[dependencies.cloud-discovery-kubernetes]
+version = "0.1"
+optional = true
+
+[dependencies.cluster-mode]
+version = "0.1"
+optional = true
+
+[dependencies.bytes]
+version = "1.0"
+
+[dependencies.smallvec]
+version = "1.7"
+features = ["serde", "union", "const_generics"]
+
+[dependencies.smol_str]
+version = "0.1.18"
+features = ["serde"]
+
+[dependencies.lazy_static]
+version = "1.4"
+
+[dependencies.futures]
+version = "0.3"
+
+[dependencies.futures-core]
+version = "0.3"
+
+[dependencies.futures-util]
+version = "0.3"
+
+[dependencies.pin-project]
+version = "1.0"
+
+[dependencies.tokio]
+version = "1.19"
+features = ["rt-multi-thread", "macros", "fs", "io-util", "sync"]
+
+[dependencies.tokio-stream]
+version = "0.1"
+
+[dependencies.tokio-util]
+version = "0.7"
+features = ["io", "compat"]
+
+[dependencies.native-tls]
+version = "0.2"
+
+[dependencies.http]
+version = "0.2"
+
+[dependencies.url]
+version = "2.2"
+
+[dependencies.hyper]
+version = "0.14"
+features = ["runtime", "http1", "http2", "client", "stream"]
+
+[dependencies.hyper-tls]
+version = "0.5"
+
+[dependencies.tower]
+version = "0.4"
+features = ["util"]
+
+[dependencies.bb8]
+path = "../bb8"
+
+[dependencies.warp]
+version = "0.3"
+
+[dependencies.async-trait]
+version = "0.1"
+
+[dependencies.csv-async]
+version = "1.2"
+features = ["tokio"]
+
+[dependencies.sqlx]
+version = "0.5"
+default-features = false
+features = ["sqlite", "runtime-tokio-native-tls"]
+
+[dependencies.regex]
+version = "1.4"
+
+[dependencies.serde]
+version = "1.0"
+features = ["derive"]
+
+[dependencies.serde_json]
+version = "1.0"
+
+[dependencies.http-serde]
+version = "1.0"
+
+[dependencies.uuid]
+version = "1.1"
+features = ["v4"]
+
+[dependencies.fastrand]
+version = "1.4"
+
+[dependencies.rand]
+version = "0.8"
+
+[dependencies.regex-syntax]
+version = "0.6"
+
+[dependencies.regex_generate]
+git = "https://github.com/eipi1/regex_generate"
+branch = "pub-gen-from-hir"
+
+[dependencies.anyhow]
+version = "1.0"
+
+[dependencies.cfg-if]
+version = "1.0"
+
+[dependencies.prometheus]
+version = "0.13"
+features = ["process"]
+
+[dependencies.log]
+version = "0.4"
+
+[dependencies.tracing]
+version = "0.1"
+
+[dependencies.tracing-subscriber]
+version = "0.2"
+
+[dev-dependencies.tokio]
+version = "1.19"
+features = ["rt-multi-thread", "macros", "fs", "io-util", "time", "test-util"]
+
+[dev-dependencies.tokio-test]
+version = "0.4"
+
+[dev-dependencies.more-asserts]
+version = "0.3"
+
+[dev-dependencies.base64]
+version = "0.13"
+
+[dev-dependencies.wiremock]
+version = "0.5"
+
+[dev-dependencies.httpmock]
+version = "0.6"
+
+[dev-dependencies.assert-json-diff]
+version = "2.0"
+
+[dev-dependencies.sha2]
+version = "0.10"
+
+[dev-dependencies.serial_test]
+version = "0.9"
+
+[dev-dependencies.portpicker]
+version = "0.1"
+
+[features]
+default = ["debug"]
+
+cluster = ["rust-cloud-discovery", "cloud-discovery-kubernetes", "cluster-mode"]
+# addtional checks for debugging/logging purpose
+debug = []

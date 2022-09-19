@@ -1,16 +1,15 @@
 //noinspection Duplicates
-#![allow(dead_code)]
 
 use super::HttpReq;
-use crate::executor::{set_job_status, should_stop};
-use crate::generator::{request_generator_stream, ArrayQPS, RequestGenerator};
-use crate::http_util::request::{QPSSpec, RequestSpecEnum};
+use crate::executor::{set_job_status, should_stop, ConnectionCount, QPS};
+use crate::generator::{request_generator_stream, ArraySpec, RequestGenerator, Target};
+use crate::http_util::request::{ConcurrentConnectionRateSpec, RateSpec, RequestSpecEnum};
 use crate::{ErrorCode, JobStatus};
 use cluster_mode::{Cluster, RestClusterNode};
 use futures_util::stream::FuturesUnordered;
 use http::Request;
 use hyper::client::{Client, HttpConnector};
-use log::{error, trace};
+use log::{debug, error, info, trace};
 use smallvec::SmallVec;
 use std::collections::HashSet;
 use std::convert::TryInto;
@@ -31,6 +30,7 @@ pub async fn cluster_execute_request_generator(
     let shared_request_provider = request.shared_provider();
     let provider = request.request_provider();
     let provider: Option<RequestSpecEnum> = provider.try_into().ok();
+    let target = request.target.clone();
     let stream = request_generator_stream(request);
     tokio::pin!(stream);
     let client = Client::new();
@@ -38,7 +38,7 @@ pub async fn cluster_execute_request_generator(
         let mut write_guard = super::JOB_STATUS.write().await;
         write_guard.insert(job_id.clone(), JobStatus::InProgress);
     }
-    // in cluster mode, bundle qps for a span of time, let's say 10 seconds, and distribute them to
+    // in cluster mode, bundle qps for a period, let's say 10 seconds, and distribute them to
     // secondaries
     let bundle_size: usize = 10 * time_scale; //10 seconds
     if cluster.is_primary().await {
@@ -47,11 +47,12 @@ pub async fn cluster_execute_request_generator(
             if should_stop(&job_id).await {
                 break;
             }
-            let mut bundle = vec![];
-            while let Some((qps, requests)) = stream.next().await {
+            let mut bundle: Vec<(QPS, Vec<HttpReq>, ConnectionCount)> = vec![];
+            while let Some((qps, requests, connection_count)) = stream.next().await {
                 match requests {
                     Ok(result) => {
-                        bundle.push((qps, result));
+                        debug!("[cluster_execute_request_generator] - [{}] - qps: {}, request len: {}, connection count: {}", &job_id, qps, result.len(), connection_count);
+                        bundle.push((qps, result, connection_count));
                         if bundle.len() == bundle_size {
                             break;
                         }
@@ -68,6 +69,10 @@ pub async fn cluster_execute_request_generator(
                                 .await;
                             break;
                         }
+                        error!(
+                            "[cluster_execute_request_generator] - [{}] - error: {}",
+                            &job_id, err
+                        );
                     }
                 };
             }
@@ -78,18 +83,18 @@ pub async fn cluster_execute_request_generator(
             }
             //if it's primary, cluster.secondaries() will always return some
             if let Some(secondaries) = cluster.secondaries().await {
-                let len = secondaries.len();
-                if len == 0 {
+                let secondary_count = secondaries.len();
+                if secondary_count == 0 {
                     error!("No secondary. Stopping the job");
                     let mut guard = super::JOB_STATUS.write().await;
                     guard.insert(job_id.clone(), JobStatus::Stopped);
                     continue;
                 }
-                let (qps, reminder, mut requests) =
-                    calculate_req_per_secondary(&bundle, bundle_size, len);
+                let (mut qps, mut requests, mut connection_count_to_secondaries) =
+                    calculate_req_per_secondary(&bundle, bundle_size, secondary_count);
                 let mut to_secondaries = FuturesUnordered::new();
                 let requests = requests.drain().cloned().collect::<Vec<HttpReq>>();
-                // let requests = requests.
+
                 for secondary in secondaries.iter() {
                     let request_enum: RequestSpecEnum = if shared_request_provider {
                         provider.clone().unwrap_or_else(|| requests.clone().into())
@@ -99,32 +104,14 @@ pub async fn cluster_execute_request_generator(
                     let to_secondary = send_requests_to_secondary(
                         &client,
                         secondary,
-                        &qps,
+                        qps.pop().unwrap(),
                         request_enum,
+                        connection_count_to_secondaries.pop().unwrap(),
+                        &target,
                         job_id.clone(),
                         &buckets,
                     );
                     to_secondaries.push(to_secondary);
-                }
-                let has_reminder = reminder.iter().sum::<u32>() != 0;
-                if has_reminder {
-                    if let Some(secondary) = secondaries.iter().next() {
-                        trace!("sending reminders to secondary: {:?}", &secondary);
-                        let request_enum: RequestSpecEnum = if shared_request_provider {
-                            provider.clone().unwrap_or_else(|| requests.clone().into())
-                        } else {
-                            requests.clone().into()
-                        };
-                        let to_secondary = send_requests_to_secondary(
-                            &client,
-                            secondary,
-                            &reminder,
-                            request_enum,
-                            job_id.clone(),
-                            &buckets,
-                        );
-                        to_secondaries.push(to_secondary);
-                    }
                 }
                 while let Some(result) = to_secondaries.next().await {
                     crate::log_error!(result);
@@ -137,23 +124,35 @@ pub async fn cluster_execute_request_generator(
                 break;
             }
         }
+        info!("primary - finished generating QPS");
+        set_job_status(&job_id, JobStatus::Completed).await;
     } else {
         error!("Node is in secondary mode.");
+        set_job_status(&job_id, JobStatus::Error(ErrorCode::SecondaryClusterNode)).await;
     }
-    set_job_status(&job_id, JobStatus::Completed).await;
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn send_requests_to_secondary(
     client: &Client<HttpConnector>,
     node: &RestClusterNode,
-    qps: &[u32],
+    qps: Vec<QPS>,
     requests: RequestSpecEnum,
+    connection_count_to_secondaries: Vec<QPS>,
+    target: &Target,
     job_id: String,
     buckets: &SmallVec<[f64; 6]>,
 ) -> anyhow::Result<()> {
     let instance = node.service_instance();
     let uri = instance.uri().clone().expect("No uri");
-    let request = to_test_request(qps, requests, job_id, buckets);
+    let request = to_test_request(
+        qps,
+        requests,
+        connection_count_to_secondaries,
+        target,
+        job_id,
+        buckets,
+    );
     let request = serde_json::to_vec(&request)?;
     let request = Request::builder()
         .uri(format!("{}{}", uri, PATH_REQ_TO_SECONDARY))
@@ -163,22 +162,29 @@ async fn send_requests_to_secondary(
     Ok(())
 }
 
-// fn to_test_request(qps: &[u32], requests: &HashSet<&HttpReq>) {
 fn to_test_request(
-    qps: &[u32],
+    qps: Vec<QPS>,
     req: RequestSpecEnum,
+    connection_count: Vec<QPS>,
+    target: &Target,
     job_id: String,
     buckets: &SmallVec<[f64; 6]>,
 ) -> crate::http_util::request::Request {
     let duration = qps.len() as u32;
-    let qps = ArrayQPS::new(Vec::from(qps));
-    let qps = QPSSpec::ArrayQPS(qps);
+    let qps = ArraySpec::new(qps);
+    let qps = RateSpec::ArraySpec(qps);
+    let concurrent_connection = ArraySpec::new(connection_count);
+    let concurrent_connection = Some(ConcurrentConnectionRateSpec::ArraySpec(
+        concurrent_connection,
+    ));
 
     crate::http_util::request::Request {
         name: Some(job_id),
         duration,
         req,
         qps,
+        target: target.clone(),
+        concurrent_connection,
         histogram_buckets: buckets.clone(),
     }
 }
@@ -186,23 +192,64 @@ fn to_test_request(
 const PATH_REQ_TO_SECONDARY: &str = "/cluster/test";
 
 fn calculate_req_per_secondary(
-    requests: &[(u32, Vec<HttpReq>)],
-    _bundle_size: usize,
+    requests: &[(QPS, Vec<HttpReq>, ConnectionCount)],
+    bundle_size: usize,
     n_secondary: usize,
-) -> (Vec<u32>, Vec<u32>, HashSet<&HttpReq>) {
+) -> (Vec<Vec<QPS>>, HashSet<&HttpReq>, Vec<Vec<QPS>>) {
     //array of qps, will be used to generate ArrayQPS
-    let mut qps_to_secondaries = vec![];
-    let mut qps_reminders = vec![];
+    let mut qps_per_secondary = vec![];
+    let mut qps_remainders = vec![];
     let mut req_to_secondaries = HashSet::new();
+    let mut connection_count_per_secondary = vec![];
+    let mut connection_count_remainder = vec![];
 
-    for (qps, requests) in requests {
-        let q = qps / n_secondary as u32;
-        let r = qps % n_secondary as u32;
-        qps_to_secondaries.push(q);
-        qps_reminders.push(r);
+    for (qps, requests, connection_count) in requests {
+        debug!(
+            "[calculate_req_per_secondary] - qps: {}, requests len: {}, connection count: {}",
+            qps,
+            requests.len(),
+            connection_count
+        );
+        let q = qps / n_secondary as QPS;
+        let r = qps % n_secondary as QPS;
+        qps_per_secondary.push(q);
+        qps_remainders.push(r);
         req_to_secondaries.extend(requests);
+        let c = connection_count / n_secondary as u32;
+        let r = connection_count % n_secondary as u32;
+        connection_count_per_secondary.push(c);
+        connection_count_remainder.push(r);
     }
-    (qps_to_secondaries, qps_reminders, req_to_secondaries)
+
+    let mut qps = vec![vec![0; bundle_size]; n_secondary];
+    let mut conn_count = vec![vec![0; bundle_size]; n_secondary];
+    let iter = qps_per_secondary.iter().zip(qps_remainders.iter()).zip(
+        connection_count_per_secondary
+            .iter()
+            .zip(connection_count_remainder.iter()),
+    );
+
+    for (p, ((qps_, qps_remainder), (conn_count_, conn_remainder))) in iter.enumerate() {
+        for i in 0..n_secondary {
+            let q = qps.get_mut(i).unwrap();
+            let qps_for_this_sec = if i < *qps_remainder as usize {
+                *qps_ + 1
+            } else {
+                *qps_
+            };
+            let _ = std::mem::replace(&mut q[p], qps_for_this_sec);
+
+            let c = conn_count.get_mut(i).unwrap();
+            let count_for_this_sec = if i < *conn_remainder as usize {
+                *conn_count_ + 1
+            } else {
+                *conn_count_
+            };
+            let _ = std::mem::replace(&mut c[p], count_for_this_sec);
+        }
+    }
+
+    (qps, req_to_secondaries, conn_count)
 }
 
 #[cfg(test)]
@@ -211,7 +258,7 @@ mod test {
         calculate_req_per_secondary, cluster_execute_request_generator,
     };
     use crate::generator::test::req_list_with_n_req;
-    use crate::generator::{ConstantQPS, RequestGenerator};
+    use crate::generator::{ConstantRate, RequestGenerator, Scheme, Target};
     use crate::HttpReq;
     use cluster_mode::{Cluster, InstanceMode, RestClusterNode};
     use rust_cloud_discovery::ServiceInstance;
@@ -225,8 +272,18 @@ mod test {
         for _ in 0..3 {
             requests.push(http_req_random());
         }
-        let qps = ConstantQPS { qps: 3 };
-        let rg = RequestGenerator::new(3, Box::new(req_list_with_n_req(3)), Box::new(qps));
+        let qps = ConstantRate { count_per_sec: 3 };
+        let rg = RequestGenerator::new(
+            3,
+            Box::new(req_list_with_n_req(3)),
+            Box::new(qps),
+            Target {
+                host: "example.com".to_string(),
+                port: 80,
+                protocol: Scheme::HTTP,
+            },
+            None,
+        );
         let job_id = "test_job".to_string();
         let instance = ServiceInstance::new(
             None,
@@ -261,12 +318,25 @@ mod test {
             requests.push(http_req_random());
         }
         let mut qps_req = vec![];
-        qps_req.push((4, requests.clone()));
-        qps_req.push((5, requests.clone()));
-        qps_req.push((6, requests.clone()));
+        qps_req.push((0, requests.clone(), 2));
+        qps_req.push((2, requests.clone(), 0));
+        qps_req.push((5, requests.clone(), 6));
+        qps_req.push((6, requests.clone(), 7));
+        qps_req.push((7, requests.clone(), 8));
+        qps_req.push((8, requests.clone(), 5));
 
-        calculate_req_per_secondary(&qps_req, 3, 3);
-        //todo verify result
+        let result = calculate_req_per_secondary(&qps_req, 6, 4);
+        assert_eq!(result.0.get(0), Some(&vec![0, 1, 2, 2, 2, 2]));
+        assert_eq!(result.0.get(1), Some(&vec![0, 1, 1, 2, 2, 2]));
+        assert_eq!(result.0.get(2), Some(&vec![0, 0, 1, 1, 2, 2]));
+        assert_eq!(result.0.get(3), Some(&vec![0, 0, 1, 1, 1, 2]));
+        assert_eq!(result.0.get(4), None);
+
+        assert_eq!(result.2.get(0), Some(&vec![1, 0, 2, 2, 2, 2]));
+        assert_eq!(result.2.get(1), Some(&vec![1, 0, 2, 2, 2, 1]));
+        assert_eq!(result.2.get(2), Some(&vec![0, 0, 1, 2, 2, 1]));
+        assert_eq!(result.2.get(3), Some(&vec![0, 0, 1, 1, 2, 1]));
+        assert_eq!(result.2.get(4), None);
     }
 
     fn http_req_random() -> HttpReq {

@@ -20,12 +20,113 @@
 A distributed load testing utility written in Rust
 
 
-* [Usage](#usage)
+* [Getting Started](#getting-started)
 * [Environment variables](#environment-variables)
 * [APIs](#apis)
 * [Monitoring](#monitoring)
 
-## Usage
+## Getting started
+### Docker
+```shell
+docker run -p 3030:3030 ghcr.io/eipi1/overload:latest-standalone-snapshot
+```
+
+### Kubernetes
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: overload
+  name: overload
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: overload
+  template:
+    metadata:
+      labels:
+        app: overload
+    spec:
+      containers:
+        - image: ghcr.io/eipi1/overload:latest-standalone-snapshot
+          imagePullPolicy: "Always"
+          name: overload
+          ports:
+            - containerPort: 3030
+          env:
+            - name: LOG_LEVEL
+              value: "info"
+            - name: DATA_DIR
+              value: "/tmp"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: overload
+spec:
+  #  type: LoadBalancer
+  selector:
+    app: overload
+  ports:
+    - protocol: TCP
+      port: 3030
+      targetPort: 3030
+```
+
+### Start Test
+The following request will send two `GET` request per second(`"countPerSec": 2`) to `httpbin.org/get` for 120
+seconds(`"duration": 60`).
+```shell
+curl --location --request POST 'localhost:3030/test' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+  "duration": 120,
+  "name": "demo-test",
+  "qps": {
+    "ConstantRate": {
+      "countPerSec": 1
+    }
+  },
+  "req": {
+    "RequestList": {
+      "data": [
+        {
+          "body": null,
+          "method": "GET",
+          "url": "/get"
+        }
+      ]
+    }
+  },
+  "target": {
+    "host": "httpbin.org",
+    "port": 80,
+    "protocol": "HTTP"
+  }
+}'
+```
+It'll respond with a job identifier and status.
+```json
+{
+  "job_id": "demo-test-d2ae5ff0-7bf4-4daf-8784-83b642d7dd6b",
+  "status": "Starting"
+}
+```
+We'll need the `job_id` if we want to stop the test later.
+
+### Get job status
+```shell
+curl --location --request GET 'localhost:3030/test/status/'
+```
+### Stop a job
+```shell
+curl --location --request GET 'localhost:3030/test/stop/demo-test-d2ae5ff0-7bf4-4daf-8784-83b642d7dd6b'
+```
+
+## Modes
 
 Overload support two modes - cluster & standalone. Overload exposes a set of [APIs](#apis)
 at port `3030` to manage tests.
@@ -59,7 +160,7 @@ docker run -p 3030:3030 mdsarowar/overload:latest-standalone-snapshot
 
 | variable           | desc                                                                            | default  |
 |--------------------|---------------------------------------------------------------------------------|----------|
-| LOG_LEVEL          | application log level                                                           | info     |
+| RUST_LOG           | application log level                                                           | info     |
 | DATA_DIR           | path to store uploaded CSV, should be shared among all instance in cluster mode | /tmp     |
 | K8S_ENDPOINT_NAME  | name of the [endpoints][endpoint-api] (cluster mode only)                       | overload |
 | K8S_NAMESPACE_NAME | kubernetes namespace                                                            | default  |
@@ -69,12 +170,15 @@ docker run -p 3030:3030 mdsarowar/overload:latest-standalone-snapshot
 ### Request
 Test specification
 
-| Field    | Required | Default | Description                                                         | Data type                           |
-|----------|----------|---------|---------------------------------------------------------------------|-------------------------------------|
-| name     | ❎        | UUID    | Test name, application will append UUID to ensure unique identifier | String                              |
-| duration | ✅        |         | Test duration                                                       | uint32                              |
-| req      | ✅        |         | Request provider Spec                                               | [RequestProvider](#requestprovider) |
-| qps      | ✅        |         | RPS specification                                                   | [QPSSpec](#qpsspec)                 |
+| Field                | Required | Default                       | Data type                                                     | Description                                                                                |
+|----------------------|----------|-------------------------------|---------------------------------------------------------------|--------------------------------------------------------------------------------------------|
+| name                 | ❎        | UUID                          | String                                                        | Test name, application will append UUID to ensure unique identifier                        |
+| duration             | ✅        |                               | uint32                                                        | Test duration                                                                              |
+| target               | ✅        |                               | [Target](#target)                                             | Target details                                                                             |
+| req                  | ✅        |                               | [RequestProvider](#requestprovider)                           | Request provider Spec                                                                      |
+| qps                  | ✅        |                               | [QPSSpec](#qpsspec)                                           | Request per second specification                                                           |
+| concurrentConnection | ❎        | Elastic                       | [ConcurrentConnectionRateSpec](#concurrentconnectionratespec) | Concurrent number of requests to use to send request                                       |
+| histogramBuckets     | ❎        | [20, 50, 100, 300, 700, 1100] | [uint16]                                                      | Prometheus histogram buckets. For details https://prometheus.io/docs/practices/histograms/ |
 
 ```http request
 POST /test HTTP/1.1
@@ -85,8 +189,8 @@ Content-Type: application/json
   "duration": 120,
   "name": "demo-test",
   "qps": {
-    "ConstantQPS": {
-      "qps": 1
+    "ConstantRate": {
+      "countPerSec": 1
     }
   },
   "req": {
@@ -95,10 +199,15 @@ Content-Type: application/json
         {
           "body": null,
           "method": "GET",
-          "url": "http://httpbin.org/"
+          "url": "/get"
         }
       ]
     }
+  },
+  "target": {
+    "host": "httpbin.org",
+    "port": 80,
+    "protocol": "HTTP"
   },
   "histogramBuckets": [35,40,45,48,50, 52]
 }
@@ -119,6 +228,15 @@ This will run the test for 120 seconds with a linear increase in request per sec
   "status": "Starting"
 }
 ```
+
+### Target
+Specify target details
+
+| field    | Required | Description                        | data type |
+|----------|----------|------------------------------------|-----------|
+| host     | ✅        | Target domain name or IP           | Domain    |
+| port     | ✅        | Target port                        | uint16    |
+| protocol | ✅        | Target protocol, support http only | "HTTP"    |
 
 ### RequestProvider
 
@@ -154,9 +272,14 @@ Get request data from a file. File have to be [uploaded](#upload-request-data-fi
     }
   },
   "qps": {
-    "ConstantQPS": {
-      "qps": 8
+    "ConstantRate": {
+      "countPerSec": 8
     }
+  },
+  "target": {
+    "host": "httpbin.org",
+    "port": 80,
+    "protocol": "HTTP"
   }
 }
 ```
@@ -204,7 +327,7 @@ Generate request with random data based on constraints, can be specified using J
   "duration": 10,
   "req": {
     "RandomDataRequest": {
-      "url": "http://httpbin.org/anything/{param1}/{param2}",
+      "url": "/anything/{param1}/{param2}",
       "method": "GET",
       "bodySchema": {
         "title": "Person",
@@ -246,9 +369,14 @@ Generate request with random data based on constraints, can be specified using J
     }
   },
   "qps": {
-    "ConstantQPS": {
-      "qps": 5
+    "ConstantRate": {
+      "countPerSec": 5
     }
+  },
+  "target": {
+    "host": "httpbin.org",
+    "port": 80,
+    "protocol": "HTTP"
   }
 }
 ```
@@ -266,23 +394,33 @@ Generate request with random data based on constraints, can be specified using J
 
 ### QPSSpec
 
-Currently, supports the following specifications
+Currently, supported specifications are - [ConstantRate](#constantrate), [Linear](#linear), [ArraySpec](#arrayspec)
 
-#### ConstantQPS
+### ConcurrentConnectionRateSpec
 
-| field | Description                        | data type |
-|-------|------------------------------------|-----------|
-| qps   | QPS to maintain for the `duration` | uint32    |
+#### Elastic
+The default configuration, if nothing specified in the request, this will be used. 
+
+Other supported configurations are - [ConstantRate](#constantrate), [Linear](#linear), [ArraySpec](#arrayspec)
+
+### Rate configurations
+
+#### ConstantRate
+
+| field         | data type | Description                                              |
+|---------------|-----------|----------------------------------------------------------|
+| countPerSec   | uint32    | Constant rate is maintain for the `duration` of the test |
 
 #### Linear
 
-Increase QPS linearly; QPS for any time is calculated using eq. qps = ax + b, where x being the n-th second.
+Increase rate(QPS/ConnPerSec) linearly; rate for any time is calculated using eq. rate(QPS/ConnectionPS) = ax + b, 
+where x being duration(in seconds) passed since the start of the test.
 
-| field | Description       | data type |
-|-------|-------------------|-----------|
-| a     | Slope of the line | float     |
-| b     | Intercept         | uint32    |
-| max   | max QPS           | uint32    |
+| field | data type | Description       |
+|-------|-----------|-------------------|
+| a     | float     | Slope of the line |
+| b     | uint32    | Intercept         |
+| max   | uint32    | max QPS           |
 
 ##### Example
 
@@ -300,68 +438,21 @@ Increase QPS linearly; QPS for any time is calculated using eq. qps = ax + b, wh
 
 If a test runs for 10 seconds, the generated RPS will be [1, 5, 7, 9, 11, 12, 12, 12, 12, 12]
 
-#### Steps/Staircase QPS
+#### ArraySpec
 
-Specify RPS in steps
+Specify QPS directly for a certain period of time, not recommended to use.
 
-| field   | Description   | data type |
-|---------|---------------|-----------|
-| steps   | Array of Step | [Step](#step)    |
-
-##### Step
-
-| field| Description          | data type |
-|------|----------------------|-----------|
-| start| Start of the step    | [uint32]  |
-| end  | end of the step      | [uint32]  |
-| qps  | QPS during this step | [uint32]  |
+| field       | data type | Description    |
+|-------------|-----------|----------------|
+| countPerSec | [uint32]  | Array of rates |
 
 ##### Example
 
 ```json
 {
   "qps": {
-    "Steps" : {
-      "steps": [
-        {
-          "start": 0,
-          "end": 5,
-          "qps": 1
-        },
-        {
-          "start": 6,
-          "end": 8,
-          "qps": 4
-        },
-        {
-          "start": 9,
-          "end": 10,
-          "qps": 7
-        }
-      ]
-    }
-  }
-}
-```
-
-If the test run for 15 seconds, from 0 to 5th seconds, generated QPS is 1, from 6th to 8th seconds, 
-generated QPS is 4, from 9 to 10th and 11th to 15th seconds, generated QPS is 7
-
-#### ArrayQPS
-
-Specify RPS directly
-
-| field | Description  | data type |
-|-------|--------------|-----------|
-| qps   | Array of qps | [uint32]  |
-
-##### Example
-
-```json
-{
-  "qps": {
-    "ArrayQPS": {
-      "qps": [1, 4, 6, 10, 20, 10]
+    "ArraySpec": {
+      "countPerSec": [1, 4, 6, 10, 20, 10]
     }
   }
 }
@@ -521,11 +612,12 @@ their own criteria. Currently, the field allows any number of buckets, but it's 
 use more than six buckets.
 
 ### Grafana Dashboard
-The application provides [sample Grafana dashboard](docs/monitoring/grafana-dashboard.json) that can be used for monitoring. It has
+The application provides [sample Grafana dashboard](overload/docs/monitoring/grafana-dashboard.json) that can be used for monitoring. It has
 graphs for Request Per Seconds, Response Status count, Average response time and Response 
 time quantiles.
 
-![Grafana Dashboard](docs/monitoring/grafana-dashboard.png)
+![Grafana Dashboard - RPS](overload/docs/monitoring/grafana-dashboard.png)
+![Grafana Dashboard - ResponseTime, Connection pool](overload/docs/monitoring/grafana-dashboard-rt-pool.png)
 
 
 ## Build yourself
