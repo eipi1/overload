@@ -56,7 +56,7 @@ version = "1.0"
 
 [dependencies.tokio]
 version = "1.19"
-features = ["rt-multi-thread", "macros", "fs", "io-util", "sync"]
+features = ["rt-multi-thread", "macros", "fs", "io-util", "sync", "parking_lot"]
 
 [dependencies.tokio-stream]
 version = "0.1"
@@ -84,9 +84,6 @@ version = "0.5"
 [dependencies.tower]
 version = "0.4"
 features = ["util"]
-
-[dependencies.bb8]
-path = "../bb8"
 
 [dependencies.warp]
 version = "0.3"

@@ -1,2 +1,2 @@
 [workspace]
-members = ["overload", "bb8"]
+members = ["overload"]

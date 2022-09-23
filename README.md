@@ -253,6 +253,7 @@ An unordered set of [HttpReq](#httpreq)
 #### RequestFile
 
 Get request data from a file. File have to be [uploaded](#upload-request-data-file) before the test.
+Generator will pick requests randomly.
 
 | field     | Description             | data type |
 |-----------|-------------------------|-----------|
