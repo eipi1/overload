@@ -1,13 +1,13 @@
 [package]
 name = "overload"
-version = "0.3.0"
+version = "0.5.0"
 authors = ["Md Sarowar Alam <sarowar.cse@gmail.com>"]
 edition = "2018"
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/eipi1/overload"
 description = """
-A distributed load testing application with kubernetes support
+A distributed load testing application
 """
 categories = ["development-tools"]
 keywords = ["load-testing", "cluster"]
