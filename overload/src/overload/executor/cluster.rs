@@ -10,6 +10,7 @@ use futures_util::stream::FuturesUnordered;
 use http::Request;
 use hyper::client::{Client, HttpConnector};
 use log::{debug, error, info, trace};
+use response_assert::ResponseAssertion;
 use smallvec::SmallVec;
 use std::collections::HashSet;
 use std::convert::TryInto;
@@ -31,6 +32,7 @@ pub async fn cluster_execute_request_generator(
     let provider = request.request_provider();
     let provider: Option<RequestSpecEnum> = provider.try_into().ok();
     let target = request.target.clone();
+    let response_assertion = request.response_assertion.clone();
     let stream = request_generator_stream(request);
     tokio::pin!(stream);
     let client = Client::new();
@@ -110,6 +112,7 @@ pub async fn cluster_execute_request_generator(
                         &target,
                         job_id.clone(),
                         &buckets,
+                        response_assertion.clone(), //todo avoid clone
                     );
                     to_secondaries.push(to_secondary);
                 }
@@ -142,6 +145,7 @@ async fn send_requests_to_secondary(
     target: &Target,
     job_id: String,
     buckets: &SmallVec<[f64; 6]>,
+    response_assertion: Option<ResponseAssertion>,
 ) -> anyhow::Result<()> {
     let instance = node.service_instance();
     let uri = instance.uri().clone().expect("No uri");
@@ -152,6 +156,7 @@ async fn send_requests_to_secondary(
         target,
         job_id,
         buckets,
+        response_assertion,
     );
     let request = serde_json::to_vec(&request)?;
     let request = Request::builder()
@@ -169,6 +174,7 @@ fn to_test_request(
     target: &Target,
     job_id: String,
     buckets: &SmallVec<[f64; 6]>,
+    response_assertion: Option<ResponseAssertion>,
 ) -> crate::http_util::request::Request {
     let duration = qps.len() as u32;
     let qps = ArraySpec::new(qps);
@@ -186,6 +192,7 @@ fn to_test_request(
         target: target.clone(),
         concurrent_connection,
         histogram_buckets: buckets.clone(),
+        response_assertion,
     }
 }
 
@@ -282,6 +289,7 @@ mod test {
                 port: 80,
                 protocol: Scheme::HTTP,
             },
+            None,
             None,
         );
         let job_id = "test_job".to_string();

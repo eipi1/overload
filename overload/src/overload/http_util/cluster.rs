@@ -175,7 +175,7 @@ async fn primary_uri(
         .ok_or_else(|| GenericError::internal_500("No primary or invalid ServiceInstance URI"))
 }
 
-async fn forward_other_requests_to_primary<'d, T: Serialize + DeserializeOwned>(
+async fn forward_other_requests_to_primary<T: Serialize + DeserializeOwned>(
     req: http::Request<Body>,
     _cluster: Arc<Cluster>,
     client: Client<HttpConnector>,

@@ -142,7 +142,7 @@ pub(crate) mod test_common {
     }
 
     #[allow(dead_code)]
-    fn get_metrics() -> String {
+    pub fn get_metrics() -> String {
         let encoder = prometheus::TextEncoder::new();
         let metrics = filters_common::METRICS_FACTORY.registry().gather();
         let mut resp_buffer = vec![];
@@ -151,7 +151,7 @@ pub(crate) mod test_common {
     }
 
     #[allow(dead_code)]
-    fn get_value_for_metrics(metrics_name: &str, metrics: &str) -> i32 {
+    pub fn get_value_for_metrics(metrics_name: &str, metrics: &str) -> i32 {
         // let lines = metrics.as_str().lines();
         for metric in metrics.lines() {
             if metric.starts_with(metrics_name) {

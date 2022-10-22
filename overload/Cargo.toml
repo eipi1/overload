@@ -16,6 +16,9 @@ keywords = ["load-testing", "cluster"]
 name = "overload"
 path = "src/overload/lib.rs"
 
+[dependencies.response-assert]
+path = "../response-assert"
+
 [dependencies.rust-cloud-discovery]
 version = "0.1"
 optional = true
@@ -137,7 +140,7 @@ version = "1.0"
 version = "1.0"
 
 [dependencies.prometheus]
-version = "0.13"
+version = "=0.13.2"
 features = ["process"]
 
 [dependencies.log]

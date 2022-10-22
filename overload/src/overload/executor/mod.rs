@@ -15,13 +15,14 @@ use futures_util::future::BoxFuture;
 use futures_util::stream::FuturesUnordered;
 use futures_util::FutureExt;
 use http::header::HeaderName;
-use http::{HeaderMap, HeaderValue, StatusCode};
+use http::{HeaderMap, HeaderValue, StatusCode, Uri};
 use hyper::client::conn::ResponseFuture;
 use hyper::{Error, Request};
 use lazy_static::lazy_static;
 use log::{debug, warn};
 use std::cmp::min;
 use std::collections::{BTreeMap, HashMap};
+use std::convert::TryFrom;
 use std::future::Future;
 use std::option::Option::Some;
 use std::pin::Pin;
@@ -34,6 +35,7 @@ use tokio::time::sleep;
 use tokio_stream::StreamExt;
 use tracing::{error, info, trace};
 
+use response_assert::ResponseAssertion;
 #[cfg(feature = "cluster")]
 use tokio::sync::oneshot::{channel, Receiver};
 #[cfg(feature = "cluster")]
@@ -67,6 +69,8 @@ struct HttpRequestFuture<'a> {
     status: Option<StatusCode>,
     metrics: &'a Metrics,
     connection: ReturnableConnection,
+    assertion: &'a ResponseAssertion,
+    request_uri: Uri,
 }
 
 impl Future for HttpRequestFuture<'_> {
@@ -83,13 +87,36 @@ impl Future for HttpRequestFuture<'_> {
         if self.body.is_some() {
             let fut = self.body.as_mut().unwrap();
             return match Pin::new(fut).poll(cx) {
-                Poll::Ready(_) => {
+                Poll::Ready(body) => {
                     let elapsed = self.timer.unwrap().elapsed().as_millis() as f64;
                     trace!(
                         "HttpRequestFuture [{}] - body - Ready, elapsed={}",
                         &self.job_id,
                         &elapsed
                     );
+                    if let Ok(body) = body {
+                        if !self.assertion.is_empty() {
+                            let _ = serde_json::from_slice(body.as_ref())
+                                .map_err(|e| {
+                                    self.metrics.assertion_parse_failure(&e.to_string());
+                                    vec![]
+                                })
+                                .and_then(|json_resp| {
+                                    response_assert::assert(
+                                        self.assertion,
+                                        &self.request_uri,
+                                        None,
+                                        &json_resp,
+                                    )
+                                })
+                                .map_err(|errors| {
+                                    for err in errors {
+                                        info!("assertion error - {:?}", &err);
+                                        self.metrics.assertion_failure(err.get_id(), err.into());
+                                    }
+                                });
+                        }
+                    };
                     //add metrics here if it's necessary to include time to fetch body
                     Poll::Ready(std::mem::replace(
                         &mut self.connection,
@@ -228,6 +255,7 @@ pub async fn execute_request_generator(
         return;
     }
     let target = request.target.clone();
+    let response_assertion = Arc::new(request.response_assertion.clone().unwrap_or_default());
     let stream = request_generator_stream(request);
     tokio::pin!(stream);
 
@@ -336,6 +364,7 @@ pub async fn execute_request_generator(
                     &mut queue_pool,
                     connection_count,
                     corrected_with_offset,
+                    &response_assertion,
                 )
                 .await;
             }
@@ -400,15 +429,17 @@ async fn send_single_requests(
     job_id: String,
     metrics: &Arc<Metrics>,
     mut connection: HttpConnection,
+    assertion: &ResponseAssertion,
 ) -> HttpConnection {
     let body = if let Some(body) = req.body {
         Bytes::from(body)
     } else {
         Bytes::new()
     };
+    let request_uri = Uri::try_from(req.url).unwrap();
     //todo remove unwrap
     let mut request = Request::builder()
-        .uri(req.url.as_str())
+        .uri(request_uri.clone())
         .method(req.method.clone());
     let headers = request.headers_mut().unwrap();
     for (k, v) in req.headers.iter() {
@@ -427,6 +458,8 @@ async fn send_single_requests(
         status: None,
         metrics,
         connection: ReturnableConnection::PlaceHolder,
+        assertion,
+        request_uri,
     };
     request_future.await;
 
@@ -457,6 +490,7 @@ async fn send_multiple_requests(
     queue_pool: &mut QueuePool,
     connection_count: ConnectionCount,
     start_of_cycle: Instant,
+    response_assertion: &Arc<ResponseAssertion>,
 ) {
     debug!(
         "[{}] [send_multiple_requests] - size: {}, count: {}, connection count: {}",
@@ -548,6 +582,7 @@ async fn send_multiple_requests(
             let id = job_id.clone();
             let m = metrics.clone();
             let rp = return_pool.clone();
+            let assertion = response_assertion.clone();
             tokio::spawn(async move {
                 let mut requests: FuturesUnordered<_> = connections
                     .drain(..)
@@ -557,6 +592,7 @@ async fn send_multiple_requests(
                             id.clone(),
                             &m,
                             connection,
+                            &assertion,
                         )
                     })
                     .collect();

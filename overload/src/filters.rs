@@ -106,7 +106,8 @@ pub async fn execute(request: Request) -> Result<impl Reply, Infallible> {
 mod standalone_mode_tests {
     use crate::filters_common::test_common::*;
     use httpmock::prelude::*;
-    use log::trace;
+    use log::{info, trace};
+    use more_asserts::{assert_ge, assert_gt};
     use regex::Regex;
     use serde_json::json;
     use wiremock::MockServer;
@@ -244,12 +245,118 @@ mod standalone_mode_tests {
         tokio::time::sleep(tokio::time::Duration::from_millis(990)).await;
         for i in 1..=5 {
             // each seconds we expect mock to receive 3 request
-            assert_eq!(i * 3, mock.hits_async().await);
+            assert_ge!(i * 3, mock.hits_async().await);
             trace!("mock hits: {}", mock.hits_async().await);
             tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
         }
         mock.delete_async().await;
         let _ = tx.send(());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_request_with_assertion_failure() {
+        setup();
+        let (_, _, tx, port) = init_env().await;
+
+        let (mock_server, url) = ASYNC_ONCE_HTTP_MOCK.get_or_init(init_http_mock).await;
+
+        let mock = mock_server.mock(|when, then| {
+            when.method(GET)
+                .path_matches(Regex::new(r"^/list/data2$").unwrap());
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(r#"{"hello": "list"}"#);
+        });
+
+        let response = send_request(
+            json_request_list_constant_with_assertion(
+                url.host().unwrap().to_string(),
+                url.port().unwrap(),
+                1,
+                "/list/data2",
+            ),
+            port,
+        )
+        .await
+        .unwrap();
+        println!("{:?}", response);
+        let status = response.status();
+        println!("body: {:?}", hyper::body::to_bytes(response).await.unwrap());
+        assert_eq!(status, 200);
+        tokio::time::sleep(tokio::time::Duration::from_millis(2100)).await;
+        let metrics = crate::filters_common::test_common::get_metrics();
+        info!("{}", &metrics);
+        assert_gt!(get_value_for_metrics("assertion_failure", &metrics), 1);
+        tokio::time::sleep(tokio::time::Duration::from_millis(3100)).await;
+        mock.delete_async().await;
+        let _ = tx.send(());
+    }
+
+    fn json_request_list_constant_with_assertion(
+        host: String,
+        port: u16,
+        connection_count: u16,
+        url: &str,
+    ) -> String {
+        let req = json!(
+        {
+            "duration": 5,
+            "req": {
+                "RequestList": {
+                    "data": [
+                      {
+                        "method": "GET",
+                        "url": url
+                      }
+                    ]
+                }
+            },
+            "target": {
+                "host":host,
+                "port": port,
+                "protocol": "HTTP"
+            },
+            "qps": {
+              "ConstantRate": {
+                "countPerSec": 3
+              }
+            },
+            "concurrentConnection": {
+                "ConstantRate": {
+                    "countPerSec": connection_count
+                  }
+            },
+            "responseAssertion": {
+              "assertions": [
+                {
+                  "id": 1,
+                  "expectation": {
+                    "Constant": "world"
+                  },
+                  "actual": {
+                    "FromJsonResponse": {
+                      "path": "$.hello"
+                    }
+                  }
+                },
+                {
+                    "id": 2,
+                    "expectation": {
+                      "Constant": {
+                        "hello": "list"
+                      }
+                    },
+                    "actual": {
+                      "FromJsonResponse": {
+                        "path": "$"
+                      }
+                    }
+                  }
+              ]
+            }
+          }
+        );
+        req.to_string()
     }
 
     fn json_request_list_constant(

@@ -1,0 +1,32 @@
+[package]
+name = "response-assert"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies.jsonpath_lib]
+version = "=0.2.6"
+
+[dependencies.serde]
+version = "1.0"
+features = ["derive"]
+
+[dependencies.serde_json]
+version = "1.0"
+
+[dependencies.anyhow]
+version = "1.0"
+
+[dependencies.http]
+version = "0.2"
+
+[dependencies.jsonschema]
+version = "0.16"
+
+[dependencies.strum]
+version = "0.24"
+features = ["derive"]
+
+[dependencies.log]
+version = "0.4"
