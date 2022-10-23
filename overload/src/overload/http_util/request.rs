@@ -7,6 +7,7 @@ use crate::generator::{
 use crate::generator::{Elastic, Target};
 use crate::http_util::GenericError;
 use crate::{data_dir, fmt, HttpReq};
+use response_assert::ResponseAssertion;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use std::collections::HashMap;
@@ -14,7 +15,7 @@ use std::convert::TryFrom;
 use std::fmt::{Debug, Display, Formatter};
 
 #[derive(Debug, Serialize, Deserialize)]
-pub(crate) enum RateSpec {
+pub enum RateSpec {
     ConstantRate(ConstantRate),
     Linear(Linear),
     ArraySpec(ArraySpec),
@@ -64,6 +65,7 @@ pub struct Request {
     pub(crate) concurrent_connection: Option<ConcurrentConnectionRateSpec>,
     #[serde(default = "crate::metrics::default_histogram_bucket")]
     pub(crate) histogram_buckets: SmallVec<[f64; 6]>,
+    pub(crate) response_assertion: Option<ResponseAssertion>,
 }
 
 #[allow(clippy::from_over_into)]
@@ -98,7 +100,14 @@ impl Into<RequestGenerator> for Request {
             None
         };
 
-        RequestGenerator::new(self.duration, req, qps, self.target, connection_rate)
+        RequestGenerator::new(
+            self.duration,
+            req,
+            qps,
+            self.target,
+            connection_rate,
+            self.response_assertion,
+        )
     }
 }
 
@@ -237,6 +246,7 @@ mod test {
                 port: 8080,
                 protocol: Scheme::HTTP,
             },
+            None,
             None,
         );
         request_generator_stream(generator);

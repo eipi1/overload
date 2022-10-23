@@ -10,6 +10,7 @@ use futures_util::stream::Stream;
 use http::Method;
 use log::{debug, trace, warn};
 use regex::Regex;
+use response_assert::ResponseAssertion;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use smol_str::SmolStr;
@@ -72,6 +73,7 @@ pub struct RequestGenerator {
     provider_or_future: ProviderOrFuture,
     qps_scheme: Box<dyn RateScheme + Send>,
     concurrent_connection: Box<dyn RateScheme + Send>,
+    pub(crate) response_assertion: Option<ResponseAssertion>,
 }
 
 impl RequestGenerator {
@@ -458,6 +460,7 @@ impl RequestGenerator {
         qps_scheme: Box<dyn RateScheme + Send>,
         target: Target,
         concurrent_connection: Option<Box<dyn RateScheme + Send>>,
+        response_assertion: Option<ResponseAssertion>,
     ) -> Self {
         let time_scale: u8 = 1;
         let total = duration * time_scale as u32;
@@ -475,6 +478,7 @@ impl RequestGenerator {
             current_count: 0,
             target,
             concurrent_connection,
+            response_assertion,
         }
     }
 }
@@ -825,6 +829,7 @@ pub(crate) mod test {
                 protocol: Scheme::HTTP,
             },
             None,
+            None,
         );
         let ret = generator.next().await;
         if let Some(arg) = ret {
@@ -850,6 +855,7 @@ pub(crate) mod test {
                 port: 8080,
                 protocol: Scheme::HTTP,
             },
+            None,
             None,
         );
         let ret = generator.next().await;
@@ -877,6 +883,7 @@ pub(crate) mod test {
                 protocol: Scheme::HTTP,
             },
             None,
+            None,
         );
         let ret = generator.next().await;
         if let Some(arg) = ret {
@@ -898,6 +905,7 @@ pub(crate) mod test {
                 port: 8080,
                 protocol: Scheme::HTTP,
             },
+            None,
             None,
         );
         let ret = generator.next().await;
@@ -921,6 +929,7 @@ pub(crate) mod test {
                 port: 8080,
                 protocol: Scheme::HTTP,
             },
+            None,
             None,
         );
         let arg = generator.next().await.unwrap();
@@ -960,6 +969,7 @@ pub(crate) mod test {
                 b: 1,
                 max: 10,
             })),
+            None,
         );
         let arg = generator.next().await.unwrap();
         //assert first element
@@ -1006,6 +1016,7 @@ pub(crate) mod test {
                 port: 8080,
                 protocol: Scheme::HTTP,
             },
+            None,
             None,
         );
         let throttle = request_generator_stream(generator);

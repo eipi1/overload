@@ -1,3 +1,7 @@
+# overload
+
+A distributed load testing utility written in Rust
+
 ![Rust](https://github.com/eipi1/overload/actions/workflows/rust.yml/badge.svg)
 [![Docker hub][dockerhub-badge]][dockerhub-url]
 [![MIT licensed][mit-badge]][mit-url]
@@ -14,11 +18,6 @@
 [github-badge]: https://img.shields.io/badge/github-eipi1/overload-brightgreen
 
 [github-rep]: https://github.com/eipi1/overload
-
-# Overload
-
-A distributed load testing utility written in Rust
-
 
 * [Getting Started](#getting-started)
 * [Environment variables](#environment-variables)
@@ -82,7 +81,13 @@ seconds(`"duration": 60`).
 ```shell
 curl --location --request POST 'localhost:3030/test' \
 --header 'Content-Type: application/json' \
---data-raw '{
+--data-raw '<json_request_body>'
+```
+
+Sample JSON request body -
+
+```rust
+{
   "duration": 120,
   "name": "demo-test",
   "qps": {
@@ -106,8 +111,10 @@ curl --location --request POST 'localhost:3030/test' \
     "port": 80,
     "protocol": "HTTP"
   }
-}'
+}
 ```
+
+
 It'll respond with a job identifier and status.
 ```json
 {
@@ -144,7 +151,7 @@ There are a few constraints/limitations is in place -
 * Requires container image tagged as *{version}-cluster*
 
 Repository provides a sample *[deployment.yaml][deployment-yaml]* file. Addition to that the
-application also needs "get", "list" permission for "pods", "endpoints" for discovery. 
+application also needs "get", "list" permission for "pods", "endpoints" for discovery.
 
 ### Standalone
 
@@ -180,11 +187,15 @@ Test specification
 | concurrentConnection | ❎        | Elastic                       | [ConcurrentConnectionRateSpec](#concurrentconnectionratespec) | Concurrent number of requests to use to send request                                       |
 | histogramBuckets     | ❎        | [20, 50, 100, 300, 700, 1100] | [uint16]                                                      | Prometheus histogram buckets. For details https://prometheus.io/docs/practices/histograms/ |
 
-```http request
-POST /test HTTP/1.1
-Host: localhost:3030
-Content-Type: application/json
+```shell
+curl --location --request POST 'localhost:3030/test' \
+--header 'Content-Type: application/json' \
+--data-raw '<json_request_body>'
+```
 
+Sample JSON request body -
+
+```rust
 {
   "duration": 120,
   "name": "demo-test",
@@ -264,7 +275,7 @@ Generator will pick requests randomly.
 <details>
   <summary>Example Request</summary>
 
-```json
+```rust
 {
   "duration": 3,
   "req": {
@@ -310,7 +321,7 @@ Generate request with random data based on constraints, can be specified using J
 | boolean | ❎         |
 | null    | ❎         |
 
-| Constraints | Supported | Note                                                                                                                                                       | 
+| Constraints | Supported | Note                                                                                                                                                       |
 |-------------|-----------|------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | minLength   | ✅         |                                                                                                                                                            |
 | maxLength   | ✅         |                                                                                                                                                            |
@@ -323,7 +334,7 @@ Generate request with random data based on constraints, can be specified using J
 <details>
 <summary> Example </summary>
 
-```json
+```rust
 {
   "duration": 10,
   "req": {
@@ -395,13 +406,13 @@ Generate request with random data based on constraints, can be specified using J
 
 ### QPSSpec
 
-Currently, supported configurations are - [ConstantRate](#constantrate), [Linear](#linear), [ArraySpec](#arrayspec), 
+Currently, supported configurations are - [ConstantRate](#constantrate), [Linear](#linear), [ArraySpec](#arrayspec),
 [Steps/Staircase](#stepsstaircase-qps).
 
 ### ConcurrentConnectionRateSpec
 
 #### Elastic
-The default configuration, if nothing specified in the request, this will be used. 
+The default configuration, if nothing specified in the request, this will be used.
 
 Other supported configurations are - [ConstantRate](#constantrate), [Linear](#linear), [ArraySpec](#arrayspec),
 [Steps/Staircase](#stepsstaircase-qps).
@@ -416,7 +427,7 @@ Other supported configurations are - [ConstantRate](#constantrate), [Linear](#li
 
 #### Linear
 
-Increase rate(QPS/ConnPerSec) linearly; rate for any time is calculated using eq. rate(QPS/ConnectionPS) = ax + b, 
+Increase rate(QPS/ConnPerSec) linearly; rate for any time is calculated using eq. rate(QPS/ConnectionPS) = ax + b,
 where x being duration(in seconds) passed since the start of the test.
 
 | field | data type | Description       |
@@ -427,14 +438,12 @@ where x being duration(in seconds) passed since the start of the test.
 
 ##### Example
 
-```json
+```rust
 {
-  "qps": {
-    "Linear": {
-      "a": 2,
-      "b": 1,
-      "max": 12
-    }
+  "Linear": {
+    "a": 2,
+    "b": 1,
+    "max": 12
   }
 }
 ```
@@ -451,12 +460,10 @@ Specify QPS directly for a certain period of time, not recommended to use.
 
 ##### Example
 
-```json
+```rust
 {
-  "qps": {
-    "ArraySpec": {
-      "countPerSec": [1, 4, 6, 10, 20, 10]
-    }
+  "ArraySpec": {
+    "countPerSec": [1, 4, 6, 10, 20, 10]
   }
 }
 ```
@@ -483,28 +490,26 @@ Specify RPS in steps
 
 ##### Example
 
-```json
+```rust
 {
-  "qps": {
-    "Steps" : {
-      "steps": [
-        {
-          "start": 0,
-          "end": 5,
-          "qps": 1
-        },
-        {
-          "start": 6,
-          "end": 8,
-          "qps": 4
-        },
-        {
-          "start": 9,
-          "end": 10,
-          "qps": 7
-        }
-      ]
-    }
+  "Steps" : {
+    "steps": [
+      {
+        "start": 0,
+        "end": 5,
+        "rate": 1
+      },
+      {
+        "start": 6,
+        "end": 8,
+        "rate": 4
+      },
+      {
+        "start": 9,
+        "end": 10,
+        "rate": 7
+      }
+    ]
   }
 }
 ```
@@ -516,15 +521,6 @@ generated QPS is 4, from 9 to 10th and 11th to 15th seconds, generated QPS is 7
 
 Currently, supports CSV file only.
 
-```
-POST /test/requests-bin HTTP/1.1
-Host: overload.host:3030
-Content-Type: text/csv
-Content-Length: 22
-
-"<file contents here>"
-```
-
 Curl sample
 
 ```shell
@@ -535,7 +531,7 @@ curl --location --request POST 'overload.host:3030/test/requests-bin' \
 
 #### CSV format
 
-```
+```csv
 "url","method","body","headers"
 "http://httpbin.org/anything/11","GET","","{}"
 "http://httpbin.org/anything/13","GET","","{}"
@@ -599,7 +595,7 @@ Returns status of all jobs.
 
 #### Example
 
-```http request
+```http
 GET /test/status?offset=1&limit =1 HTTP/1.1
 Host: localhost:3030
 ```
@@ -616,7 +612,7 @@ Host: localhost:3030
 
 | Spec   | Value                 |
 |--------|-----------------------|
-| Path   | /test/status/{job_id} |
+| Path   | /test/stop/{job_id} |
 | Method | GET                   |
 
 #### Request Params
@@ -625,13 +621,132 @@ Host: localhost:3030
 |--------|----------------------------------|-----------|
 | job_id | id of the test job to be stopped | string    |
 
+
+## Response Assertion
+A set of assertion can be passed to verify response received from API in test. Assertion will fail if response can't
+be parsed as JSON.
+
+For example, the following request will send request to httpbin.org/get and verify response is a json and
+the value at `$.headers.Host` (JsonPath) is `httpbin.org`.
+
+Failed assertion emits an info log and can also be monitored through metrics.
+
+```rust
+{
+  "duration": 120,
+  "name": "demo-test",
+  "qps": {
+    "ConstantRate": {
+      "countPerSec": 1
+    }
+  },
+  "req": {
+    "RequestList": {
+      "data": [
+        {
+          "body": null,
+          "method": "GET",
+          "url": "/get"
+        }
+      ]
+    }
+  },
+  "target": {
+    "host": "httpbin.org",
+    "port": 80,
+    "protocol": "HTTP"
+  },
+  "responseAssertion": {
+      "assertions": [
+        {
+          "id": 1,
+          "expectation": {
+            "Constant": "httpbin.org"
+          },
+          "actual": {
+            "FromJsonResponse": {
+              "path": "$.headers.Host"
+            }
+          }
+        }
+      ]
+    }
+}
+```
+
+### ResponseAssertion
+
+| field      | Description                | data type               |
+|------------|----------------------------|-------------------------|
+| assertions | List of assertion criteria | [Assertion](#assertion) |
+
+#### Assertion
+| field       | Description                                          | data type                   |
+|-------------|------------------------------------------------------|-----------------------------|
+| id          | assertion identifier, used in metrics                | uint32                      |
+| expectation | Expected value, constant or derived from the request | [Expectation](#expectation) |
+| actual      | Actual value, constant or derived from the response  | [Actual](#actual)           |
+
+##### Expectation
+Following expectations are supported -
+
+###### Constant
+Number, String or Json value, expect a constant value for all the request.
+
+```rust
+{
+  "Constant": {
+    "hello": "world"
+  }
+}
+```
+###### RequestPath
+Derive from request path by provided segment number
+```rust
+{
+   "RequestPath": 1
+}
+```
+
+###### RequestQueryParam
+Use the value of provided request query param as expectation
+```rust
+{
+  "RequestQueryParam": "hello"
+}
+```
+
+##### Actual
+Following actual sources are supported -
+
+###### Constant
+Number, String or JSON value, expect a constant value for all the request.
+
+```rust
+{
+  "Constant": {
+    "hello": "world"
+  }
+}
+```
+
+###### FromJsonResponse
+Derive expectation from JSON response using JsonPath
+```rust
+{
+  "FromJsonResponse": {
+    "path": "$.hello"
+  }
+}
+```
+
 ## Monitoring
 The application comes with Prometheus support for monitoring. Metrics are exposed at `/metrics` endpoint.
 
 <details>
 <summary>Sample Prometheus scraper config</summary>
 
-```
+```yaml
 - job_name: overload-k8s
   honor_timestamps: true
   scrape_interval: 5s
@@ -663,7 +778,7 @@ use more than six buckets.
 
 ### Grafana Dashboard
 The application provides [sample Grafana dashboard](overload/docs/monitoring/grafana-dashboard.json) that can be used for monitoring. It has
-graphs for Request Per Seconds, Response Status count, Average response time and Response 
+graphs for Request Per Seconds, Response Status count, Average response time and Response
 time quantiles.
 
 ![Grafana Dashboard - RPS](overload/docs/monitoring/grafana-dashboard.png)
@@ -696,3 +811,5 @@ cargo run
 [deployment-yaml]: https://github.com/eipi1/overload/blob/master/deployment.yaml
 
 [endpoint-api]: https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.19/#read-endpoints-v1-core
+
+License: MIT

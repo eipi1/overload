@@ -6,3 +6,4 @@ scribbles
 *.csv
 *.db
 *.sqlite*
+*.log

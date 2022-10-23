@@ -128,6 +128,13 @@ impl MetricsFactory {
         let opts = opts.const_label("job_id", job_id);
         let connection_pool_connection_busy = Gauge::with_opts(opts).unwrap();
 
+        let opts = Opts::new(
+            "assertion_failure",
+            "Number of failed assertions with reasons and id",
+        );
+        let opts = opts.const_label("job_id", job_id);
+        let assertion_failure = IntCounterVec::new(opts, &["assertion_id", "reason"]).unwrap();
+
         self.registry
             .register(Box::new(upstream_response_time.clone()))
             .unwrap();
@@ -158,6 +165,9 @@ impl MetricsFactory {
         self.registry
             .register(Box::new(connection_pool_size.clone()))
             .unwrap();
+        self.registry
+            .register(Box::new(assertion_failure.clone()))
+            .unwrap();
 
         let metrics = Metrics {
             upstream_request_count,
@@ -170,6 +180,7 @@ impl MetricsFactory {
             connection_pool_size,
             connection_pool_connection_idle,
             connection_pool_connection_busy,
+            assertion_failure,
         };
         let metrics = Arc::new(metrics);
         write_guard.insert(String::from(job_id), metrics.clone());
@@ -220,6 +231,10 @@ impl MetricsFactory {
                     .registry
                     .unregister(Box::new(m.upstream_response_time.clone()));
                 log_error!(result);
+                let result = self
+                    .registry
+                    .unregister(Box::new(m.assertion_failure.clone()));
+                log_error!(result);
             }
             None => {}
         }
@@ -237,6 +252,7 @@ pub struct Metrics {
     connection_pool_size: Gauge,
     connection_pool_connection_idle: Gauge,
     connection_pool_connection_busy: Gauge,
+    assertion_failure: IntCounterVec,
 }
 
 impl Metrics {
@@ -282,6 +298,18 @@ impl Metrics {
 
     pub fn pool_size(&self, count: f64) {
         self.connection_pool_size.set(count);
+    }
+
+    pub fn assertion_parse_failure(&self, reason: &str) {
+        self.assertion_failure
+            .with_label_values(&["parse_err", reason])
+            .inc_by(1);
+    }
+
+    pub fn assertion_failure(&self, id: u32, reason: &str) {
+        self.assertion_failure
+            .with_label_values(&[&id.to_string(), reason])
+            .inc_by(1);
     }
 }
 
