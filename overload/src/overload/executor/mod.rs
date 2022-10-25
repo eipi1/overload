@@ -617,28 +617,17 @@ async fn send_multiple_requests(
     }
 }
 
-pub(crate) async fn send_stop_signal(job_id: &str) -> String {
-    info!("Stopping the job {}", job_id);
-    //todo don't stop if already done
-    let current_status = {
-        let mut guard = JOB_STATUS.write().await;
-        guard.insert(job_id.to_string(), JobStatus::Stopped)
-    };
-    if let Some(status) = current_status {
-        match status {
-            JobStatus::Starting | JobStatus::InProgress => "Job stopped",
-            JobStatus::Stopped => "Job already stopped",
-            JobStatus::Completed => "Job already completed",
-            JobStatus::Failed => "Job failed",
-            _ => {
-                error!("Invalid job status for job: {}", job_id);
-                "Invalid job status"
-            }
-        }
-        .to_string()
-    } else {
-        "Job Not Found".to_string()
-    }
+pub(crate) async fn send_stop_signal(job_id: &str) -> Vec<(String, Option<JobStatus>)> {
+    info!("Stopping the jobs {}", job_id);
+    let mut write = JOB_STATUS.write().await;
+    write
+        .iter_mut()
+        .filter(|key_val| key_val.0.starts_with(job_id))
+        .map(|key_val| {
+            let prev_status = std::mem::replace(key_val.1, JobStatus::Stopped);
+            (key_val.0.clone(), Some(prev_status))
+        })
+        .collect::<Vec<_>>()
 }
 
 /// return status of test jobs.
@@ -649,16 +638,17 @@ pub(crate) async fn get_job_status(
     offset: usize,
     limit: usize,
 ) -> HashMap<String, JobStatus> {
-    let mut job_status = HashMap::new();
     let guard = JOB_STATUS.read().await;
 
     if let Some(job_id) = job_id {
-        if let Some(status) = guard.get(&job_id) {
-            job_status.insert(job_id, *status);
-        }
-        return job_status;
+        return guard
+            .iter()
+            .filter(|status| status.0.starts_with(&job_id))
+            .map(|status| (status.0.clone(), *status.1))
+            .collect();
     }
 
+    let mut job_status = HashMap::new();
     let mut count = 0;
     let len = guard.len();
     for (id, status) in guard.iter() {

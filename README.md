@@ -177,15 +177,15 @@ docker run -p 3030:3030 mdsarowar/overload:latest-standalone-snapshot
 ### Request
 Test specification
 
-| Field                | Required | Default                       | Data type                                                     | Description                                                                                |
-|----------------------|----------|-------------------------------|---------------------------------------------------------------|--------------------------------------------------------------------------------------------|
-| name                 | ❎        | UUID                          | String                                                        | Test name, application will append UUID to ensure unique identifier                        |
-| duration             | ✅        |                               | uint32                                                        | Test duration                                                                              |
-| target               | ✅        |                               | [Target](#target)                                             | Target details                                                                             |
-| req                  | ✅        |                               | [RequestProvider](#requestprovider)                           | Request provider Spec                                                                      |
-| qps                  | ✅        |                               | [QPSSpec](#qpsspec)                                           | Request per second specification                                                           |
-| concurrentConnection | ❎        | Elastic                       | [ConcurrentConnectionRateSpec](#concurrentconnectionratespec) | Concurrent number of requests to use to send request                                       |
-| histogramBuckets     | ❎        | [20, 50, 100, 300, 700, 1100] | [uint16]                                                      | Prometheus histogram buckets. For details https://prometheus.io/docs/practices/histograms/ |
+| Field                | Required | Default                       | Data type                                                     | Description                                                                                                          |
+|----------------------|----------|-------------------------------|---------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------|
+| name                 | ❎        | UUID                          | String                                                        | Test name, application will append UUID to ensure unique identifier, this field is ignored during multi request test |
+| duration             | ✅        |                               | uint32                                                        | Test duration                                                                                                        |
+| target               | ✅        |                               | [Target](#target)                                             | Target details                                                                                                       |
+| req                  | ✅        |                               | [RequestProvider](#requestprovider)                           | Request provider Spec                                                                                                |
+| qps                  | ✅        |                               | [QPSSpec](#qpsspec)                                           | Request per second specification                                                                                     |
+| concurrentConnection | ❎        | Elastic                       | [ConcurrentConnectionRateSpec](#concurrentconnectionratespec) | Concurrent number of requests to use to send request                                                                 |
+| histogramBuckets     | ❎        | [20, 50, 100, 300, 700, 1100] | [uint16]                                                      | Prometheus histogram buckets. For details https://prometheus.io/docs/practices/histograms/                           |
 
 ```shell
 curl --location --request POST 'localhost:3030/test' \
@@ -225,6 +225,114 @@ Sample JSON request body -
 ```
 
 This will run the test for 120 seconds with a linear increase in request per seconds(RPS).
+
+### MultiRequest
+Run multiple test together
+
+#### Endpoint
+
+|        | Value  |
+|--------|--------|
+| Path   | /tests |
+| Method | POST   |
+
+#### Body
+
+| Field    | Required | Default | Data type           | Description                                                         |
+|----------|----------|---------|---------------------|---------------------------------------------------------------------|
+| name     | ❎        | UUID    | String              | Test name, application will append UUID to ensure unique identifier |
+| requests | ✅        |         | [Request](#request) | Collection of Request to execute                                    |
+
+```shell
+curl --location --request POST 'localhost:3030/tests' \
+--header 'Content-Type: application/json' \
+--data-raw '<json_request_body>'
+```
+
+Sample JSON request body -
+
+```rust
+{
+  "name": "multi-req",
+  "requests": [
+    {
+      "duration": 600,
+      "name": "demo-test",
+      "qps": {
+        "Linear": {
+          "a": 2,
+          "b": 1,
+          "max": 400
+        }
+      },
+      "req": {
+        "RequestList": {
+          "data": [
+            {
+              "method": "GET",
+              "url": "/delay/1",
+              "headers": {
+                "Host": "127.0.0.1:8080",
+                "Connection":"keep-alive"
+              }
+            }
+          ]
+        }
+      },
+      "target": {
+        "host": "172.17.0.1",
+        "port": 8080,
+        "protocol": "HTTP"
+      },
+      "concurrentConnection": {
+        "Linear": {
+          "a": 2.5,
+          "b": 1,
+          "max": 500
+        }
+      }
+    },
+    {
+      "duration": 500,
+      "name": "demo-test",
+      "qps": {
+        "Linear": {
+          "a": 1,
+          "b": 1,
+          "max": 400
+        }
+      },
+      "req": {
+        "RequestList": {
+          "data": [
+            {
+              "method": "GET",
+              "url": "/get",
+              "headers": {
+                "Host": "127.0.0.1:8080",
+                "Connection":"keep-alive"
+              }
+            }
+          ]
+        }
+      },
+      "target": {
+        "host": "172.17.0.1",
+        "port": 8080,
+        "protocol": "HTTP"
+      },
+      "concurrentConnection": {
+        "Linear": {
+          "a": 0.5,
+          "b": 1,
+          "max": 70
+        }
+      }
+    }
+  ]
+}
+```
+This will run two tests with their own QPS/connection rate, one for 600 seconds, another for 400 seconds.
 
 ### Response
 
@@ -572,7 +680,7 @@ Returns status of all jobs.
 * No way to get status by job id
 * Doesn't maintain any kind of sorting
 
-#### Request
+#### Endpoint
 
 | Spec   | Value        |
 |--------|--------------|
@@ -608,14 +716,14 @@ Host: localhost:3030
 
 ### Stop a job
 
-#### Request
+#### Endpoint
 
-| Spec   | Value                 |
-|--------|-----------------------|
+| Spec   | Value               |
+|--------|---------------------|
 | Path   | /test/stop/{job_id} |
-| Method | GET                   |
+| Method | GET                 |
 
-#### Request Params
+#### Params
 
 | field  | Description                      | data type |
 |--------|----------------------------------|-----------|

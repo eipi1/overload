@@ -8,7 +8,7 @@ use http::StatusCode;
 use hyper::Body;
 use lazy_static::lazy_static;
 use log::trace;
-use overload::http_util::request::{JobStatusQueryParams, Request};
+use overload::http_util::request::{JobStatusQueryParams, MultiRequest, Request};
 use overload::http_util::{handle_history_all, GenericError};
 use overload::METRICS_FACTORY;
 use overload::{data_dir, http_util};
@@ -38,6 +38,7 @@ pub fn get_routes_with_cluster(
     let history = history(cluster.clone());
     let overload_req_secondary = overload_req_secondary(cluster.clone());
     let overload_req = overload_req(cluster.clone());
+    let overload_multi_req = overload_multi_req(cluster.clone());
 
     let info = info(cluster.clone());
     let request_vote = request_vote(cluster.clone());
@@ -49,6 +50,7 @@ pub fn get_routes_with_cluster(
 
     let routes = prometheus_metric
         .or(overload_req)
+        .or(overload_multi_req)
         .or(stop_req)
         .or(history)
         .or(upload_binary_file);
@@ -72,6 +74,19 @@ pub fn overload_req(
         .and_then(move |request: Request| {
             let tmp = cluster.clone();
             async move { execute_cluster(request, tmp).await }
+        })
+}
+
+pub fn overload_multi_req(
+    cluster: Arc<Cluster>,
+) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+    warp::post()
+        .and(warp::path("tests").and(warp::path::end()))
+        .and(warp::body::content_length_limit(1024 * 1024))
+        .and(warp::body::json())
+        .and_then(move |request: MultiRequest| {
+            let tmp = cluster.clone();
+            async move { execute_multi_req_cluster(request, tmp).await }
         })
 }
 
@@ -206,6 +221,21 @@ async fn execute_cluster(
     let response = overload::http_util::handle_request_cluster(request, cluster.clone()).await;
     let json = reply::json(&response);
     trace!("resp: execute_cluster: {:?}", &response);
+    Ok(json)
+}
+
+async fn execute_multi_req_cluster(
+    request: MultiRequest,
+    cluster: Arc<Cluster>,
+) -> Result<impl Reply, Infallible> {
+    trace!(
+        "req: execute_multi_req_cluster: {}",
+        serde_json::to_string(&request).unwrap()
+    );
+    let response =
+        overload::http_util::handle_multi_request_cluster(request, cluster.clone()).await;
+    let json = reply::json(&response);
+    trace!("resp: execute_multi_req_cluster: {:?}", &response);
     Ok(json)
 }
 

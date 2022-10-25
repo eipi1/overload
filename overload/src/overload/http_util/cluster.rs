@@ -1,6 +1,6 @@
 use crate::executor::cluster::cluster_execute_request_generator;
 use crate::executor::execute_request_generator;
-use crate::http_util::request::{JobStatusQueryParams, Request, RequestSpecEnum};
+use crate::http_util::request::{JobStatusQueryParams, MultiRequest, Request, RequestSpecEnum};
 use crate::http_util::{
     csv_stream_to_sqlite, job_id, GenericError, GenericResponse, PATH_FILE_UPLOAD, PATH_JOB_STATUS,
     PATH_STOP_JOB,
@@ -29,7 +29,7 @@ use url::Url;
 type GenericResult<T> = Result<GenericResponse<T>, GenericError>;
 
 pub async fn handle_request_cluster(request: Request, cluster: Arc<Cluster>) -> Response {
-    let job_id = job_id(&request);
+    let job_id = job_id(&request.name);
     let buckets = request.histogram_buckets.clone();
     if !cluster.is_active().await {
         Response::new(job_id, JobStatus::Error(ErrorCode::InactiveCluster))
@@ -49,7 +49,44 @@ pub async fn handle_request_cluster(request: Request, cluster: Arc<Cluster>) -> 
             .name
             .clone()
             .unwrap_or_else(|| "unknown_job".to_string());
-        match forward_test_request(request, cluster, client).await {
+        match forward_test_request("test", request, cluster, client).await {
+            Ok(resp) => resp,
+            Err(err) => {
+                error!("{}", err);
+                unknown_error_resp(job_id)
+            }
+        }
+    }
+}
+
+pub async fn handle_multi_request_cluster(
+    request: MultiRequest,
+    cluster: Arc<Cluster>,
+) -> Response {
+    let job_id = job_id(&request.name);
+    if !cluster.is_active().await {
+        Response::new(job_id, JobStatus::Error(ErrorCode::InactiveCluster))
+    } else if cluster.is_primary().await {
+        for (idx, request) in request.requests.into_iter().enumerate() {
+            let job_id_for_req = format!("{}_{}", &job_id, idx);
+            let buckets = request.histogram_buckets.clone();
+            let generator = request.into();
+            tokio::spawn(cluster_execute_request_generator(
+                generator,
+                job_id_for_req,
+                cluster.clone(),
+                buckets,
+            ));
+        }
+        Response::new(job_id, JobStatus::Starting)
+    } else {
+        //forward request to primary
+        let client = Client::new();
+        let job_id = request
+            .name
+            .clone()
+            .unwrap_or_else(|| "unknown_job".to_string());
+        match forward_test_request("tests", request, cluster, client).await {
             Ok(resp) => resp,
             Err(err) => {
                 error!("{}", err);
@@ -64,7 +101,7 @@ pub async fn handle_request_from_primary(
     metrics: &'static MetricsFactory,
     cluster: Arc<Cluster>,
 ) -> Response {
-    let job_id = job_id(&request);
+    let job_id = job_id(&request.name);
     let buckets = request.histogram_buckets.clone();
     let init = prepare(&request, cluster.clone());
     let generator = request.into();
@@ -87,8 +124,9 @@ fn prepare(
     initiator_for_request_from_secondary(request, cluster)
 }
 
-async fn forward_test_request(
-    request: Request,
+async fn forward_test_request<T: Serialize>(
+    path: &str,
+    request: T,
     cluster: Arc<Cluster>,
     client: Client<HttpConnector>,
 ) -> anyhow::Result<Response> {
@@ -108,7 +146,7 @@ async fn forward_test_request(
             serde_json::to_string(&request).unwrap()
         );
         let req = hyper::Request::builder()
-            .uri(format!("{}/test", &uri))
+            .uri(format!("{}/{}", &uri, path))
             .method("POST")
             .body(Body::from(serde_json::to_string(&request)?))?;
         let resp = client.request(req).await?;
@@ -116,9 +154,7 @@ async fn forward_test_request(
         let resp = serde_json::from_slice::<Response>(bytes.as_ref())?;
         return Ok(resp);
     };
-    Ok(unknown_error_resp(
-        request.name.unwrap_or_else(|| "unknown_job".to_string()),
-    ))
+    Ok(unknown_error_resp("error".to_string()))
 }
 
 pub async fn handle_history_all(

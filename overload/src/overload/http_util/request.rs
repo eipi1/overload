@@ -53,7 +53,7 @@ impl TryFrom<&String> for RequestSpecEnum {
     }
 }
 
-/// Describe the request, for example
+/// Describe the request
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Request {
@@ -109,6 +109,14 @@ impl Into<RequestGenerator> for Request {
             self.response_assertion,
         )
     }
+}
+
+/// Describe multiple tests in single request
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MultiRequest {
+    pub name: Option<String>,
+    pub requests: Vec<Request>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
