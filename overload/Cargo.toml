@@ -183,6 +183,9 @@ version = "0.9"
 [dev-dependencies.portpicker]
 version = "0.1"
 
+[dev-dependencies.test-case]
+version = "2.2"
+
 [features]
 default = ["debug"]
 

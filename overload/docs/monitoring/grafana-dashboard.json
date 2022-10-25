@@ -1,4 +1,34 @@
 {
+  "__inputs": [
+    {
+      "name": "DS_PROMETHEUS",
+      "label": "Prometheus",
+      "description": "",
+      "type": "datasource",
+      "pluginId": "prometheus",
+      "pluginName": "Prometheus"
+    }
+  ],
+  "__requires": [
+    {
+      "type": "grafana",
+      "id": "grafana",
+      "name": "Grafana",
+      "version": "7.0.6"
+    },
+    {
+      "type": "panel",
+      "id": "graph",
+      "name": "Graph",
+      "version": ""
+    },
+    {
+      "type": "datasource",
+      "id": "prometheus",
+      "name": "Prometheus",
+      "version": "1.0.0"
+    }
+  ],
   "annotations": {
     "list": [
       {
@@ -15,13 +45,13 @@
   "editable": true,
   "gnetId": null,
   "graphTooltip": 0,
-  "id": 3,
-  "iteration": 1666469690201,
+  "id": null,
+  "iteration": 1666627055648,
   "links": [],
   "panels": [
     {
       "collapsed": false,
-      "datasource": null,
+      "datasource": "${DS_PROMETHEUS}",
       "gridPos": {
         "h": 1,
         "w": 24,
@@ -35,10 +65,10 @@
     },
     {
       "aliasColors": {},
-      "bars": false,
+      "bars": true,
       "dashLength": 10,
       "dashes": false,
-      "datasource": null,
+      "datasource": "${DS_PROMETHEUS}",
       "fieldConfig": {
         "defaults": {
           "custom": {}
@@ -56,15 +86,16 @@
       "hiddenSeries": false,
       "id": 2,
       "legend": {
+        "alignAsTable": true,
         "avg": false,
         "current": false,
-        "max": false,
+        "max": true,
         "min": false,
         "show": true,
         "total": false,
-        "values": false
+        "values": true
       },
-      "lines": true,
+      "lines": false,
       "linewidth": 1,
       "nullPointMode": "null",
       "options": {
@@ -76,13 +107,14 @@
       "renderer": "flot",
       "seriesOverrides": [],
       "spaceLength": 10,
-      "stack": false,
+      "stack": true,
       "steppedLine": false,
       "targets": [
         {
-          "expr": "sum by (job_id) (rate(upstream_request_count{job_id=\"${job}\"}[1m]))",
+          "expr": "(sum by (job_id) (rate(upstream_request_count{job_id=~\"${job}.*\"}[1m])))",
+          "hide": false,
           "interval": "",
-          "legendFormat": "Total RPS",
+          "legendFormat": "{{job_id}}",
           "refId": "A"
         }
       ],
@@ -132,7 +164,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": null,
+      "datasource": "${DS_PROMETHEUS}",
       "fieldConfig": {
         "defaults": {
           "custom": {
@@ -166,13 +198,16 @@
       "hiddenSeries": false,
       "id": 12,
       "legend": {
+        "alignAsTable": true,
         "avg": false,
         "current": false,
         "max": false,
         "min": false,
         "show": true,
-        "total": false,
-        "values": false
+        "sort": "total",
+        "sortDesc": true,
+        "total": true,
+        "values": true
       },
       "lines": true,
       "linewidth": 1,
@@ -191,10 +226,10 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "sum by (status) (rate(upstream_request_status_count{job_id=\"${job}\"}[1m]))",
+          "expr": "label_replace((sum by (status, job_id) (rate(upstream_request_status_count{job_id=~\"${job}.*\"}[1m]))), \"sub_id\", \"$1\", \"job_id\", \".*_([0-9]*)\")",
           "hide": false,
           "interval": "",
-          "legendFormat": "{{status}}",
+          "legendFormat": "{{job_id}}-{{status}}",
           "refId": "A"
         }
       ],
@@ -244,7 +279,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": null,
+      "datasource": "${DS_PROMETHEUS}",
       "fieldConfig": {
         "defaults": {
           "custom": {}
@@ -287,17 +322,11 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "sum by (job_id) (rate(upstream_request_count{job_id=\"${job}\"}[1m]))",
-          "hide": true,
+          "expr": "sum by (instance) (rate(upstream_request_count{job_id=~\"${job}.*\"}[1m]))",
+          "hide": false,
           "interval": "",
-          "legendFormat": "Total RPS",
+          "legendFormat": "{{instance}}",
           "refId": "A"
-        },
-        {
-          "expr": "irate(upstream_request_count{job_id=\"${job}\"}[1m])",
-          "interval": "",
-          "legendFormat": "RPS - {{instance}}",
-          "refId": "B"
         }
       ],
       "thresholds": [],
@@ -343,7 +372,7 @@
     },
     {
       "collapsed": false,
-      "datasource": null,
+      "datasource": "${DS_PROMETHEUS}",
       "gridPos": {
         "h": 1,
         "w": 24,
@@ -360,7 +389,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": null,
+      "datasource": "${DS_PROMETHEUS}",
       "fieldConfig": {
         "defaults": {
           "custom": {}
@@ -378,13 +407,14 @@
       "hiddenSeries": false,
       "id": 4,
       "legend": {
-        "avg": false,
+        "alignAsTable": true,
+        "avg": true,
         "current": false,
-        "max": false,
+        "max": true,
         "min": false,
-        "show": false,
+        "show": true,
         "total": false,
-        "values": false
+        "values": true
       },
       "lines": true,
       "linewidth": 1,
@@ -402,9 +432,9 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "avg(rate(upstream_response_time_sum{job_id=\"${job}\"}[1m])/rate(upstream_response_time_count{job_id=\"${job}\"}[1m]))",
+          "expr": "avg by (job_id) (rate(upstream_response_time_sum{job_id=~\"${job}.*\"}[1m])/rate(upstream_response_time_count{job_id=~\"${job}.*\"}[1m]))",
           "interval": "",
-          "legendFormat": "Response time",
+          "legendFormat": "{{job_id}}",
           "refId": "B"
         }
       ],
@@ -454,7 +484,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": null,
+      "datasource": "${DS_PROMETHEUS}",
       "fieldConfig": {
         "defaults": {
           "custom": {}
@@ -472,13 +502,14 @@
       "hiddenSeries": false,
       "id": 6,
       "legend": {
-        "avg": false,
+        "alignAsTable": true,
+        "avg": true,
         "current": false,
-        "max": false,
+        "max": true,
         "min": false,
         "show": true,
         "total": false,
-        "values": false
+        "values": true
       },
       "lines": true,
       "linewidth": 1,
@@ -496,27 +527,29 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "histogram_quantile(0.99, sum(rate(upstream_response_time_bucket{job_id=\"${job}\"}[1m])) by (le))",
+          "expr": "histogram_quantile (0.99, sum(rate(upstream_response_time_bucket{job_id=~\"${job}.*\"}[1m])) by (le, job_id))",
+          "hide": false,
           "interval": "",
-          "legendFormat": "99th",
+          "legendFormat": "99th - {{job_id}}",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.95, sum(rate(upstream_response_time_bucket{job_id=\"${job}\"}[1m])) by (le))",
+          "expr": " histogram_quantile(0.95, sum(rate(upstream_response_time_bucket{job_id=~\"${job}.*\"}[1m])) by (le, job_id))",
           "interval": "",
-          "legendFormat": "95th",
+          "legendFormat": "95th - {{job_id}}",
           "refId": "D"
         },
         {
-          "expr": "histogram_quantile(0.75, sum(rate(upstream_response_time_bucket{job_id=\"${job}\"}[1m])) by (le))",
+          "expr": "histogram_quantile(0.75, sum(rate(upstream_response_time_bucket{job_id=~\"${job}.*\"}[1m])) by (le, job_id))",
           "interval": "",
-          "legendFormat": "75th",
+          "legendFormat": "75th - {{job_id}}",
           "refId": "C"
         },
         {
-          "expr": "histogram_quantile(0.50, sum(rate(upstream_response_time_bucket{job_id=\"${job}\"}[1m])) by (le))",
+          "expr": "histogram_quantile(0.50, sum(rate(upstream_response_time_bucket{job_id=~\"${job}.*\"}[1m])) by (le, job_id))",
+          "hide": false,
           "interval": "",
-          "legendFormat": "50th",
+          "legendFormat": "50th - {{job_id}}",
           "refId": "B"
         }
       ],
@@ -564,7 +597,7 @@
     },
     {
       "collapsed": false,
-      "datasource": null,
+      "datasource": "${DS_PROMETHEUS}",
       "gridPos": {
         "h": 1,
         "w": 24,
@@ -581,7 +614,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": null,
+      "datasource": "${DS_PROMETHEUS}",
       "fieldConfig": {
         "defaults": {
           "custom": {}
@@ -623,9 +656,9 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "sum by (assertion_id) (assertion_failure{job_id=\"${job}\"})",
+          "expr": "sum by (assertion_id, job_id) (assertion_failure{job_id=~\"${job}.*\"})",
           "interval": "",
-          "legendFormat": "Assertion id: {{assertion_id}}",
+          "legendFormat": "Assertion id: {{assertion_id}} - {{job_id}}",
           "refId": "B"
         }
       ],
@@ -676,7 +709,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": null,
+      "datasource": "${DS_PROMETHEUS}",
       "fieldConfig": {
         "defaults": {
           "custom": {}
@@ -718,9 +751,9 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "sum by (reason) (assertion_failure{job_id=\"${job}\"})",
+          "expr": "sum by (reason, job_id) (assertion_failure{job_id=~\"${job}.*\"})  ",
           "interval": "",
-          "legendFormat": "{{reason}}",
+          "legendFormat": "{{reason}} - {{job_id}}",
           "refId": "B"
         }
       ],
@@ -768,7 +801,7 @@
     },
     {
       "collapsed": false,
-      "datasource": null,
+      "datasource": "${DS_PROMETHEUS}",
       "gridPos": {
         "h": 1,
         "w": 24,
@@ -778,13 +811,6 @@
       "id": 15,
       "panels": [],
       "repeat": "instance",
-      "scopedVars": {
-        "instance": {
-          "selected": false,
-          "text": "10.1.64.163:3030",
-          "value": "10.1.64.163:3030"
-        }
-      },
       "title": "Connection - $instance",
       "type": "row"
     },
@@ -793,7 +819,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "Prometheus",
+      "datasource": "${DS_PROMETHEUS}",
       "fieldConfig": {
         "defaults": {
           "custom": {}
@@ -830,73 +856,38 @@
       "pointradius": 2,
       "points": false,
       "renderer": "flot",
-      "scopedVars": {
-        "instance": {
-          "selected": false,
-          "text": "10.1.64.163:3030",
-          "value": "10.1.64.163:3030"
-        }
-      },
       "seriesOverrides": [],
       "spaceLength": 10,
       "stack": false,
       "steppedLine": false,
       "targets": [
         {
-          "expr": "connection_pool_new_connection_attempt{job_id=\"${job}\", instance=~\"$instance\"}",
+          "expr": "connection_pool_new_connection_attempt{job_id=~\"${job}.*\", instance=~\"${instance}\"}",
           "hide": false,
           "interval": "",
-          "legendFormat": "Attempt",
+          "legendFormat": "Attempt - {{job_id}}",
           "refId": "A"
         },
         {
-          "expr": "connection_pool_new_connection_success{job_id=\"${job}\", instance=~\"$instance\"}",
+          "expr": "connection_pool_new_connection_success{job_id=~\"${job}.*\", instance=~\"$instance\"}",
           "hide": false,
           "interval": "",
-          "legendFormat": "Success",
+          "legendFormat": "Success - {{job_id}}",
           "refId": "B"
         },
         {
-          "expr": "-(connection_pool_connection_broken{job_id=\"${job}\", instance=~\"$instance\"})",
+          "expr": "-(connection_pool_connection_broken{job_id=~\"${job}.*\", instance=~\"$instance\"})",
           "hide": false,
           "interval": "",
-          "legendFormat": "broken",
+          "legendFormat": "broken - {{job_id}}",
           "refId": "C"
         },
         {
-          "expr": "-(connection_pool_connection_dropped{job_id=\"${job}\", instance=~\"$instance\"})",
+          "expr": "-(connection_pool_connection_dropped{job_id=~\"${job}.*\", instance=~\"$instance\"})",
           "hide": false,
           "interval": "",
-          "legendFormat": "dropped",
+          "legendFormat": "dropped - {{job_id}}",
           "refId": "D"
-        },
-        {
-          "expr": "connection_pool_new_connection_attempt{job_id=\"${job}\"}",
-          "hide": true,
-          "interval": "",
-          "legendFormat": "Attempt - {{instance}}",
-          "refId": "E"
-        },
-        {
-          "expr": "connection_pool_new_connection_success{job_id=\"${job}\"}",
-          "hide": true,
-          "interval": "",
-          "legendFormat": "Success - {{instance}}",
-          "refId": "F"
-        },
-        {
-          "expr": "-(connection_pool_connection_broken{job_id=\"${job}\"})",
-          "hide": true,
-          "interval": "",
-          "legendFormat": "broken - {{instance}}",
-          "refId": "G"
-        },
-        {
-          "expr": "-(connection_pool_connection_dropped{job_id=\"${job}\"})",
-          "hide": true,
-          "interval": "",
-          "legendFormat": "dropped - {{instance}}",
-          "refId": "H"
         }
       ],
       "thresholds": [],
@@ -946,7 +937,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": null,
+      "datasource": "${DS_PROMETHEUS}",
       "fieldConfig": {
         "defaults": {
           "custom": {}
@@ -964,6 +955,7 @@
       "hiddenSeries": false,
       "id": 23,
       "legend": {
+        "alignAsTable": true,
         "avg": false,
         "current": false,
         "max": false,
@@ -982,52 +974,38 @@
       "pointradius": 2,
       "points": false,
       "renderer": "flot",
-      "scopedVars": {
-        "instance": {
-          "selected": false,
-          "text": "10.1.64.163:3030",
-          "value": "10.1.64.163:3030"
-        }
-      },
       "seriesOverrides": [],
       "spaceLength": 10,
       "stack": false,
       "steppedLine": false,
       "targets": [
         {
-          "expr": "irate(connection_pool_new_connection_attempt{job_id=\"${job}\", instance=~\"$instance\"}[$__interval])",
+          "expr": "irate(connection_pool_new_connection_attempt{job_id=~\"${job}.*\", instance=~\"$instance\"}[$__interval])",
           "hide": false,
           "interval": "",
-          "legendFormat": "Attempt",
+          "legendFormat": "Attempt - {{job_id}}",
           "refId": "A"
         },
         {
-          "expr": "irate(connection_pool_new_connection_success{job_id=\"${job}\", instance=~\"$instance\"}[$__interval])",
+          "expr": "irate(connection_pool_new_connection_success{job_id=~\"${job}.*\", instance=~\"$instance\"}[$__interval])",
           "hide": false,
           "interval": "",
-          "legendFormat": "Success",
+          "legendFormat": "Success - {{job_id}}",
           "refId": "B"
         },
         {
-          "expr": "-irate(connection_pool_connection_broken{job_id=\"${job}\", instance=~\"$instance\"}[$__interval])",
+          "expr": "-irate(connection_pool_connection_broken{job_id=~\"${job}.*\", instance=~\"$instance\"}[$__interval])",
           "hide": false,
           "interval": "",
-          "legendFormat": "broken",
+          "legendFormat": "broken - {{job_id}}",
           "refId": "C"
         },
         {
-          "expr": "-irate(connection_pool_connection_dropped{job_id=\"${job}\", instance=~\"$instance\"}[$__interval])",
+          "expr": "-irate(connection_pool_connection_dropped{job_id=~\"${job}.*\", instance=~\"$instance\"}[$__interval])",
           "hide": false,
           "interval": "",
-          "legendFormat": "dropped",
+          "legendFormat": "dropped - {{job_id}}",
           "refId": "D"
-        },
-        {
-          "expr": "connection_pool_size{job_id=\"${job}\", instance=\"$instance\"}",
-          "hide": true,
-          "interval": "",
-          "legendFormat": "Pool size",
-          "refId": "E"
         }
       ],
       "thresholds": [],
@@ -1077,7 +1055,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": null,
+      "datasource": "${DS_PROMETHEUS}",
       "fieldConfig": {
         "defaults": {
           "custom": {}
@@ -1113,27 +1091,20 @@
       "pointradius": 2,
       "points": false,
       "renderer": "flot",
-      "scopedVars": {
-        "instance": {
-          "selected": false,
-          "text": "10.1.64.163:3030",
-          "value": "10.1.64.163:3030"
-        }
-      },
       "seriesOverrides": [],
       "spaceLength": 10,
       "stack": false,
       "steppedLine": false,
       "targets": [
         {
-          "expr": "connection_pool_new_connection_success{job_id=\"${job}\", instance=~\"$instance\"}-connection_pool_connection_dropped{job_id=\"${job}\", instance=~\"$instance\"}",
+          "expr": "connection_pool_new_connection_success{job_id=~\"${job}.*\", instance=~\"$instance\"}-connection_pool_connection_dropped{job_id=~\"${job}.*\", instance=~\"$instance\"}",
           "hide": false,
           "interval": "",
           "legendFormat": "Active connection",
           "refId": "B"
         },
         {
-          "expr": "connection_pool_size{job_id=\"${job}\", instance=~\"$instance\"}",
+          "expr": "connection_pool_size{job_id=~\"${job}.*\", instance=~\"$instance\"}",
           "hide": false,
           "interval": "",
           "legendFormat": "Pool size",
@@ -1187,7 +1158,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": null,
+      "datasource": "${DS_PROMETHEUS}",
       "fieldConfig": {
         "defaults": {
           "custom": {}
@@ -1205,6 +1176,7 @@
       "hiddenSeries": false,
       "id": 25,
       "legend": {
+        "alignAsTable": true,
         "avg": false,
         "current": false,
         "max": false,
@@ -1223,30 +1195,23 @@
       "pointradius": 2,
       "points": false,
       "renderer": "flot",
-      "scopedVars": {
-        "instance": {
-          "selected": false,
-          "text": "10.1.64.163:3030",
-          "value": "10.1.64.163:3030"
-        }
-      },
       "seriesOverrides": [],
       "spaceLength": 10,
       "stack": false,
       "steppedLine": false,
       "targets": [
         {
-          "expr": "connection_pool_connection_idle{job_id=\"${job}\", instance=~\"$instance\"}",
+          "expr": "connection_pool_connection_idle{job_id=~\"${job}.*\", instance=~\"$instance\"}",
           "hide": false,
           "interval": "",
-          "legendFormat": "Idle",
+          "legendFormat": "Idle - {{job_id}}",
           "refId": "B"
         },
         {
-          "expr": "connection_pool_connection_busy{job_id=\"${job}\", instance=~\"$instance\"}",
+          "expr": "connection_pool_connection_busy{job_id=~\"${job}.*\", instance=~\"$instance\"}",
           "hide": false,
           "interval": "",
-          "legendFormat": "Busy",
+          "legendFormat": "Busy - {{job_id}}",
           "refId": "E"
         }
       ],
@@ -1294,1092 +1259,12 @@
     },
     {
       "collapsed": false,
-      "datasource": null,
+      "datasource": "${DS_PROMETHEUS}",
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
         "y": 52
-      },
-      "id": 45,
-      "panels": [],
-      "repeat": null,
-      "repeatIteration": 1666469690201,
-      "repeatPanelId": 15,
-      "scopedVars": {
-        "instance": {
-          "selected": false,
-          "text": "10.1.64.164:3030",
-          "value": "10.1.64.164:3030"
-        }
-      },
-      "title": "Connection - $instance",
-      "type": "row"
-    },
-    {
-      "aliasColors": {},
-      "bars": false,
-      "dashLength": 10,
-      "dashes": false,
-      "datasource": "Prometheus",
-      "fieldConfig": {
-        "defaults": {
-          "custom": {}
-        },
-        "overrides": []
-      },
-      "fill": 1,
-      "fillGradient": 0,
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 53
-      },
-      "hiddenSeries": false,
-      "id": 46,
-      "legend": {
-        "alignAsTable": true,
-        "avg": false,
-        "current": false,
-        "max": false,
-        "min": false,
-        "show": true,
-        "total": false,
-        "values": false
-      },
-      "lines": true,
-      "linewidth": 1,
-      "nullPointMode": "null",
-      "options": {
-        "dataLinks": []
-      },
-      "percentage": false,
-      "pointradius": 2,
-      "points": false,
-      "renderer": "flot",
-      "repeatIteration": 1666469690201,
-      "repeatPanelId": 19,
-      "repeatedByRow": true,
-      "scopedVars": {
-        "instance": {
-          "selected": false,
-          "text": "10.1.64.164:3030",
-          "value": "10.1.64.164:3030"
-        }
-      },
-      "seriesOverrides": [],
-      "spaceLength": 10,
-      "stack": false,
-      "steppedLine": false,
-      "targets": [
-        {
-          "expr": "connection_pool_new_connection_attempt{job_id=\"${job}\", instance=~\"$instance\"}",
-          "hide": false,
-          "interval": "",
-          "legendFormat": "Attempt",
-          "refId": "A"
-        },
-        {
-          "expr": "connection_pool_new_connection_success{job_id=\"${job}\", instance=~\"$instance\"}",
-          "hide": false,
-          "interval": "",
-          "legendFormat": "Success",
-          "refId": "B"
-        },
-        {
-          "expr": "-(connection_pool_connection_broken{job_id=\"${job}\", instance=~\"$instance\"})",
-          "hide": false,
-          "interval": "",
-          "legendFormat": "broken",
-          "refId": "C"
-        },
-        {
-          "expr": "-(connection_pool_connection_dropped{job_id=\"${job}\", instance=~\"$instance\"})",
-          "hide": false,
-          "interval": "",
-          "legendFormat": "dropped",
-          "refId": "D"
-        },
-        {
-          "expr": "connection_pool_new_connection_attempt{job_id=\"${job}\"}",
-          "hide": true,
-          "interval": "",
-          "legendFormat": "Attempt - {{instance}}",
-          "refId": "E"
-        },
-        {
-          "expr": "connection_pool_new_connection_success{job_id=\"${job}\"}",
-          "hide": true,
-          "interval": "",
-          "legendFormat": "Success - {{instance}}",
-          "refId": "F"
-        },
-        {
-          "expr": "-(connection_pool_connection_broken{job_id=\"${job}\"})",
-          "hide": true,
-          "interval": "",
-          "legendFormat": "broken - {{instance}}",
-          "refId": "G"
-        },
-        {
-          "expr": "-(connection_pool_connection_dropped{job_id=\"${job}\"})",
-          "hide": true,
-          "interval": "",
-          "legendFormat": "dropped - {{instance}}",
-          "refId": "H"
-        }
-      ],
-      "thresholds": [],
-      "timeFrom": null,
-      "timeRegions": [],
-      "timeShift": null,
-      "title": "Connection Pool",
-      "tooltip": {
-        "shared": true,
-        "sort": 0,
-        "value_type": "individual"
-      },
-      "type": "graph",
-      "xaxis": {
-        "buckets": null,
-        "mode": "time",
-        "name": null,
-        "show": true,
-        "values": []
-      },
-      "yaxes": [
-        {
-          "decimals": 2,
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        },
-        {
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        }
-      ],
-      "yaxis": {
-        "align": false,
-        "alignLevel": null
-      }
-    },
-    {
-      "aliasColors": {},
-      "bars": false,
-      "dashLength": 10,
-      "dashes": false,
-      "datasource": null,
-      "fieldConfig": {
-        "defaults": {
-          "custom": {}
-        },
-        "overrides": []
-      },
-      "fill": 1,
-      "fillGradient": 0,
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 53
-      },
-      "hiddenSeries": false,
-      "id": 47,
-      "legend": {
-        "avg": false,
-        "current": false,
-        "max": false,
-        "min": false,
-        "show": true,
-        "total": false,
-        "values": false
-      },
-      "lines": true,
-      "linewidth": 1,
-      "nullPointMode": "null",
-      "options": {
-        "dataLinks": []
-      },
-      "percentage": false,
-      "pointradius": 2,
-      "points": false,
-      "renderer": "flot",
-      "repeatIteration": 1666469690201,
-      "repeatPanelId": 23,
-      "repeatedByRow": true,
-      "scopedVars": {
-        "instance": {
-          "selected": false,
-          "text": "10.1.64.164:3030",
-          "value": "10.1.64.164:3030"
-        }
-      },
-      "seriesOverrides": [],
-      "spaceLength": 10,
-      "stack": false,
-      "steppedLine": false,
-      "targets": [
-        {
-          "expr": "irate(connection_pool_new_connection_attempt{job_id=\"${job}\", instance=~\"$instance\"}[$__interval])",
-          "hide": false,
-          "interval": "",
-          "legendFormat": "Attempt",
-          "refId": "A"
-        },
-        {
-          "expr": "irate(connection_pool_new_connection_success{job_id=\"${job}\", instance=~\"$instance\"}[$__interval])",
-          "hide": false,
-          "interval": "",
-          "legendFormat": "Success",
-          "refId": "B"
-        },
-        {
-          "expr": "-irate(connection_pool_connection_broken{job_id=\"${job}\", instance=~\"$instance\"}[$__interval])",
-          "hide": false,
-          "interval": "",
-          "legendFormat": "broken",
-          "refId": "C"
-        },
-        {
-          "expr": "-irate(connection_pool_connection_dropped{job_id=\"${job}\", instance=~\"$instance\"}[$__interval])",
-          "hide": false,
-          "interval": "",
-          "legendFormat": "dropped",
-          "refId": "D"
-        },
-        {
-          "expr": "connection_pool_size{job_id=\"${job}\", instance=\"$instance\"}",
-          "hide": true,
-          "interval": "",
-          "legendFormat": "Pool size",
-          "refId": "E"
-        }
-      ],
-      "thresholds": [],
-      "timeFrom": null,
-      "timeRegions": [],
-      "timeShift": null,
-      "title": "Connection Pool - rates",
-      "tooltip": {
-        "shared": true,
-        "sort": 0,
-        "value_type": "individual"
-      },
-      "type": "graph",
-      "xaxis": {
-        "buckets": null,
-        "mode": "time",
-        "name": null,
-        "show": true,
-        "values": []
-      },
-      "yaxes": [
-        {
-          "decimals": 2,
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        },
-        {
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        }
-      ],
-      "yaxis": {
-        "align": false,
-        "alignLevel": null
-      }
-    },
-    {
-      "aliasColors": {},
-      "bars": false,
-      "dashLength": 10,
-      "dashes": false,
-      "datasource": null,
-      "fieldConfig": {
-        "defaults": {
-          "custom": {}
-        },
-        "overrides": []
-      },
-      "fill": 1,
-      "fillGradient": 0,
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 61
-      },
-      "hiddenSeries": false,
-      "id": 48,
-      "legend": {
-        "avg": false,
-        "current": false,
-        "max": false,
-        "min": false,
-        "show": true,
-        "total": false,
-        "values": false
-      },
-      "lines": true,
-      "linewidth": 1,
-      "nullPointMode": "null",
-      "options": {
-        "dataLinks": []
-      },
-      "percentage": false,
-      "pointradius": 2,
-      "points": false,
-      "renderer": "flot",
-      "repeatIteration": 1666469690201,
-      "repeatPanelId": 24,
-      "repeatedByRow": true,
-      "scopedVars": {
-        "instance": {
-          "selected": false,
-          "text": "10.1.64.164:3030",
-          "value": "10.1.64.164:3030"
-        }
-      },
-      "seriesOverrides": [],
-      "spaceLength": 10,
-      "stack": false,
-      "steppedLine": false,
-      "targets": [
-        {
-          "expr": "connection_pool_new_connection_success{job_id=\"${job}\", instance=~\"$instance\"}-connection_pool_connection_dropped{job_id=\"${job}\", instance=~\"$instance\"}",
-          "hide": false,
-          "interval": "",
-          "legendFormat": "Active connection",
-          "refId": "B"
-        },
-        {
-          "expr": "connection_pool_size{job_id=\"${job}\", instance=~\"$instance\"}",
-          "hide": false,
-          "interval": "",
-          "legendFormat": "Pool size",
-          "refId": "E"
-        }
-      ],
-      "thresholds": [],
-      "timeFrom": null,
-      "timeRegions": [],
-      "timeShift": null,
-      "title": "Connection Pool - Size",
-      "tooltip": {
-        "shared": true,
-        "sort": 0,
-        "value_type": "individual"
-      },
-      "type": "graph",
-      "xaxis": {
-        "buckets": null,
-        "mode": "time",
-        "name": null,
-        "show": true,
-        "values": []
-      },
-      "yaxes": [
-        {
-          "decimals": 2,
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        },
-        {
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        }
-      ],
-      "yaxis": {
-        "align": false,
-        "alignLevel": null
-      }
-    },
-    {
-      "aliasColors": {},
-      "bars": false,
-      "dashLength": 10,
-      "dashes": false,
-      "datasource": null,
-      "fieldConfig": {
-        "defaults": {
-          "custom": {}
-        },
-        "overrides": []
-      },
-      "fill": 1,
-      "fillGradient": 0,
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 61
-      },
-      "hiddenSeries": false,
-      "id": 49,
-      "legend": {
-        "avg": false,
-        "current": false,
-        "max": false,
-        "min": false,
-        "show": true,
-        "total": false,
-        "values": false
-      },
-      "lines": true,
-      "linewidth": 1,
-      "nullPointMode": "null",
-      "options": {
-        "dataLinks": []
-      },
-      "percentage": false,
-      "pointradius": 2,
-      "points": false,
-      "renderer": "flot",
-      "repeatIteration": 1666469690201,
-      "repeatPanelId": 25,
-      "repeatedByRow": true,
-      "scopedVars": {
-        "instance": {
-          "selected": false,
-          "text": "10.1.64.164:3030",
-          "value": "10.1.64.164:3030"
-        }
-      },
-      "seriesOverrides": [],
-      "spaceLength": 10,
-      "stack": false,
-      "steppedLine": false,
-      "targets": [
-        {
-          "expr": "connection_pool_connection_idle{job_id=\"${job}\", instance=~\"$instance\"}",
-          "hide": false,
-          "interval": "",
-          "legendFormat": "Idle",
-          "refId": "B"
-        },
-        {
-          "expr": "connection_pool_connection_busy{job_id=\"${job}\", instance=~\"$instance\"}",
-          "hide": false,
-          "interval": "",
-          "legendFormat": "Busy",
-          "refId": "E"
-        }
-      ],
-      "thresholds": [],
-      "timeFrom": null,
-      "timeRegions": [],
-      "timeShift": null,
-      "title": "Connection Pool - Busy/idle",
-      "tooltip": {
-        "shared": true,
-        "sort": 0,
-        "value_type": "individual"
-      },
-      "type": "graph",
-      "xaxis": {
-        "buckets": null,
-        "mode": "time",
-        "name": null,
-        "show": true,
-        "values": []
-      },
-      "yaxes": [
-        {
-          "decimals": 2,
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        },
-        {
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        }
-      ],
-      "yaxis": {
-        "align": false,
-        "alignLevel": null
-      }
-    },
-    {
-      "collapsed": false,
-      "datasource": null,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 69
-      },
-      "id": 50,
-      "panels": [],
-      "repeat": null,
-      "repeatIteration": 1666469690201,
-      "repeatPanelId": 15,
-      "scopedVars": {
-        "instance": {
-          "selected": false,
-          "text": "10.1.64.166:3030",
-          "value": "10.1.64.166:3030"
-        }
-      },
-      "title": "Connection - $instance",
-      "type": "row"
-    },
-    {
-      "aliasColors": {},
-      "bars": false,
-      "dashLength": 10,
-      "dashes": false,
-      "datasource": "Prometheus",
-      "fieldConfig": {
-        "defaults": {
-          "custom": {}
-        },
-        "overrides": []
-      },
-      "fill": 1,
-      "fillGradient": 0,
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 70
-      },
-      "hiddenSeries": false,
-      "id": 51,
-      "legend": {
-        "alignAsTable": true,
-        "avg": false,
-        "current": false,
-        "max": false,
-        "min": false,
-        "show": true,
-        "total": false,
-        "values": false
-      },
-      "lines": true,
-      "linewidth": 1,
-      "nullPointMode": "null",
-      "options": {
-        "dataLinks": []
-      },
-      "percentage": false,
-      "pointradius": 2,
-      "points": false,
-      "renderer": "flot",
-      "repeatIteration": 1666469690201,
-      "repeatPanelId": 19,
-      "repeatedByRow": true,
-      "scopedVars": {
-        "instance": {
-          "selected": false,
-          "text": "10.1.64.166:3030",
-          "value": "10.1.64.166:3030"
-        }
-      },
-      "seriesOverrides": [],
-      "spaceLength": 10,
-      "stack": false,
-      "steppedLine": false,
-      "targets": [
-        {
-          "expr": "connection_pool_new_connection_attempt{job_id=\"${job}\", instance=~\"$instance\"}",
-          "hide": false,
-          "interval": "",
-          "legendFormat": "Attempt",
-          "refId": "A"
-        },
-        {
-          "expr": "connection_pool_new_connection_success{job_id=\"${job}\", instance=~\"$instance\"}",
-          "hide": false,
-          "interval": "",
-          "legendFormat": "Success",
-          "refId": "B"
-        },
-        {
-          "expr": "-(connection_pool_connection_broken{job_id=\"${job}\", instance=~\"$instance\"})",
-          "hide": false,
-          "interval": "",
-          "legendFormat": "broken",
-          "refId": "C"
-        },
-        {
-          "expr": "-(connection_pool_connection_dropped{job_id=\"${job}\", instance=~\"$instance\"})",
-          "hide": false,
-          "interval": "",
-          "legendFormat": "dropped",
-          "refId": "D"
-        },
-        {
-          "expr": "connection_pool_new_connection_attempt{job_id=\"${job}\"}",
-          "hide": true,
-          "interval": "",
-          "legendFormat": "Attempt - {{instance}}",
-          "refId": "E"
-        },
-        {
-          "expr": "connection_pool_new_connection_success{job_id=\"${job}\"}",
-          "hide": true,
-          "interval": "",
-          "legendFormat": "Success - {{instance}}",
-          "refId": "F"
-        },
-        {
-          "expr": "-(connection_pool_connection_broken{job_id=\"${job}\"})",
-          "hide": true,
-          "interval": "",
-          "legendFormat": "broken - {{instance}}",
-          "refId": "G"
-        },
-        {
-          "expr": "-(connection_pool_connection_dropped{job_id=\"${job}\"})",
-          "hide": true,
-          "interval": "",
-          "legendFormat": "dropped - {{instance}}",
-          "refId": "H"
-        }
-      ],
-      "thresholds": [],
-      "timeFrom": null,
-      "timeRegions": [],
-      "timeShift": null,
-      "title": "Connection Pool",
-      "tooltip": {
-        "shared": true,
-        "sort": 0,
-        "value_type": "individual"
-      },
-      "type": "graph",
-      "xaxis": {
-        "buckets": null,
-        "mode": "time",
-        "name": null,
-        "show": true,
-        "values": []
-      },
-      "yaxes": [
-        {
-          "decimals": 2,
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        },
-        {
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        }
-      ],
-      "yaxis": {
-        "align": false,
-        "alignLevel": null
-      }
-    },
-    {
-      "aliasColors": {},
-      "bars": false,
-      "dashLength": 10,
-      "dashes": false,
-      "datasource": null,
-      "fieldConfig": {
-        "defaults": {
-          "custom": {}
-        },
-        "overrides": []
-      },
-      "fill": 1,
-      "fillGradient": 0,
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 70
-      },
-      "hiddenSeries": false,
-      "id": 52,
-      "legend": {
-        "avg": false,
-        "current": false,
-        "max": false,
-        "min": false,
-        "show": true,
-        "total": false,
-        "values": false
-      },
-      "lines": true,
-      "linewidth": 1,
-      "nullPointMode": "null",
-      "options": {
-        "dataLinks": []
-      },
-      "percentage": false,
-      "pointradius": 2,
-      "points": false,
-      "renderer": "flot",
-      "repeatIteration": 1666469690201,
-      "repeatPanelId": 23,
-      "repeatedByRow": true,
-      "scopedVars": {
-        "instance": {
-          "selected": false,
-          "text": "10.1.64.166:3030",
-          "value": "10.1.64.166:3030"
-        }
-      },
-      "seriesOverrides": [],
-      "spaceLength": 10,
-      "stack": false,
-      "steppedLine": false,
-      "targets": [
-        {
-          "expr": "irate(connection_pool_new_connection_attempt{job_id=\"${job}\", instance=~\"$instance\"}[$__interval])",
-          "hide": false,
-          "interval": "",
-          "legendFormat": "Attempt",
-          "refId": "A"
-        },
-        {
-          "expr": "irate(connection_pool_new_connection_success{job_id=\"${job}\", instance=~\"$instance\"}[$__interval])",
-          "hide": false,
-          "interval": "",
-          "legendFormat": "Success",
-          "refId": "B"
-        },
-        {
-          "expr": "-irate(connection_pool_connection_broken{job_id=\"${job}\", instance=~\"$instance\"}[$__interval])",
-          "hide": false,
-          "interval": "",
-          "legendFormat": "broken",
-          "refId": "C"
-        },
-        {
-          "expr": "-irate(connection_pool_connection_dropped{job_id=\"${job}\", instance=~\"$instance\"}[$__interval])",
-          "hide": false,
-          "interval": "",
-          "legendFormat": "dropped",
-          "refId": "D"
-        },
-        {
-          "expr": "connection_pool_size{job_id=\"${job}\", instance=\"$instance\"}",
-          "hide": true,
-          "interval": "",
-          "legendFormat": "Pool size",
-          "refId": "E"
-        }
-      ],
-      "thresholds": [],
-      "timeFrom": null,
-      "timeRegions": [],
-      "timeShift": null,
-      "title": "Connection Pool - rates",
-      "tooltip": {
-        "shared": true,
-        "sort": 0,
-        "value_type": "individual"
-      },
-      "type": "graph",
-      "xaxis": {
-        "buckets": null,
-        "mode": "time",
-        "name": null,
-        "show": true,
-        "values": []
-      },
-      "yaxes": [
-        {
-          "decimals": 2,
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        },
-        {
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        }
-      ],
-      "yaxis": {
-        "align": false,
-        "alignLevel": null
-      }
-    },
-    {
-      "aliasColors": {},
-      "bars": false,
-      "dashLength": 10,
-      "dashes": false,
-      "datasource": null,
-      "fieldConfig": {
-        "defaults": {
-          "custom": {}
-        },
-        "overrides": []
-      },
-      "fill": 1,
-      "fillGradient": 0,
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 78
-      },
-      "hiddenSeries": false,
-      "id": 53,
-      "legend": {
-        "avg": false,
-        "current": false,
-        "max": false,
-        "min": false,
-        "show": true,
-        "total": false,
-        "values": false
-      },
-      "lines": true,
-      "linewidth": 1,
-      "nullPointMode": "null",
-      "options": {
-        "dataLinks": []
-      },
-      "percentage": false,
-      "pointradius": 2,
-      "points": false,
-      "renderer": "flot",
-      "repeatIteration": 1666469690201,
-      "repeatPanelId": 24,
-      "repeatedByRow": true,
-      "scopedVars": {
-        "instance": {
-          "selected": false,
-          "text": "10.1.64.166:3030",
-          "value": "10.1.64.166:3030"
-        }
-      },
-      "seriesOverrides": [],
-      "spaceLength": 10,
-      "stack": false,
-      "steppedLine": false,
-      "targets": [
-        {
-          "expr": "connection_pool_new_connection_success{job_id=\"${job}\", instance=~\"$instance\"}-connection_pool_connection_dropped{job_id=\"${job}\", instance=~\"$instance\"}",
-          "hide": false,
-          "interval": "",
-          "legendFormat": "Active connection",
-          "refId": "B"
-        },
-        {
-          "expr": "connection_pool_size{job_id=\"${job}\", instance=~\"$instance\"}",
-          "hide": false,
-          "interval": "",
-          "legendFormat": "Pool size",
-          "refId": "E"
-        }
-      ],
-      "thresholds": [],
-      "timeFrom": null,
-      "timeRegions": [],
-      "timeShift": null,
-      "title": "Connection Pool - Size",
-      "tooltip": {
-        "shared": true,
-        "sort": 0,
-        "value_type": "individual"
-      },
-      "type": "graph",
-      "xaxis": {
-        "buckets": null,
-        "mode": "time",
-        "name": null,
-        "show": true,
-        "values": []
-      },
-      "yaxes": [
-        {
-          "decimals": 2,
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        },
-        {
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        }
-      ],
-      "yaxis": {
-        "align": false,
-        "alignLevel": null
-      }
-    },
-    {
-      "aliasColors": {},
-      "bars": false,
-      "dashLength": 10,
-      "dashes": false,
-      "datasource": null,
-      "fieldConfig": {
-        "defaults": {
-          "custom": {}
-        },
-        "overrides": []
-      },
-      "fill": 1,
-      "fillGradient": 0,
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 78
-      },
-      "hiddenSeries": false,
-      "id": 54,
-      "legend": {
-        "avg": false,
-        "current": false,
-        "max": false,
-        "min": false,
-        "show": true,
-        "total": false,
-        "values": false
-      },
-      "lines": true,
-      "linewidth": 1,
-      "nullPointMode": "null",
-      "options": {
-        "dataLinks": []
-      },
-      "percentage": false,
-      "pointradius": 2,
-      "points": false,
-      "renderer": "flot",
-      "repeatIteration": 1666469690201,
-      "repeatPanelId": 25,
-      "repeatedByRow": true,
-      "scopedVars": {
-        "instance": {
-          "selected": false,
-          "text": "10.1.64.166:3030",
-          "value": "10.1.64.166:3030"
-        }
-      },
-      "seriesOverrides": [],
-      "spaceLength": 10,
-      "stack": false,
-      "steppedLine": false,
-      "targets": [
-        {
-          "expr": "connection_pool_connection_idle{job_id=\"${job}\", instance=~\"$instance\"}",
-          "hide": false,
-          "interval": "",
-          "legendFormat": "Idle",
-          "refId": "B"
-        },
-        {
-          "expr": "connection_pool_connection_busy{job_id=\"${job}\", instance=~\"$instance\"}",
-          "hide": false,
-          "interval": "",
-          "legendFormat": "Busy",
-          "refId": "E"
-        }
-      ],
-      "thresholds": [],
-      "timeFrom": null,
-      "timeRegions": [],
-      "timeShift": null,
-      "title": "Connection Pool - Busy/idle",
-      "tooltip": {
-        "shared": true,
-        "sort": 0,
-        "value_type": "individual"
-      },
-      "type": "graph",
-      "xaxis": {
-        "buckets": null,
-        "mode": "time",
-        "name": null,
-        "show": true,
-        "values": []
-      },
-      "yaxes": [
-        {
-          "decimals": 2,
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        },
-        {
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        }
-      ],
-      "yaxis": {
-        "align": false,
-        "alignLevel": null
-      }
-    },
-    {
-      "collapsed": false,
-      "datasource": null,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 86
       },
       "id": 27,
       "panels": [],
@@ -2391,7 +1276,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": null,
+      "datasource": "${DS_PROMETHEUS}",
       "fieldConfig": {
         "defaults": {
           "custom": {}
@@ -2404,7 +1289,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 87
+        "y": 53
       },
       "hiddenSeries": false,
       "id": 28,
@@ -2487,7 +1372,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": null,
+      "datasource": "${DS_PROMETHEUS}",
       "fieldConfig": {
         "defaults": {
           "custom": {}
@@ -2500,7 +1385,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 87
+        "y": 53
       },
       "hiddenSeries": false,
       "id": 29,
@@ -2590,7 +1475,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": null,
+      "datasource": "${DS_PROMETHEUS}",
       "fieldConfig": {
         "defaults": {
           "custom": {}
@@ -2603,7 +1488,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 95
+        "y": 61
       },
       "hiddenSeries": false,
       "id": 30,
@@ -2690,22 +1575,18 @@
     "list": [
       {
         "allValue": null,
-        "current": {
-          "selected": false,
-          "text": "demo-test-662b5965-bf91-444e-8284-bc2a843eeb3d",
-          "value": "demo-test-662b5965-bf91-444e-8284-bc2a843eeb3d"
-        },
-        "datasource": "Prometheus",
-        "definition": "label_values(upstream_request_count{job=~\"overload|overload-k8s\"},job_id)",
+        "current": {},
+        "datasource": "${DS_PROMETHEUS}",
+        "definition": "upstream_request_count{job=~\"overload|overload-k8s\"}",
         "hide": 0,
         "includeAll": false,
         "label": "job",
         "multi": false,
         "name": "job",
         "options": [],
-        "query": "label_values(upstream_request_count{job=~\"overload|overload-k8s\"},job_id)",
+        "query": "upstream_request_count{job=~\"overload|overload-k8s\"}",
         "refresh": 2,
-        "regex": "",
+        "regex": "/.*job_id=\"([a-zA-Z0-9-]*).*\".*/",
         "skipUrlSync": false,
         "sort": 1,
         "tagValuesQuery": "",
@@ -2716,22 +1597,16 @@
       },
       {
         "allValue": null,
-        "current": {
-          "selected": true,
-          "text": "All",
-          "value": [
-            "$__all"
-          ]
-        },
-        "datasource": "Prometheus",
-        "definition": "label_values(upstream_request_count{job=~\"overload|overload-k8s\", job_id=\"$job\"},instance)",
+        "current": {},
+        "datasource": "${DS_PROMETHEUS}",
+        "definition": "label_values(upstream_request_count{job=~\"overload|overload-k8s\", job_id=~\"${job}.*\"},instance)",
         "hide": 0,
         "includeAll": true,
         "label": "instance",
         "multi": true,
         "name": "instance",
         "options": [],
-        "query": "label_values(upstream_request_count{job=~\"overload|overload-k8s\", job_id=\"$job\"},instance)",
+        "query": "label_values(upstream_request_count{job=~\"overload|overload-k8s\", job_id=~\"${job}.*\"},instance)",
         "refresh": 2,
         "regex": "",
         "skipUrlSync": false,
@@ -2745,7 +1620,7 @@
     ]
   },
   "time": {
-    "from": "now-5m",
+    "from": "now-15m",
     "to": "now"
   },
   "timepicker": {
@@ -2762,7 +1637,7 @@
     ]
   },
   "timezone": "",
-  "title": "overload-ks",
+  "title": "Overload",
   "uid": "N7VSEEznz",
-  "version": 21
+  "version": 25
 }

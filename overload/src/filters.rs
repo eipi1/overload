@@ -2,9 +2,9 @@ use crate::filters_common;
 use bytes::Buf;
 use futures_util::Stream;
 use http::StatusCode;
-use log::trace;
+use log::{debug, trace};
 use overload::http_util::handle_history_all;
-use overload::http_util::request::{JobStatusQueryParams, Request};
+use overload::http_util::request::{JobStatusQueryParams, MultiRequest, Request};
 use overload::METRICS_FACTORY;
 use overload::{data_dir, http_util};
 use std::collections::HashMap;
@@ -17,8 +17,10 @@ pub fn get_routes() -> impl Filter<Extract = impl warp::Reply, Error = warp::Rej
     let stop_req = stop_req();
     let history = history();
     let overload_req = overload_req();
+    let overload_multi_req = overload_multi_req();
     prometheus_metric
         .or(overload_req)
+        .or(overload_multi_req)
         .or(stop_req)
         .or(history)
         .or(upload_binary_file)
@@ -30,6 +32,15 @@ pub fn overload_req() -> impl Filter<Extract = impl warp::Reply, Error = warp::R
         .and(warp::body::content_length_limit(1024 * 1024))
         .and(warp::body::json())
         .and_then(|request: Request| async move { execute(request).await })
+}
+
+pub fn overload_multi_req(
+) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+    warp::post()
+        .and(warp::path("tests").and(warp::path::end()))
+        .and(warp::body::content_length_limit(1024 * 1024))
+        .and(warp::body::json())
+        .and_then(|request: MultiRequest| async move { execute_multiple(request).await })
 }
 
 pub fn upload_binary_file(
@@ -99,6 +110,14 @@ pub async fn execute(request: Request) -> Result<impl Reply, Infallible> {
     let response = overload::http_util::handle_request(request, &METRICS_FACTORY).await;
     let json = reply::json(&response);
     trace!("resp: execute: {:?}", &response);
+    Ok(json)
+}
+
+pub async fn execute_multiple(requests: MultiRequest) -> Result<impl Reply, Infallible> {
+    debug!("req: execute_multiple: {:?}", &requests);
+    let response = overload::http_util::handle_multi_request(requests, &METRICS_FACTORY).await;
+    let json = reply::json(&response);
+    debug!("resp: execute_multiple: {:?}", &response);
     Ok(json)
 }
 

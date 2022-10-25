@@ -1,6 +1,8 @@
 #[cfg(feature = "cluster")]
 pub mod cluster;
 #[cfg(feature = "cluster")]
+pub use self::cluster::handle_multi_request_cluster;
+#[cfg(feature = "cluster")]
 pub use self::cluster::handle_request_cluster;
 #[cfg(feature = "cluster")]
 pub use self::cluster::handle_request_from_primary;
@@ -19,7 +21,7 @@ pub use cluster::stop;
 pub use standalone::stop;
 
 use crate::executor::execute_request_generator;
-use crate::http_util::request::Request;
+use crate::http_util::request::{MultiRequest, Request};
 use crate::metrics::MetricsFactory;
 use crate::{HttpReq, JobStatus, Response};
 use anyhow::Error as AnyError;
@@ -49,7 +51,7 @@ use tokio_util::io::StreamReader;
 use uuid::Uuid;
 
 pub async fn handle_request(request: Request, metrics: &'static MetricsFactory) -> Response {
-    let job_id = job_id(&request);
+    let job_id = job_id(&request.name);
     let buckets = request.histogram_buckets.clone();
     let generator = request.into();
 
@@ -64,24 +66,47 @@ pub async fn handle_request(request: Request, metrics: &'static MetricsFactory) 
     Response::new(job_id, JobStatus::Starting)
 }
 
+pub async fn handle_multi_request(
+    requests: MultiRequest,
+    metrics: &'static MetricsFactory,
+) -> Response {
+    let job_id = job_id(&requests.name);
+
+    for (idx, request) in requests.requests.into_iter().enumerate() {
+        let job_id_for_req = format!("{}_{}", &job_id, idx);
+        let buckets = request.histogram_buckets.clone();
+        let generator = request.into();
+        let metrics_instance = metrics
+            .metrics_with_buckets(buckets.to_vec(), &*job_id_for_req)
+            .await;
+
+        tokio::spawn(execute_request_generator(
+            generator,
+            job_id_for_req,
+            metrics_instance,
+            noop().boxed(),
+        ));
+    }
+    Response::new(job_id, JobStatus::Starting)
+}
+
 pub async fn noop() -> Result<(), anyhow::Error> {
     Ok(())
 }
 
 //todo verify for cluster mode. using job id as name for secondary request
-fn job_id(request: &Request) -> String {
-    request
-        .name
+fn job_id(request_name: &Option<String>) -> String {
+    request_name
         .clone()
         .map_or(Uuid::new_v4().to_string(), |n| {
             let uuid = Regex::new(
-                r"\b[0-9a-f]{8}\b-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-\b[0-9a-f]{12}\b$",
+                r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(_[0-9]+)?$",
             )
             .unwrap();
             if uuid.is_match(&n) {
                 n
             } else {
-                let mut name = n;
+                let mut name = n.trim().to_string();
                 name.push('-');
                 name.push_str(Uuid::new_v4().to_string().as_str());
                 name
@@ -361,12 +386,13 @@ pub const PATH_FILE_UPLOAD: &str = "/test/requests-bin";
 #[cfg(test)]
 #[allow(dead_code)]
 mod test {
-    use crate::http_util::{csv_reader_to_sqlite, HttpReqCsvHelper};
+    use crate::http_util::{csv_reader_to_sqlite, job_id, HttpReqCsvHelper};
     use crate::log_error;
     use csv_async::AsyncReaderBuilder;
     use log::error;
     use std::collections::HashMap;
     use std::sync::Once;
+    use test_case::test_case;
     use tokio::fs::File;
 
     static ONCE: Once = Once::new();
@@ -412,5 +438,12 @@ mod test {
         };
         let result = wri.serialize(req).await;
         log_error!(result);
+    }
+
+    #[test_case("multi-req-7e19ae6b-59af-4916-8cc0-a04cc48a739b", "multi-req-7e19ae6b-59af-4916-8cc0-a04cc48a739b" ; "job id without sub test id")]
+    #[test_case("multi-req-7e19ae6b-59af-4916-8cc0-a04cc48a739b_0", "multi-req-7e19ae6b-59af-4916-8cc0-a04cc48a739b_0" ; "job id with sub test id")]
+    fn test_job_id(name: &str, expect: &str) {
+        let option = Some(name.to_string());
+        assert_eq!(job_id(&option), expect.to_string());
     }
 }
