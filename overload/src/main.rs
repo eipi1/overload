@@ -1,6 +1,7 @@
 #![allow(deprecated)]
 #[cfg(feature = "cluster")]
 use cloud_discovery_kubernetes::KubernetesDiscoverService;
+use cluster_executor::{remoc_port, REMOC_PORT};
 use log::info;
 use overload::data_dir;
 #[cfg(feature = "cluster")]
@@ -56,7 +57,13 @@ async fn main() {
     }
 
     info!("spawning executor init");
-    tokio::spawn(overload::executor::init());
+    tokio::spawn(overload::init());
+
+    let remoc_port = REMOC_PORT.get_or_init(remoc_port);
+    tokio::spawn(cluster_executor::secondary::primary_listener(
+        *remoc_port,
+        &overload_metrics::METRICS_FACTORY,
+    ));
 
     let routes = filters::get_routes();
     info!("staring server...");

@@ -346,7 +346,7 @@ mod tests {
         let validator = ResponseAssertion { assertions: vec1 };
         let json = serde_json::to_string(&validator).unwrap();
         println!("{:?}", &json);
-        let validator: ResponseAssertion = serde_json::from_str(&*json).unwrap();
+        let validator: ResponseAssertion = serde_json::from_str(&json).unwrap();
         // let expectation = ExpectationSource::Constant("iPhone".into());
         assert!(matches!(
             &validator.assertions.get(0).unwrap().expectation,

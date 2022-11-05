@@ -1,4 +1,4 @@
-use crate::datagen::DataSchema::Empty;
+use crate::DataSchema::Empty;
 use anyhow::{Error as AnyError, Result as AnyResult};
 use log::{error, trace};
 use rand::thread_rng;
@@ -342,7 +342,7 @@ fn generate_string_data(constraints: &HashMap<Keywords, Constraints>) -> String 
 
 #[cfg(test)]
 mod test {
-    use crate::datagen::{data_schema_from_value, generate_data};
+    use crate::{data_schema_from_value, generate_data};
     use serde_json::Value;
 
     #[test]

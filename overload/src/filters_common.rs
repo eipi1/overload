@@ -1,8 +1,8 @@
 use http::header::CONTENT_TYPE;
 use http::{Response, StatusCode};
 use hyper::Body;
-use overload::http_util::{GenericError, GenericResponse};
-use overload::METRICS_FACTORY;
+use overload_http::{GenericError, GenericResponse};
+use overload_metrics::METRICS_FACTORY;
 use prometheus::{Encoder, TextEncoder};
 use serde::Serialize;
 use warp::{reply, Filter};
@@ -53,6 +53,7 @@ pub(crate) mod test_common {
     use prometheus::Encoder;
     use std::sync::Once;
     use tokio::sync::OnceCell;
+    use tracing::info;
 
     pub async fn init_http_mock() -> (httpmock::MockServer, url::Url) {
         let mock_server = httpmock::MockServer::start_async().await;
@@ -81,11 +82,13 @@ pub(crate) mod test_common {
         });
     }
 
-    pub fn send_request(body: String, port: u16) -> hyper::client::ResponseFuture {
+    pub fn send_request(body: String, port: u16, path: &str) -> hyper::client::ResponseFuture {
+        let result = serde_json::from_str::<overload_http::Request>(&body);
+        info!("Sending request:{:?}", &result);
         let client = hyper::Client::new();
         let req = Request::builder()
             .method("POST")
-            .uri(format!("http://127.0.0.1:{}/test", port))
+            .uri(format!("http://127.0.0.1:{}/{}", port, path))
             .body(Body::from(body))
             .expect("request builder");
         client.request(req)

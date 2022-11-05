@@ -1,0 +1,118 @@
+[package]
+name = "cluster-executor"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies.overload-http]
+path = "../overload-http"
+
+[dependencies.response-assert]
+path = "../response-assert"
+
+[dependencies.datagen]
+path = "../datagen"
+
+[dependencies.overload-metrics]
+path = "../overload-metrics"
+
+[dependencies.rust-cloud-discovery]
+version = "0.2"
+
+[dependencies.cluster-mode]
+version = "0.2"
+
+[dependencies.remoc]
+version = "0.10"
+
+[dependencies.tokio]
+version = "1.21"
+features = ["net"]
+
+[dependencies.tokio-util]
+version = "0.7"
+features = ["io", "compat"]
+
+[dependencies.serde]
+version = "1.0"
+features = ["derive"]
+
+[dependencies.serde_json]
+version = "1.0"
+
+[dependencies.http]
+version = "0.2"
+
+[dependencies.log]
+version = "0.4"
+
+[dependencies.anyhow]
+version = "1.0"
+
+[dependencies.futures-core]
+version = "0.3"
+
+[dependencies.futures-util]
+version = "0.3"
+
+[dependencies.fastrand]
+version = "1.8"
+
+[dependencies.sqlx]
+version = "0.5"
+default-features = false
+features = ["sqlite", "runtime-tokio-native-tls"]
+
+[dependencies.tokio-stream]
+version = "0.1"
+
+[dependencies.hyper]
+version = "0.14"
+
+[dependencies.tower]
+version = "0.4"
+
+[dependencies.futures]
+version = "0.3"
+
+[dependencies.regex]
+version = "1.6"
+
+[dependencies.lazy_static]
+version = "1.4"
+
+[dependencies.once_cell]
+version = "1.16"
+
+[dependencies.uuid]
+version = "1.2"
+features = ["v4"]
+
+[dev-dependencies.tracing-subscriber]
+version = "0.3"
+features = ["fmt", "env-filter"]
+
+[dev-dependencies.tracing-core]
+version = "0.1"
+
+[dev-dependencies.httpmock]
+version = "0.6"
+
+[dev-dependencies.url]
+version = "2.3"
+
+[dev-dependencies.tokio-test]
+version = "0.4"
+
+[dev-dependencies.more-asserts]
+version = "0.3"
+
+[dev-dependencies.rand]
+version = "0.8"
+
+[dev-dependencies.base64]
+version = "0.13"
+
+[features]
+cluster = []

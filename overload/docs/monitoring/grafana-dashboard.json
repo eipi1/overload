@@ -46,7 +46,7 @@
   "gnetId": null,
   "graphTooltip": 0,
   "id": null,
-  "iteration": 1666627055648,
+  "iteration": 1668019746632,
   "links": [],
   "panels": [
     {
@@ -808,10 +808,9 @@
         "x": 0,
         "y": 35
       },
-      "id": 15,
+      "id": 46,
       "panels": [],
-      "repeat": "instance",
-      "title": "Connection - $instance",
+      "title": "Connection - Total",
       "type": "row"
     },
     {
@@ -833,6 +832,473 @@
         "w": 12,
         "x": 0,
         "y": 36
+      },
+      "hiddenSeries": false,
+      "id": 47,
+      "legend": {
+        "alignAsTable": true,
+        "avg": false,
+        "current": false,
+        "max": false,
+        "min": false,
+        "show": true,
+        "total": false,
+        "values": false
+      },
+      "lines": true,
+      "linewidth": 1,
+      "nullPointMode": "null",
+      "options": {
+        "dataLinks": []
+      },
+      "percentage": false,
+      "pointradius": 2,
+      "points": false,
+      "renderer": "flot",
+      "seriesOverrides": [],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "expr": "sum by (job_id) (connection_pool_new_connection_attempt{job_id=~\"${job}.*\"})",
+          "hide": false,
+          "interval": "",
+          "legendFormat": "Attempt - {{job_id}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (job_id) (connection_pool_new_connection_success{job_id=~\"${job}.*\"})",
+          "hide": false,
+          "interval": "",
+          "legendFormat": "Success - {{job_id}}",
+          "refId": "B"
+        },
+        {
+          "expr": "-sum by (job_id) (connection_pool_connection_broken{job_id=~\"${job}.*\"})",
+          "hide": false,
+          "interval": "",
+          "legendFormat": "broken - {{job_id}}",
+          "refId": "C"
+        },
+        {
+          "expr": "-sum by (job_id) (connection_pool_connection_dropped{job_id=~\"${job}.*\"})",
+          "hide": false,
+          "interval": "",
+          "legendFormat": "dropped - {{job_id}}",
+          "refId": "D"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "Connection Pool",
+      "tooltip": {
+        "shared": true,
+        "sort": 0,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "decimals": 2,
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": "${DS_PROMETHEUS}",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "fill": 1,
+      "fillGradient": 0,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 36
+      },
+      "hiddenSeries": false,
+      "id": 48,
+      "legend": {
+        "alignAsTable": true,
+        "avg": false,
+        "current": false,
+        "max": false,
+        "min": false,
+        "show": true,
+        "total": false,
+        "values": false
+      },
+      "lines": true,
+      "linewidth": 1,
+      "nullPointMode": "null",
+      "options": {
+        "dataLinks": []
+      },
+      "percentage": false,
+      "pointradius": 2,
+      "points": false,
+      "renderer": "flot",
+      "seriesOverrides": [],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "expr": "sum by (job_id) (irate(connection_pool_new_connection_attempt{job_id=~\"${job}.*\"}[$__interval]))",
+          "hide": false,
+          "interval": "",
+          "legendFormat": "Attempt - {{job_id}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (job_id) (irate(connection_pool_new_connection_success{job_id=~\"${job}.*\"}[$__interval]))",
+          "hide": false,
+          "interval": "",
+          "legendFormat": "Success - {{job_id}}",
+          "refId": "B"
+        },
+        {
+          "expr": "sum by (job_id) (-irate(connection_pool_connection_broken{job_id=~\"${job}.*\"}[$__interval]))",
+          "hide": false,
+          "interval": "",
+          "legendFormat": "broken - {{job_id}}",
+          "refId": "C"
+        },
+        {
+          "expr": "sum by (job_id) (-irate(connection_pool_connection_dropped{job_id=~\"${job}.*\"}[$__interval]))",
+          "hide": false,
+          "instant": false,
+          "interval": "",
+          "legendFormat": "dropped - {{job_id}}",
+          "refId": "D"
+        },
+        {
+          "expr": "sum by (job_id) (irate(connection_pool_new_connection_attempt{job_id=~\"${job}.*\"}[$__interval]))",
+          "hide": true,
+          "interval": "",
+          "legendFormat": "Attempt - {{job_id}}",
+          "refId": "E"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "Connection Pool - rates",
+      "tooltip": {
+        "shared": true,
+        "sort": 0,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "decimals": 2,
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": "${DS_PROMETHEUS}",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "fill": 1,
+      "fillGradient": 0,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 44
+      },
+      "hiddenSeries": false,
+      "id": 49,
+      "legend": {
+        "alignAsTable": true,
+        "avg": false,
+        "current": false,
+        "max": false,
+        "min": false,
+        "show": true,
+        "total": false,
+        "values": false
+      },
+      "lines": true,
+      "linewidth": 1,
+      "nullPointMode": "null",
+      "options": {
+        "dataLinks": []
+      },
+      "percentage": false,
+      "pointradius": 2,
+      "points": false,
+      "renderer": "flot",
+      "seriesOverrides": [],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "expr": "sum by (job_id) (connection_pool_new_connection_success{job_id=~\"${job}.*\"})-sum by (job_id) (connection_pool_connection_dropped{job_id=~\"${job}.*\"})",
+          "hide": false,
+          "interval": "",
+          "legendFormat": "Active connection - {{job_id}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (job_id) (connection_pool_size{job_id=~\"${job}.*\"})",
+          "hide": false,
+          "interval": "",
+          "legendFormat": "Pool size - {{job_id}}",
+          "refId": "B"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "Connection Pool - Size",
+      "tooltip": {
+        "shared": true,
+        "sort": 0,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "decimals": 2,
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": "${DS_PROMETHEUS}",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "fill": 1,
+      "fillGradient": 0,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 44
+      },
+      "hiddenSeries": false,
+      "id": 50,
+      "legend": {
+        "alignAsTable": true,
+        "avg": false,
+        "current": false,
+        "max": false,
+        "min": false,
+        "show": true,
+        "total": false,
+        "values": false
+      },
+      "lines": true,
+      "linewidth": 1,
+      "nullPointMode": "null",
+      "options": {
+        "dataLinks": []
+      },
+      "percentage": false,
+      "pointradius": 2,
+      "points": false,
+      "renderer": "flot",
+      "seriesOverrides": [],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "expr": "sum by (job_id) (connection_pool_connection_idle{job_id=~\"${job}.*\"})",
+          "hide": false,
+          "interval": "",
+          "legendFormat": "Idle - {{job_id}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (job_id) (connection_pool_connection_busy{job_id=~\"${job}.*\"})",
+          "hide": false,
+          "interval": "",
+          "legendFormat": "Busy - {{job_id}}",
+          "refId": "E"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "Connection Pool - Busy/idle",
+      "tooltip": {
+        "shared": true,
+        "sort": 0,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "decimals": 2,
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "collapsed": false,
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 52
+      },
+      "id": 15,
+      "panels": [],
+      "repeat": "instance",
+      "title": "Connection Per Instance- $instance",
+      "type": "row"
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": "${DS_PROMETHEUS}",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "fill": 1,
+      "fillGradient": 0,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 53
       },
       "hiddenSeries": false,
       "id": 19,
@@ -950,7 +1416,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 36
+        "y": 53
       },
       "hiddenSeries": false,
       "id": 23,
@@ -1068,7 +1534,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 44
+        "y": 61
       },
       "hiddenSeries": false,
       "id": 24,
@@ -1171,7 +1637,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 44
+        "y": 61
       },
       "hiddenSeries": false,
       "id": 25,
@@ -1264,7 +1730,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 52
+        "y": 103
       },
       "id": 27,
       "panels": [],
@@ -1289,7 +1755,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 53
+        "y": 104
       },
       "hiddenSeries": false,
       "id": 28,
@@ -1385,7 +1851,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 53
+        "y": 104
       },
       "hiddenSeries": false,
       "id": 29,
@@ -1488,7 +1954,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 61
+        "y": 112
       },
       "hiddenSeries": false,
       "id": 30,
@@ -1639,5 +2105,5 @@
   "timezone": "",
   "title": "Overload",
   "uid": "N7VSEEznz",
-  "version": 25
+  "version": 26
 }
