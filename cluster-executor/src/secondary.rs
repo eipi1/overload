@@ -738,7 +738,7 @@ mod test {
     #[cfg(feature = "cluster")]
     #[tokio::test(flavor = "multi_thread")]
     async fn test_primary_listener() {
-        init();
+        // init();
         tokio::spawn(primary_listener(
             DEFAULT_REMOC_PORT,
             &overload_metrics::METRICS_FACTORY,
@@ -773,7 +773,7 @@ mod test {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_send_multiple_requests() {
-        init();
+        // init();
         let mock_server = httpmock::MockServer::start_async().await;
         let url = Url::parse(&mock_server.base_url()).unwrap();
 
@@ -825,7 +825,7 @@ mod test {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_handle_rate_msg() {
-        init();
+        // init();
         let rate_message = RateMessage {
             qps: 25,
             connections: 5,
