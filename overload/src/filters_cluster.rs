@@ -8,10 +8,11 @@ use http::StatusCode;
 use hyper::Body;
 use lazy_static::lazy_static;
 use log::trace;
-use overload::http_util::request::{JobStatusQueryParams, MultiRequest, Request};
-use overload::http_util::{handle_history_all, GenericError};
-use overload::METRICS_FACTORY;
-use overload::{data_dir, http_util};
+// use overload::http_util::request::{JobStatusQueryParams, MultiRequest, Request};
+// use overload::http_util::{handle_history_all, GenericError};
+use overload::cluster::handle_history_all;
+use overload::data_dir;
+use overload_http::{GenericError, JobStatusQueryParams, MultiRequest, Request};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::convert::{Infallible, TryFrom};
@@ -21,7 +22,7 @@ use std::task::Poll;
 use tokio::fs::File;
 use tokio::io::AsyncSeekExt;
 use warp::reply::{Json, Response, WithStatus};
-use warp::{reply, Filter, Reply};
+use warp::{reply, Filter};
 
 lazy_static! {
     pub static ref CLUSTER: Arc<Cluster> = Arc::new(Cluster::new(10 * 1000));
@@ -36,7 +37,7 @@ pub fn get_routes_with_cluster(
     let upload_binary_file = upload_binary_file(cluster.clone());
     let stop_req = stop_req(cluster.clone());
     let history = history(cluster.clone());
-    let overload_req_secondary = overload_req_secondary(cluster.clone());
+    // let overload_req_secondary = overload_req_secondary(cluster.clone());
     let overload_req = overload_req(cluster.clone());
     let overload_multi_req = overload_multi_req(cluster.clone());
 
@@ -60,7 +61,7 @@ pub fn get_routes_with_cluster(
         .or(request_vote)
         .or(request_vote_response)
         .or(heartbeat)
-        .or(overload_req_secondary)
+        // .or(overload_req_secondary)
         .or(download_data_file)
 }
 
@@ -141,34 +142,34 @@ pub fn history(
         })
 }
 
-pub fn overload_req_secondary(
-    cluster: Arc<Cluster>,
-) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
-    warp::post()
-        .and(
-            warp::path("cluster")
-                .and(warp::path("test"))
-                .and(warp::path::end()),
-        )
-        .and(warp::body::content_length_limit(1024 * 1024))
-        .and(warp::body::json())
-        .and_then(move |request: Request| {
-            let tmp = cluster.clone();
-            async move { execute_secondary_request(request, tmp).await }
-        })
-}
+// pub fn overload_req_secondary(
+//     cluster: Arc<Cluster>,
+// ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+//     warp::post()
+//         .and(
+//             warp::path("cluster")
+//                 .and(warp::path("test"))
+//                 .and(warp::path::end()),
+//         )
+//         .and(warp::body::content_length_limit(1024 * 1024))
+//         .and(warp::body::json())
+//         .and_then(move |request: Request| {
+//             let tmp = cluster.clone();
+//             async move { execute_secondary_request(request, tmp).await }
+//         })
+// }
 
-pub async fn execute_secondary_request(
-    request: Request,
-    cluster: Arc<Cluster>,
-) -> Result<impl Reply, Infallible> {
-    trace!("req: execute test request from primary: {:?}", &request);
-    let response =
-        overload::http_util::handle_request_from_primary(request, &METRICS_FACTORY, cluster).await;
-    let json = reply::json(&response);
-    trace!("resp: execute test request from primary: {:?}", &response);
-    Ok(json)
-}
+// pub async fn execute_secondary_request(
+//     request: Request,
+//     cluster: Arc<Cluster>,
+// ) -> Result<impl warp::Reply, Infallible> {
+//     trace!("req: execute test request from primary: {:?}", &request);
+//     let response =
+//         overload::http_util::handle_request_from_primary(request, &METRICS_FACTORY, cluster).await;
+//     let json = reply::json(&response);
+//     trace!("resp: execute test request from primary: {:?}", &response);
+//     Ok(json)
+// }
 
 pub fn info(
     cluster: Arc<Cluster>,
@@ -213,12 +214,12 @@ pub fn heartbeat(
 async fn execute_cluster(
     request: Request,
     cluster: Arc<Cluster>,
-) -> Result<impl Reply, Infallible> {
+) -> Result<impl warp::Reply, Infallible> {
     trace!(
         "req: execute_cluster: {}",
         serde_json::to_string(&request).unwrap()
     );
-    let response = overload::http_util::handle_request_cluster(request, cluster.clone()).await;
+    let response = overload::cluster::handle_request_cluster(request, cluster.clone()).await;
     let json = reply::json(&response);
     trace!("resp: execute_cluster: {:?}", &response);
     Ok(json)
@@ -227,13 +228,12 @@ async fn execute_cluster(
 async fn execute_multi_req_cluster(
     request: MultiRequest,
     cluster: Arc<Cluster>,
-) -> Result<impl Reply, Infallible> {
+) -> Result<impl warp::Reply, Infallible> {
     trace!(
         "req: execute_multi_req_cluster: {}",
         serde_json::to_string(&request).unwrap()
     );
-    let response =
-        overload::http_util::handle_multi_request_cluster(request, cluster.clone()).await;
+    let response = overload::cluster::handle_multi_request_cluster(request, cluster.clone()).await;
     let json = reply::json(&response);
     trace!("resp: execute_multi_req_cluster: {:?}", &response);
     Ok(json)
@@ -244,15 +244,14 @@ async fn upload_binary_file_handler<S, B>(
     data: S,
     cluster: Arc<Cluster>,
     content_len: u64,
-) -> Result<impl Reply, Infallible>
+) -> Result<impl warp::Reply, Infallible>
 where
     S: Stream<Item = Result<B, warp::Error>> + Unpin + Send + Sync + 'static,
     B: Buf + Send + Sync,
 {
     let data_dir = data_dir();
     trace!("req: upload_binary_file_handler");
-    let result =
-        http_util::cluster::handle_file_upload(data, &data_dir, cluster, content_len).await;
+    let result = overload::cluster::handle_file_upload(data, &data_dir, cluster, content_len).await;
     match result {
         Ok(r) => Ok(reply::with_status(reply::json(&r), StatusCode::OK)),
         Err(e) => Ok(reply::with_status(
@@ -262,13 +261,16 @@ where
     }
 }
 
-async fn stop(job_id: String, cluster: Arc<Cluster>) -> Result<impl Reply, Infallible> {
-    let resp = overload::http_util::stop(job_id, cluster.clone()).await;
+async fn stop(job_id: String, cluster: Arc<Cluster>) -> Result<impl warp::Reply, Infallible> {
+    let resp = overload::cluster::stop(job_id, cluster.clone()).await;
     trace!("resp: stop: {:?}", &resp);
     Ok(filters_common::generic_result_to_reply_with_status(resp))
 }
 
-async fn cluster_info(cluster: Arc<Cluster>, cluster_mode: bool) -> Result<impl Reply, Infallible> {
+async fn cluster_info(
+    cluster: Arc<Cluster>,
+    cluster_mode: bool,
+) -> Result<impl warp::Reply, Infallible> {
     if !cluster_mode {
         let err = no_cluster_err();
         Ok(err)
@@ -284,7 +286,7 @@ async fn cluster_request_vote(
     cluster_mode: bool,
     requester_node_id: String,
     term: usize,
-) -> Result<impl Reply, Infallible> {
+) -> Result<impl warp::Reply, Infallible> {
     trace!(
         "req: cluster_request_vote: requester: {}, term: {}",
         &requester_node_id,
@@ -307,7 +309,7 @@ async fn cluster_request_vote_response(
     cluster_mode: bool,
     term: usize,
     vote: bool,
-) -> Result<impl Reply, Infallible> {
+) -> Result<impl warp::Reply, Infallible> {
     trace!(
         "req: cluster_request_vote_response: term: {}, vote: {}",
         &term,
@@ -328,7 +330,7 @@ async fn cluster_heartbeat(
     cluster_mode: bool,
     leader_node_id: String,
     term: usize,
-) -> Result<impl Reply, Infallible> {
+) -> Result<impl warp::Reply, Infallible> {
     trace!(
         "req: cluster_heartbeat: leader: {}, term: {}",
         &leader_node_id,
@@ -355,7 +357,7 @@ pub fn download_req_from_secondaries(
         .and_then(|filename| async move { response_file(filename).await })
 }
 
-async fn response_file(filename: String) -> Result<impl Reply, Infallible> {
+async fn response_file(filename: String) -> Result<impl warp::Reply, Infallible> {
     let file = format!("{}/{}", data_dir(), filename);
     trace!("received download request for file: {}", &filename);
     let body = body_from_file(&file).await;
@@ -459,12 +461,12 @@ mod cluster_test {
     use hyper::body::to_bytes;
     use hyper::Body;
     use log::info;
-    use overload::http_util::csv_reader_to_sqlite;
-    use overload::{JobStatus, PATH_REQUEST_DATA_FILE_DOWNLOAD};
+    use overload::file_uploader::csv_reader_to_sqlite;
+    use overload::{init, JobStatus, PATH_REQUEST_DATA_FILE_DOWNLOAD};
     use regex::Regex;
-    use rust_cloud_discovery::DiscoveryClient;
     use rust_cloud_discovery::DiscoveryService;
     use rust_cloud_discovery::ServiceInstance;
+    use rust_cloud_discovery::{DiscoveryClient, Port};
     use sha2::Digest;
     use std::error::Error;
     use std::str::FromStr;
@@ -559,7 +561,7 @@ mod cluster_test {
         ));
 
         info!("spawning executor init");
-        tokio::spawn(overload::executor::init());
+        tokio::spawn(init());
 
         let routes = get_routes_with_cluster(cluster);
 
@@ -575,11 +577,24 @@ mod cluster_test {
 
     fn get_discovery_service() -> TestDiscoverService {
         let mut instances = vec![];
+        let port1 = Port::new(
+            Some("http-endpoint".to_string()),
+            3030_u32,
+            "tcp".to_string(),
+            Some("http".to_string()),
+        );
+        let port2 = Port::new(
+            Some("tcp-remoc".to_string()),
+            4030_u32,
+            "tcp".to_string(),
+            Some("tcp".to_string()),
+        );
+        let ports = vec![port1, port2];
         let instance = ServiceInstance::new(
             Some(Uuid::new_v4().to_string()),
             Some(String::from_str("test").unwrap()),
             Some(String::from_str("127.0.0.1").unwrap()),
-            Some(3030),
+            Some(ports),
             false,
             Some("http://127.0.0.1:3030".to_string()),
             std::collections::HashMap::new(),
@@ -587,22 +602,49 @@ mod cluster_test {
         );
 
         instances.push(instance);
+        let port1 = Port::new(
+            Some("http-endpoint".to_string()),
+            3031_u32,
+            "tcp".to_string(),
+            Some("http".to_string()),
+        );
+        let port2 = Port::new(
+            Some("tcp-remoc".to_string()),
+            4030_u32,
+            "tcp".to_string(),
+            Some("tcp".to_string()),
+        );
+        let ports = vec![port1, port2];
         let instance = ServiceInstance::new(
             Some(Uuid::new_v4().to_string()),
             Some(String::from_str("test").unwrap()),
             Some(String::from_str("127.0.0.1").unwrap()),
-            Some(3031),
+            Some(ports),
             false,
             Some("http://127.0.0.1:3031".to_string()),
             std::collections::HashMap::new(),
             Some(String::from_str("HTTP").unwrap()),
         );
         instances.push(instance);
+
+        let port1 = Port::new(
+            Some("http-endpoint".to_string()),
+            3032_u32,
+            "tcp".to_string(),
+            Some("http".to_string()),
+        );
+        let port2 = Port::new(
+            Some("tcp-remoc".to_string()),
+            4030_u32,
+            "tcp".to_string(),
+            Some("tcp".to_string()),
+        );
+        let ports = vec![port1, port2];
         let instance = ServiceInstance::new(
             Some(Uuid::new_v4().to_string()),
             Some(String::from_str("test").unwrap()),
             Some(String::from_str("127.0.0.1").unwrap()),
-            Some(3032),
+            Some(ports),
             false,
             Some("http://127.0.0.1:3032".to_string()),
             std::collections::HashMap::new(),
@@ -610,11 +652,24 @@ mod cluster_test {
         );
         instances.push(instance);
 
+        let port1 = Port::new(
+            Some("http-endpoint".to_string()),
+            3033_u32,
+            "tcp".to_string(),
+            Some("http".to_string()),
+        );
+        let port2 = Port::new(
+            Some("tcp-remoc".to_string()),
+            4030_u32,
+            "tcp".to_string(),
+            Some("tcp".to_string()),
+        );
+        let ports = vec![port1, port2];
         let instance = ServiceInstance::new(
             Some(Uuid::new_v4().to_string()),
             Some(String::from_str("test").unwrap()),
             Some(String::from_str("127.0.0.1").unwrap()),
-            Some(3033),
+            Some(ports),
             false,
             Some("http://127.0.0.1:3033".to_string()),
             std::collections::HashMap::new(),
@@ -668,6 +723,7 @@ mod cluster_test {
             let response = send_request(
                 json_request_random_constant(url.host().unwrap().to_string(), url.port().unwrap()),
                 3030,
+                "test",
             )
             .await
             .unwrap();
@@ -749,7 +805,7 @@ mod cluster_test {
             url.port().unwrap(),
             response.get("file").unwrap().as_str().unwrap().to_string(),
         );
-        let response = send_request(json, 3030).await.unwrap();
+        let response = send_request(json, 3030, "test").await.unwrap();
         let status = response.status();
         let response = hyper::body::to_bytes(response).await.unwrap();
         info!("body: {:?}", &response);

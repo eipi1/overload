@@ -1,4 +1,4 @@
-use crate::log_error;
+use lazy_static::lazy_static;
 use prometheus::process_collector::ProcessCollector;
 use prometheus::{Gauge, HistogramOpts, HistogramVec, IntCounter, IntCounterVec, Opts, Registry};
 use smallvec::SmallVec;
@@ -26,6 +26,10 @@ pub const DEFAULT_HISTOGRAM_BUCKET: [f64; 6] = [20f64, 50f64, 100f64, 300f64, 70
 pub struct MetricsFactory {
     registry: Registry,
     metrics: RwLock<HashMap<String, Arc<Metrics>>>,
+}
+
+lazy_static! {
+    pub static ref METRICS_FACTORY: MetricsFactory = MetricsFactory::default();
 }
 
 impl Default for MetricsFactory {
@@ -189,54 +193,51 @@ impl MetricsFactory {
 
     pub async fn remove_metrics(&self, job_id: &str) {
         let metrics = { self.metrics.write().await.remove(job_id) };
-        match metrics {
-            Some(m) => {
-                let result = self
-                    .registry
-                    .unregister(Box::new(m.connection_pool_size.clone()));
-                log_error!(result);
-                let result = self
-                    .registry
-                    .unregister(Box::new(m.connection_pool_connection_idle.clone()));
-                log_error!(result);
-                let result = self
-                    .registry
-                    .unregister(Box::new(m.upstream_request_count.clone()));
-                log_error!(result);
-                let result = self
-                    .registry
-                    .unregister(Box::new(m.connection_pool_connection_busy.clone()));
-                log_error!(result);
-                let result = self
-                    .registry
-                    .unregister(Box::new(m.connection_pool_connection_dropped.clone()));
-                log_error!(result);
-                let result = self
-                    .registry
-                    .unregister(Box::new(m.connection_pool_connection_broken.clone()));
-                log_error!(result);
-                let result = self
-                    .registry
-                    .unregister(Box::new(m.connection_pool_new_connection_success.clone()));
-                log_error!(result);
-                let result = self
-                    .registry
-                    .unregister(Box::new(m.connection_pool_new_connection_attempt.clone()));
-                log_error!(result);
-                let result = self
-                    .registry
-                    .unregister(Box::new(m.upstream_request_status_count.clone()));
-                log_error!(result);
-                let result = self
-                    .registry
-                    .unregister(Box::new(m.upstream_response_time.clone()));
-                log_error!(result);
-                let result = self
-                    .registry
-                    .unregister(Box::new(m.assertion_failure.clone()));
-                log_error!(result);
-            }
-            None => {}
+        if let Some(m) = metrics {
+            let result = self
+                .registry
+                .unregister(Box::new(m.connection_pool_size.clone()));
+            log_error!(result);
+            let result = self
+                .registry
+                .unregister(Box::new(m.connection_pool_connection_idle.clone()));
+            log_error!(result);
+            let result = self
+                .registry
+                .unregister(Box::new(m.upstream_request_count.clone()));
+            log_error!(result);
+            let result = self
+                .registry
+                .unregister(Box::new(m.connection_pool_connection_busy.clone()));
+            log_error!(result);
+            let result = self
+                .registry
+                .unregister(Box::new(m.connection_pool_connection_dropped.clone()));
+            log_error!(result);
+            let result = self
+                .registry
+                .unregister(Box::new(m.connection_pool_connection_broken.clone()));
+            log_error!(result);
+            let result = self
+                .registry
+                .unregister(Box::new(m.connection_pool_new_connection_success.clone()));
+            log_error!(result);
+            let result = self
+                .registry
+                .unregister(Box::new(m.connection_pool_new_connection_attempt.clone()));
+            log_error!(result);
+            let result = self
+                .registry
+                .unregister(Box::new(m.upstream_request_status_count.clone()));
+            log_error!(result);
+            let result = self
+                .registry
+                .unregister(Box::new(m.upstream_response_time.clone()));
+            log_error!(result);
+            let result = self
+                .registry
+                .unregister(Box::new(m.assertion_failure.clone()));
+            log_error!(result);
         }
     }
 }
@@ -317,9 +318,19 @@ pub fn default_histogram_bucket() -> SmallVec<[f64; 6]> {
     smallvec::SmallVec::from(DEFAULT_HISTOGRAM_BUCKET)
 }
 
+#[macro_export]
+macro_rules! log_error {
+    ($result:expr) => {
+        if let Err(e) = $result {
+            use log::error;
+            error!("{}", e.to_string());
+        }
+    };
+}
+
 #[cfg(test)]
 mod test {
-    use crate::metrics::MetricsFactory;
+    use super::MetricsFactory;
     use prometheus::{Encoder, TextEncoder};
 
     #[tokio::test]

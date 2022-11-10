@@ -22,7 +22,7 @@ jobs:
     - name: Get version
       run: |
         if [[ ${{ github.event_name }} == 'release' ]]; then
-            PKG_VERSION=$(cargo pkgid -p overload | cut -d# -f2)
+            PKG_VERSION=$(cargo pkgid -p file://$(pwd)/overload | cut -d# -f2)
             TAG_VERSION=${GITHUB_REF:11}
             if [[ $PKG_VERSION != $TAG_VERSION ]]; then
                 echo "::error::version mismatch: pkg=$PKG_VERSION, tag=$GITHUB_REF"

@@ -85,7 +85,7 @@
 //! Sample JSON request body -
 //!
 //! ```rust
-//! # use overload::http_util::request::Request;
+//! # use overload_http::Request;
 //! # let req = r###"
 //! {
 //!   "duration": 120,
@@ -199,7 +199,7 @@
 //! Sample JSON request body -
 //!
 //! ```rust
-//! # use overload::http_util::request::Request;
+//! # use overload_http::Request;
 //! # let req = r###"
 //! {
 //!   "duration": 120,
@@ -260,7 +260,7 @@
 //! Sample JSON request body -
 //!
 //! ```rust
-//! # use overload::http_util::request::MultiRequest;
+//! # use overload_http::MultiRequest;
 //! # let req = r###"
 //! {
 //!   "name": "multi-req",
@@ -397,7 +397,7 @@
 //!   <summary>Example Request</summary>
 //!
 //! ```rust
-//! # use overload::http_util::request::Request;
+//! # use overload_http::Request;
 //! # let req = r###"
 //! {
 //!   "duration": 3,
@@ -461,7 +461,7 @@
 //! <summary> Example </summary>
 //!
 //! ```rust
-//! # use overload::http_util::request::Request;
+//! # use overload_http::Request;
 //! # let req = r###"
 //! {
 //!   "duration": 10,
@@ -570,7 +570,7 @@
 //! #### Example
 //!
 //! ```rust
-//! # use overload::http_util::request::RateSpec;
+//! # use overload_http::RateSpecEnum;
 //! # let req = r###"
 //! {
 //!   "Linear": {
@@ -580,7 +580,7 @@
 //!   }
 //! }
 //! # "###;
-//! # let result = serde_json::from_str::<RateSpec>(req);
+//! # let result = serde_json::from_str::<RateSpecEnum>(req);
 //! # assert!(result.is_ok());
 //! ```
 //!
@@ -597,7 +597,7 @@
 //! #### Example
 //!
 //! ```rust
-//! # use overload::http_util::request::RateSpec;
+//! # use overload_http::RateSpecEnum;
 //! # let req = r###"
 //! {
 //!   "ArraySpec": {
@@ -605,7 +605,7 @@
 //!   }
 //! }
 //! # "###;
-//! # let result = serde_json::from_str::<RateSpec>(req);
+//! # let result = serde_json::from_str::<RateSpecEnum>(req);
 //! # assert!(result.is_ok());
 //! ```
 //!
@@ -632,7 +632,7 @@
 //! #### Example
 //!
 //! ```rust
-//! # use overload::http_util::request::RateSpec;
+//! # use overload_http::RateSpecEnum;
 //! # let req = r###"
 //! {
 //!   "Steps" : {
@@ -656,7 +656,7 @@
 //!   }
 //! }
 //! # "###;
-//! # let result = serde_json::from_str::<RateSpec>(req);
+//! # let result = serde_json::from_str::<RateSpecEnum>(req);
 //! # assert!(result.is_ok());
 //! ```
 //!
@@ -778,7 +778,7 @@
 //! Failed assertion emits an info log and can also be monitored through metrics.
 //!
 //! ```rust
-//! # use overload::http_util::request::Request;
+//! # use overload_http::Request;
 //! # let req = r###"
 //! {
 //!   "duration": 120,
@@ -989,18 +989,15 @@
 //! [endpoint-api]: https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.19/#read-endpoints-v1-core
 
 #![allow(clippy::upper_case_acronyms)]
-#![allow(deprecated)]
+// #![allow(deprecated)]
 #![warn(unused_lifetimes)]
 #![forbid(unsafe_code)]
+#![allow(clippy::single_match)]
 
-mod datagen;
-pub mod executor;
-pub mod generator;
-pub mod http_util;
-pub mod metrics;
-
-use crate::metrics::MetricsFactory;
+use cluster_executor::cleanup_job;
 use lazy_static::lazy_static;
+use overload_metrics::MetricsFactory;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqliteRow;
 use sqlx::Row;
@@ -1009,11 +1006,28 @@ use std::convert::TryInto;
 use std::fmt::Display;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
+use std::time::Duration;
 use std::{env, fmt};
+use uuid::Uuid;
+
+pub use cluster_executor::ErrorCode;
+pub use cluster_executor::JobStatus;
+
+// mod datagen;
+// pub mod executor;
+#[cfg(feature = "cluster")]
+pub mod cluster;
+pub mod file_uploader;
+#[cfg(not(feature = "cluster"))]
+pub mod standalone;
 
 pub const TEST_REQ_TIMEOUT: u8 = 30; // 30 sec hard timeout for requests to test target
 pub const DEFAULT_DATA_DIR: &str = "/tmp";
 pub const PATH_REQUEST_DATA_FILE_DOWNLOAD: &str = "/cluster/data-file";
+
+pub const PATH_JOB_STATUS: &str = "/test/status";
+pub const PATH_STOP_JOB: &str = "/test/stop";
+pub const PATH_FILE_UPLOAD: &str = "/test/requests-bin";
 
 lazy_static! {
     pub static ref METRICS_FACTORY: MetricsFactory = MetricsFactory::default();
@@ -1024,6 +1038,7 @@ pub fn data_dir() -> String {
     env::var("DATA_DIR").unwrap_or_else(|_| DEFAULT_DATA_DIR.to_string())
 }
 
+#[deprecated(note = "use data_dir_path")]
 pub fn data_dir_path() -> PathBuf {
     env::var("DATA_DIR")
         .map(|env| PathBuf::from("/").join(env))
@@ -1104,25 +1119,6 @@ fn uuid() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
-#[derive(Debug, Serialize, Deserialize, Copy, Clone)]
-pub enum JobStatus {
-    Starting,
-    InProgress,
-    Stopped,
-    Completed,
-    Failed,
-    Error(ErrorCode),
-}
-
-#[derive(Debug, Serialize, Deserialize, Copy, Clone)]
-pub enum ErrorCode {
-    InactiveCluster,
-    SqliteOpenFailed,
-    PreparationFailed,
-    SecondaryClusterNode,
-    Others,
-}
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Response {
     job_id: String,
@@ -1139,6 +1135,71 @@ impl Response {
     }
 }
 
+//todo verify for cluster mode. using job id as name for secondary request
+fn job_id(request_name: &Option<String>) -> String {
+    request_name
+        .clone()
+        .map_or(Uuid::new_v4().to_string(), |n| {
+            let uuid = Regex::new(
+                r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(_[0-9]+)?$",
+            )
+            .unwrap();
+            if uuid.is_match(&n) {
+                n
+            } else {
+                let mut name = n.trim().to_string();
+                name.push('-');
+                name.push_str(Uuid::new_v4().to_string().as_str());
+                name
+            }
+        })
+}
+
+//todo do recheck
+pub async fn init() {
+    //no need to remove pools with improved cluster communication
+    //as secondaries receive stop/finish message they'll can be cleaned up when done.
+    /*#[cfg(feature = "cluster")]
+    tokio::spawn(async {
+        //If the pool hasn't been used for 30 second, drop it
+        let mut interval = tokio::time::interval(Duration::from_secs(15));
+        loop {
+            interval.tick().await;
+            let removable = {
+                CONNECTION_POOLS
+                    .read()
+                    .await
+                    .iter()
+                    .filter(|v| v.1.last_use.elapsed() > Duration::from_secs(30))
+                    .map(|v| v.0.clone())
+                    .collect::<Vec<String>>()
+            };
+            for job_id in removable {
+                CONNECTION_POOLS.write().await.remove(&job_id);
+                METRICS_FACTORY.remove_metrics(&job_id).await;
+                CONNECTION_POOLS_USAGE_LISTENER
+                    .write()
+                    .await
+                    .remove(&job_id);
+            }
+        }
+    });
+    */
+
+    //start JOB_STATUS clean up task
+    let mut interval = tokio::time::interval(Duration::from_secs(1800));
+    loop {
+        interval.tick().await;
+        cleanup_job(|status| {
+            matches!(
+                status,
+                JobStatus::Failed | JobStatus::Stopped | JobStatus::Completed
+            )
+        })
+        .await;
+    }
+}
+
 #[macro_export]
 macro_rules! log_error {
     ($result:expr) => {
@@ -1151,8 +1212,10 @@ macro_rules! log_error {
 
 #[cfg(test)]
 pub mod test_utils {
-    use crate::http_util::csv_reader_to_sqlite;
+    use crate::file_uploader::csv_reader_to_sqlite;
+    use crate::job_id;
     use csv_async::AsyncReaderBuilder;
+    use test_case::test_case;
 
     pub async fn generate_sqlite_file(file_path: &str) {
         let csv_data = r#"
@@ -1167,5 +1230,12 @@ pub mod test_utils {
             .create_deserializer(csv_data.as_bytes());
         let to_sqlite = csv_reader_to_sqlite(reader, file_path.to_string()).await;
         log_error!(to_sqlite);
+    }
+
+    #[test_case("multi-req-7e19ae6b-59af-4916-8cc0-a04cc48a739b", "multi-req-7e19ae6b-59af-4916-8cc0-a04cc48a739b" ; "job id without sub test id")]
+    #[test_case("multi-req-7e19ae6b-59af-4916-8cc0-a04cc48a739b_0", "multi-req-7e19ae6b-59af-4916-8cc0-a04cc48a739b_0" ; "job id with sub test id")]
+    fn test_job_id(name: &str, expect: &str) {
+        let option = Some(name.to_string());
+        assert_eq!(job_id(&option), expect.to_string());
     }
 }

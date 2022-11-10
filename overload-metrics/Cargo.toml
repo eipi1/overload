@@ -1,0 +1,27 @@
+[package]
+name = "overload-metrics"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies.smallvec]
+version = "1.7"
+
+[dependencies.tokio]
+version = "1.19"
+features = ["sync"]
+
+[dependencies.prometheus]
+version = "=0.13.2"
+features = ["process"]
+
+[dependencies.log]
+version = "0.4"
+
+[dependencies.lazy_static]
+version = "1.4"
+
+[dev-dependencies.tokio]
+version = "1.19"
+features = ["rt-multi-thread", "macros"]

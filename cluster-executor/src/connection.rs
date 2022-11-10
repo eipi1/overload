@@ -1,9 +1,9 @@
-use crate::metrics::Metrics;
 use futures_util::{stream::FuturesUnordered, StreamExt};
 use hyper::client::conn;
 use hyper::client::conn::{Connection, SendRequest};
 use hyper::Body;
 use log::{debug, trace, warn};
+use overload_metrics::Metrics;
 use std::collections::VecDeque;
 use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
@@ -210,9 +210,8 @@ impl QueuePool {
         }
         let mut conn = vec![];
         while let Some(connection) = futures.next().await {
-            match connection {
-                Some(connection) => conn.push(connection),
-                None => {}
+            if let Some(connection) = connection {
+                conn.push(connection)
             }
         }
         let len = conn.len();
@@ -279,6 +278,39 @@ impl QueuePool {
         }
         return_pool.write().await.push(connection)
     }
+    /*
+    pub(crate) async fn return_connection_vec(
+        return_pool: &SharedMutableVec,
+        mut connections: Vec<HttpConnection>,
+        metrics: &Arc<Metrics>,
+    ) {
+        metrics.pool_connection_busy(-(connections.len() as f64));
+        let mut ready_futures: FuturesUnordered<_>=connections.drain(..)
+            .map(|connection| {
+                Self::check_ready(connection)
+            })
+            .collect();
+        // let handle = connection.request_handle.ready().await;
+        let mut return_pool_write_guard = return_pool.write().await;
+        while let Some((mut connection, result)) = ready_futures.next().await {
+            if let Err(e) = result {
+                debug!("error - connection not ready, error: {:?}", e);
+                connection.broken = true;
+                metrics.pool_connection_broken(1);
+            } else {
+                metrics.pool_connection_idle(1_f64);
+            }
+            return_pool_write_guard.push(connection)
+        }
+
+    }
+
+    async fn check_ready<'a>(mut connection: HttpConnection) -> (HttpConnection, Result<(), Error>) {
+        let result = connection.request_handle.ready().await
+            .map(|_| {});
+        (connection, result)
+    }
+    */
 }
 
 #[allow(dead_code)]

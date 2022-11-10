@@ -14,6 +14,9 @@ spec:
     metadata:
       labels:
         app: overload
+      annotations:
+        prometheus.io/port: '3030'
+        prometheus.io/scrape: 'true'
     spec:
       containers:
         - image: ghcr.io/eipi1/overload:cluster-latest-snapshot
@@ -21,6 +24,7 @@ spec:
           name: overload
           ports:
             - containerPort: 3030
+            - containerPort: 3031
           env:
             - name: DATA_DIR
               value: "/tmp"
@@ -52,3 +56,8 @@ spec:
     - protocol: TCP
       port: 3030
       targetPort: 3030
+      name: http-endpoint
+    - protocol: TCP
+      port: 3031
+      targetPort: 3031
+      name: tcp-remoc

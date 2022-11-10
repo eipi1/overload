@@ -1,2 +1,2 @@
 [workspace]
-members = ["overload", "response-assert"]
+members = ["overload", "response-assert", "cluster-executor", "overload-http", "datagen", "overload-metrics"]

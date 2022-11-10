@@ -887,7 +887,7 @@ use more than six buckets.
 ### Grafana Dashboard
 The application provides [sample Grafana dashboard](overload/docs/monitoring/grafana-dashboard.json) that can be used for monitoring. It has
 graphs for Request Per Seconds, Response Status count, Average response time and Response
-time quantiles.
+time quantiles. The dashboard is also available on [grafana.com](https://grafana.com/grafana/dashboards/17250-overload/).
 
 ![Grafana Dashboard - RPS](overload/docs/monitoring/grafana-dashboard.png)
 ![Grafana Dashboard - ResponseTime, Connection pool](overload/docs/monitoring/grafana-dashboard-rt-pool.png)
