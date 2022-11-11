@@ -717,6 +717,7 @@ mod test {
     use overload_metrics::MetricsFactory;
     use regex::Regex;
     use response_assert::ResponseAssertion;
+    use std::cmp::max;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
     use url::Url;
@@ -804,7 +805,7 @@ mod test {
         )
         .await;
         tokio::time::sleep(Duration::from_millis(
-            (1000 - (Instant::now() - start).as_millis()) as u64,
+            max(0, 1000 - (Instant::now() - start).as_millis()) as u64,
         ))
         .await;
         info!("mock hits: {}", mock.hits_async().await);
@@ -863,7 +864,7 @@ mod test {
         )
         .await;
         tokio::time::sleep(Duration::from_millis(
-            (1000 - (Instant::now() - start).as_millis()) as u64,
+            max(0, 1000 - (Instant::now() - start).as_millis()) as u64,
         ))
         .await;
         info!("mock hits: {}", mock.hits_async().await);
