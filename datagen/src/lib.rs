@@ -35,7 +35,6 @@ pub enum Constraints {
     Pattern(String, #[serde(skip)] Option<Hir>),
 }
 
-#[allow(dead_code)]
 impl Constraints {
     fn as_i64(&self) -> Option<i64> {
         match *self {

@@ -53,7 +53,6 @@ pub async fn handle_request(request: Request) {
 }
 
 #[inline]
-#[allow(dead_code)]
 async fn send_rate_message_to_executor(
     sender: &mut Sender<MessageFromPrimary>,
     qps: u32,
