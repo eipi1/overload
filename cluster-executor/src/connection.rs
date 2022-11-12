@@ -1,7 +1,7 @@
 use futures_util::{stream::FuturesUnordered, StreamExt};
 use hyper::client::conn;
 use hyper::client::conn::{Connection, SendRequest};
-use hyper::Body;
+use hyper::{Body, Error};
 use log::{debug, trace, warn};
 use overload_metrics::Metrics;
 use std::collections::VecDeque;
@@ -11,7 +11,6 @@ use std::time::Instant;
 use tokio::net::TcpStream;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
-use tokio::time::{timeout, Duration};
 use tower::ServiceExt;
 
 type SharedMutableVec = Arc<RwLock<Vec<HttpConnection>>>;
@@ -91,18 +90,21 @@ impl QueuePool {
 
     pub async fn get_connections(
         &mut self,
-        count: u32,
+        connection_request: u32,
         metrics: &Arc<Metrics>,
     ) -> Vec<HttpConnection> {
-        debug!("request received for {} connections", count);
-        let (returned_to_pool, broken) = self
+        debug!(
+            "request received for {} connections, max_connection: {}, busy_connection: {}",
+            connection_request, self.max_connection, self.busy_connections
+        );
+        let returned_to_pool = self
             .claim_connections(self.recyclable_connections.clone(), metrics)
             .await;
         self.claim_connections(self.new_connections.clone(), metrics)
             .await;
         self.busy_connections -= returned_to_pool;
         if self.elastic {
-            let diff = self.connections.len() as i64 - count as i64;
+            let diff = self.connections.len() as i64 - connection_request as i64;
             if diff < 0 {
                 let diff = diff.abs();
                 debug!("elastic pool, requesting {} more connections", diff);
@@ -124,29 +126,35 @@ impl QueuePool {
                     .truncate((std::cmp::max(0, available as i64 - diff)) as usize);
                 let change = available - self.connections.len();
                 if change > 0 {
-                    metrics.pool_connection_dropped((change) as u64);
+                    metrics.pool_connection_dropped(change as u64);
                     metrics.pool_connection_idle(-(change as f64));
-                }
-            } else {
-                // need to refill the broken connections if we have less connections
-                if broken != 0 {
-                    debug!(
-                        "broken connections found, requesting {} more connections",
-                        broken
-                    );
-                    self.add_new_connection_mut(broken, metrics);
                 }
             }
         }
 
-        let mut vec = Vec::with_capacity(std::cmp::min(count as usize, self.connections.len()));
-        for _ in 0..count {
+        let available = self.connections.len();
+        let conn_to_get = std::cmp::min(connection_request as usize, available);
+        let mut vec = Vec::with_capacity(conn_to_get);
+        let mut futures = FuturesUnordered::new();
+        for _ in 0..connection_request {
             if let Some(con) = self.connections.pop_front() {
-                vec.push(con);
+                futures.push(QueuePool::check_ready(con))
             } else {
                 break;
             }
         }
+        let mut broken = 0;
+        while let Some((con, result)) = futures.next().await {
+            if result.is_ok() {
+                vec.push(con);
+            } else {
+                broken += 1;
+            }
+        }
+        // refill broken connections
+        self.add_new_connection_mut(broken as i64, metrics);
+        metrics.pool_connection_broken(broken);
+        metrics.pool_connection_dropped(broken);
         let len = vec.len();
         self.busy_connections += len;
         let len = len as f64;
@@ -235,47 +243,30 @@ impl QueuePool {
     async fn claim_connections(
         &mut self,
         con_container: SharedMutableVec,
-        metrics: &Arc<Metrics>,
-    ) -> (usize, i64) {
-        {
-            // to minimize write lock, check if there's any element in the vector
-            if con_container.read().await.len() == 0 {
-                return (0, 0);
-            }
-        }
+        _metrics: &Arc<Metrics>,
+    ) -> usize {
         let mut write_guard = con_container.write().await;
         let len = write_guard.len();
+        if len == 0 {
+            return 0;
+        }
         let drain = write_guard.drain(..);
-        self.connections.try_reserve(len).unwrap();
-        let mut broken = 0;
+        let _ = self.connections.try_reserve(len);
         for conn in drain {
-            if conn.broken {
-                broken += 1;
-                continue;
-            }
             self.connections.push_back(conn);
         }
-        if broken != 0 {
-            metrics.pool_connection_dropped(broken as u64);
-        }
-        (len, broken)
+        len
     }
 
     #[inline]
     pub(crate) async fn return_connection(
         return_pool: &SharedMutableVec,
-        mut connection: HttpConnection,
+        connection: HttpConnection,
         metrics: &Arc<Metrics>,
     ) {
+        //no need to check connection ready status here, checking when giving out connections
         metrics.pool_connection_busy(-1_f64);
-        let handle = connection.request_handle.ready().await;
-        if let Err(e) = handle {
-            debug!("error - connection not ready, error: {:?}", e);
-            connection.broken = true;
-            metrics.pool_connection_broken(1);
-        } else {
-            metrics.pool_connection_idle(1_f64);
-        }
+        metrics.pool_connection_idle(1_f64);
         return_pool.write().await.push(connection)
     }
     /*
@@ -304,13 +295,15 @@ impl QueuePool {
         }
 
     }
+    */
 
-    async fn check_ready<'a>(mut connection: HttpConnection) -> (HttpConnection, Result<(), Error>) {
-        let result = connection.request_handle.ready().await
-            .map(|_| {});
+    #[inline]
+    async fn check_ready<'a>(
+        mut connection: HttpConnection,
+    ) -> (HttpConnection, Result<(), Error>) {
+        let result = connection.request_handle.ready().await.map(|_| {});
         (connection, result)
     }
-    */
 }
 
 #[allow(dead_code)]
@@ -335,16 +328,19 @@ async fn open_connection(host_port: &str) -> Option<HttpConnection> {
                             eprintln!("Error in connection: {}", e);
                         }
                     });
-                    let mut connection = HttpConnection {
+                    let connection = HttpConnection {
                         request_handle: result.0,
                         connection: None,
                         broken: false,
                         join_handle,
                     };
-                    match ready_connection(&mut connection).await {
-                        Ok(_) => Some(connection),
-                        Err(_) => None,
-                    }
+                    // no need to check connection ready status here
+                    // checking when giving out connections
+                    // match ready_connection(&mut connection).await {
+                    //     Ok(_) => Some(connection),
+                    //     Err(_) => None,
+                    // }
+                    Some(connection)
                 }
                 Err(err) => {
                     warn!("failed handshaking with: {}, error: {}", host_port, err);
@@ -363,6 +359,7 @@ async fn open_connection(host_port: &str) -> Option<HttpConnection> {
     }
 }
 
+/*
 async fn ready_connection(conn: &mut HttpConnection) -> Result<(), ()> {
     trace!("Checking if connection is not ready");
     match timeout(Duration::from_millis(10), conn.request_handle.ready()).await {
@@ -373,3 +370,4 @@ async fn ready_connection(conn: &mut HttpConnection) -> Result<(), ()> {
         }
     }
 }
+*/

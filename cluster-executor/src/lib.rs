@@ -226,10 +226,6 @@ impl Stream for RequestGenerator {
             Poll::Ready(Some((qps, conn)))
         }
     }
-
-    // fn size_hint(&self) -> (usize, Option<usize>) {
-    //     (0, Some(self.total as usize))
-    // }
 }
 
 enum HttpRequestState {
@@ -347,6 +343,7 @@ impl Future for HttpRequestFuture<'_> {
                         let status_str = status.as_str();
                         self.metrics.upstream_response_time(status_str, elapsed);
                         self.metrics.upstream_request_status_count(1, status_str);
+                        //todo use aggregate instead of to_bytes
                         let bytes = hyper::body::to_bytes(response.into_body());
                         self.body = Some(bytes.boxed());
                         cx.waker().wake_by_ref();
@@ -505,8 +502,10 @@ mod test_common {
     #[cfg(feature = "cluster")]
     use uuid::Uuid;
 
+    #[allow(dead_code)]
     static INIT: Once = Once::new();
 
+    #[allow(dead_code)]
     pub fn init() {
         INIT.call_once(|| {
             tracing_subscriber::fmt()

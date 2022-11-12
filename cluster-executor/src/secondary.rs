@@ -402,8 +402,6 @@ async fn send_multiple_requests(
     //reserve 10% of the time for the internal logic
     sleep_time = (sleep_time - (sleep_time * 0.1)).floor();
 
-    // let mut req_iterator = requests.iter().cycle();
-    // let mut requests_to_send = vec![];
     loop {
         let remaining_t = time_remaining();
         if remaining_t < 0 {
@@ -418,8 +416,8 @@ async fn send_multiple_requests(
             .get_connections(requested_connection, &metrics)
             .await;
         let available_connection = connections.len();
-        debug!("connection requested:{}, available connection: {}, request remaining: {}, remaining duration: {}, sleep duration: {}",
-            requested_connection, available_connection, total_remaining_qps, remaining_t, sleep_time);
+        debug!("[{}] - connection requested:{}, available connection: {}, request remaining: {}, remaining duration: {}, sleep duration: {}",
+            &job_id, requested_connection, available_connection, total_remaining_qps, remaining_t, sleep_time);
         if available_connection < requested_connection as usize {
             if available_connection < 1 {
                 //adjust sleep time
@@ -804,9 +802,10 @@ mod test {
             &mut req_spec,
         )
         .await;
-        tokio::time::sleep(Duration::from_millis(
-            max(0, 1000 - (Instant::now() - start).as_millis()) as u64,
-        ))
+        tokio::time::sleep(Duration::from_millis(max(
+            0,
+            1000 - (Instant::now() - start).as_millis() as i32,
+        ) as u64))
         .await;
         info!("mock hits: {}", mock.hits_async().await);
         mock.assert_hits_async(25).await;
@@ -863,9 +862,10 @@ mod test {
             assertion,
         )
         .await;
-        tokio::time::sleep(Duration::from_millis(
-            max(0, 1000 - (Instant::now() - start).as_millis()) as u64,
-        ))
+        tokio::time::sleep(Duration::from_millis(max(
+            0,
+            1000 - (Instant::now() - start).as_millis() as i32,
+        ) as u64))
         .await;
         info!("mock hits: {}", mock.hits_async().await);
         mock.assert_hits_async(25).await;

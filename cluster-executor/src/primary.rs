@@ -3,7 +3,7 @@ use crate::{
     MessageFromPrimary, RateMessage, RequestGenerator, JOB_STATUS, REMOC_PORT_NAME,
 };
 use cluster_mode::{Cluster, RestClusterNode};
-use log::{debug, error, info, trace};
+use log::{debug, error, info};
 use overload_http::Request;
 use remoc::rch::base::Sender;
 use rust_cloud_discovery::ServiceInstance;
@@ -61,6 +61,11 @@ pub async fn handle_request(request: Request, cluster: Arc<Cluster>) {
             counter += 1;
         }
 
+        debug!(
+            "[handle_request] [{}] - sending secondaries - qps:{:?}, connections:{:?}",
+            &job_id, qps, connection_count
+        );
+
         let result = send_rate_message_to_secondaries(&mut senders, qps, connection_count).await;
         if let Err(e) = result {
             //remove failed senders
@@ -116,7 +121,6 @@ async fn send_rate_message_to_secondaries(
     }
 }
 
-#[allow(dead_code)]
 fn calculate_req_per_secondary(
     qps: u32,
     connection_count: u32,
@@ -130,12 +134,6 @@ fn calculate_req_per_secondary(
 
     let mut qps_to_secondaries = vec![qps_per_secondary; n_secondary];
     let mut connection_count_to_secondaries = vec![connection_count_per_secondary; n_secondary];
-
-    trace!(
-        "to secondaries before remainder: {:?}, {:?}",
-        qps_to_secondaries,
-        connection_count_to_secondaries
-    );
 
     let zip = qps_to_secondaries
         .iter_mut()
@@ -164,7 +162,6 @@ async fn init_senders(
     }
 }
 
-#[allow(dead_code)]
 async fn init_senders_for_cluster_nodes(
     senders: &mut HashMap<String, Sender<MessageFromPrimary>>,
     secondaries: &HashSet<RestClusterNode>,
