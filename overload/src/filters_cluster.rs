@@ -25,7 +25,7 @@ use warp::reply::{Json, Response, WithStatus};
 use warp::{reply, Filter};
 
 lazy_static! {
-    pub static ref CLUSTER: Arc<Cluster> = Arc::new(Cluster::new(10 * 1000));
+    pub static ref CLUSTER: Arc<Cluster> = Arc::new(Cluster::new());
 }
 
 pub fn get_routes() -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
@@ -141,35 +141,6 @@ pub fn history(
             }
         })
 }
-
-// pub fn overload_req_secondary(
-//     cluster: Arc<Cluster>,
-// ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
-//     warp::post()
-//         .and(
-//             warp::path("cluster")
-//                 .and(warp::path("test"))
-//                 .and(warp::path::end()),
-//         )
-//         .and(warp::body::content_length_limit(1024 * 1024))
-//         .and(warp::body::json())
-//         .and_then(move |request: Request| {
-//             let tmp = cluster.clone();
-//             async move { execute_secondary_request(request, tmp).await }
-//         })
-// }
-
-// pub async fn execute_secondary_request(
-//     request: Request,
-//     cluster: Arc<Cluster>,
-// ) -> Result<impl warp::Reply, Infallible> {
-//     trace!("req: execute test request from primary: {:?}", &request);
-//     let response =
-//         overload::http_util::handle_request_from_primary(request, &METRICS_FACTORY, cluster).await;
-//     let json = reply::json(&response);
-//     trace!("resp: execute test request from primary: {:?}", &response);
-//     Ok(json)
-// }
 
 pub fn info(
     cluster: Arc<Cluster>,
@@ -454,7 +425,7 @@ mod cluster_test {
     use crate::filters_common::test_common::*;
     use async_trait::async_trait;
     use bytes::Buf;
-    use cluster_mode::Cluster;
+    use cluster_mode::{Cluster, ClusterConfig};
     use csv_async::AsyncReaderBuilder;
     use http::Request;
     use httpmock::Method::POST;
@@ -553,11 +524,12 @@ mod cluster_test {
     ) -> tokio::sync::oneshot::Sender<()> {
         info!("Running in cluster mode");
 
-        let cluster = Arc::new(Cluster::new(10 * 1000));
+        let cluster = Arc::new(Cluster::new());
 
         tokio::spawn(cluster_mode::start_cluster(
             cluster.clone(),
             discovery_client,
+            ClusterConfig::default(),
         ));
 
         info!("spawning executor init");
