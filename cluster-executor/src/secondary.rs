@@ -391,7 +391,7 @@ async fn send_multiple_requests(
         remaining_time_in_cycle as f32 / remaining_requests as f32
     };
     let mut total_remaining_qps = number_of_req;
-    let request_bundle_size: u32 = max((number_of_req/100)+1, 10);
+    let request_bundle_size: u32 = max((number_of_req / 100) + 1, 10);
     let bundle_size = if connection_count == 0 {
         //elastic pool
         request_bundle_size
