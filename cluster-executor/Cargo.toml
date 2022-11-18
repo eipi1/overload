@@ -21,7 +21,7 @@ path = "../overload-metrics"
 version = "0.2"
 
 [dependencies.cluster-mode]
-version = "0.2"
+version = "0.3"
 
 [dependencies.remoc]
 version = "0.10"
