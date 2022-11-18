@@ -23,7 +23,7 @@ use regex::Regex;
 use remoc::rch;
 use remoc::rch::base::{Receiver, RecvError};
 use response_assert::ResponseAssertion;
-use std::cmp::min;
+use std::cmp::{max, min};
 use std::collections::HashMap;
 use std::io;
 use std::net::Ipv4Addr;
@@ -391,12 +391,12 @@ async fn send_multiple_requests(
         remaining_time_in_cycle as f32 / remaining_requests as f32
     };
     let mut total_remaining_qps = number_of_req;
-    const REQUEST_BUNDLE_SIZE: u32 = 10;
+    let request_bundle_size: u32 = max((number_of_req/100)+1, 10);
     let bundle_size = if connection_count == 0 {
         //elastic pool
-        REQUEST_BUNDLE_SIZE
+        request_bundle_size
     } else {
-        min(number_of_req, min(connection_count, REQUEST_BUNDLE_SIZE))
+        min(number_of_req, min(connection_count, request_bundle_size))
     };
     let mut sleep_time = interval_between_requests(number_of_req) * bundle_size as f32;
     //reserve 10% of the time for the internal logic
@@ -511,19 +511,6 @@ fn fill_req_if_less_than_connections(
         }
     }
 }
-
-// async fn get_requests_and_fill(
-//     req_spec: &mut RequestSpecEnum,
-//     req_vec: &mut Vec<HttpReq>,
-//     count: usize,
-// ) -> anyhow::Result<usize> {
-//     match req_spec {
-//         RequestSpecEnum::RequestList(req) => req.fill_vec(req_vec, count),
-//         RequestSpecEnum::RequestFile(req) => req.fill_vec(req_vec, count),
-//         RequestSpecEnum::RandomDataRequest(req) => req.fill_vec(req_vec, count),
-//     }
-//     .await
-// }
 
 async fn send_single_requests(
     req: HttpReq,
