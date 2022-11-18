@@ -366,11 +366,6 @@ impl Future for HttpRequestFuture<'_> {
 
 pub const DEFAULT_DATA_DIR: &str = "/tmp";
 
-#[deprecated(note = "use data_dir_path")]
-pub fn data_dir() -> String {
-    env::var("DATA_DIR").unwrap_or_else(|_| DEFAULT_DATA_DIR.to_string())
-}
-
 pub fn data_dir_path() -> PathBuf {
     env::var("DATA_DIR")
         .map(|env| PathBuf::from("/").join(env))
