@@ -1,6 +1,7 @@
 # Deploy on Kubernetes
 
 Cluster mode allows the application run in primary/secondary mode. Currently, only supported on Kubernetes.
+**Application requires at least 4 pods to work in cluster mode.**
 
 Running on Kubernetes requires minimum four pods and [cluster images](https://github.com/eipi1/overload/pkgs/container/overload).
 Cluster images are tagged as *cluster-{version}*.

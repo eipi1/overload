@@ -6,6 +6,9 @@
   - [Standalone](deployment-standalone.md)
 - [Getting Started](getting-started.md)
 - [Monitoring](monitoring.md)
+- [Response Assertion](assertion/README.md)
+  - [Actual](assertion/actual.md)
+  - [Expectation](assertion/expectation.md)
 - [Configuration](configuration.md)
 # Reference
 - [API](api/README.md)
