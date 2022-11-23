@@ -3,7 +3,7 @@ name: Github Pages
 
 on:
   push:
-    branches: [ master ]
+    branches: [ master, add-mdbook ]
   workflow_dispatch:
 
 # Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
