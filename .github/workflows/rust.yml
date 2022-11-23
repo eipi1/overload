@@ -44,7 +44,7 @@ jobs:
         rm ./target/debug/deps/liboverload_http-*
         rm ./target/debug/deps/libserde_json-*
         rm ./target/debug/deps/libresponse_assert-*
-        cargo build -p overload-http
+        cargo build -p overload-http --all-features
         mdbook test docs -L ./target/debug/deps/
     - name: Install mdbook-lintcheck
       run: cargo install mdbook-linkcheck
