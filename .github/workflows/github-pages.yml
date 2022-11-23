@@ -33,7 +33,12 @@ jobs:
           curl -sSL https://github.com/rust-lang/mdBook/releases/download/v0.4.21/mdbook-v0.4.21-x86_64-unknown-linux-gnu.tar.gz | tar -xz --directory=bin
           echo "$(pwd)/bin" >> $GITHUB_PATH
       - name: Install mdbook-lintcheck
-        run: cargo install mdbook-linkcheck
+        run: |
+          cd bin && \
+          curl -L https://github.com/Michael-F-Bryan/mdbook-linkcheck/releases/latest/download/mdbook-linkcheck.x86_64-unknown-linux-gnu.zip -o mdbook-linkcheck.zip && \
+          unzip "$_" && \
+          chmod +x mdbook-linkcheck && \
+          cd ..
       - name: build mdBook
         run: mdbook build docs/
       - name: Setup Pages
