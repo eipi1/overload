@@ -39,6 +39,13 @@ jobs:
         mkdir bin
         curl -sSL https://github.com/rust-lang/mdBook/releases/download/v0.4.21/mdbook-v0.4.21-x86_64-unknown-linux-gnu.tar.gz | tar -xz --directory=bin
         echo "$(pwd)/bin" >> $GITHUB_PATH
+    - name: Install mdbook-lintcheck
+      run: |
+        cd bin && \
+        curl -L https://github.com/Michael-F-Bryan/mdbook-linkcheck/releases/latest/download/mdbook-linkcheck.x86_64-unknown-linux-gnu.zip -o mdbook-linkcheck.zip && \
+        unzip "$_" && \
+        chmod +x mdbook-linkcheck && \
+        cd ..
     - name: Test mdBook
       run: |
         rm ./target/debug/deps/liboverload_http-*
@@ -46,8 +53,6 @@ jobs:
         rm ./target/debug/deps/libresponse_assert-*
         cargo build -p overload-http --all-features
         mdbook test docs -L ./target/debug/deps/
-    - name: Install mdbook-lintcheck
-      run: cargo install mdbook-linkcheck
     - name: build mdBook
       run: mdbook build docs/
     - name: Run standalone tests
