@@ -69,15 +69,20 @@ jobs:
       - name: Display structure of downloaded files
         run: ls -R
         working-directory: gh-pages-old
+        continue-on-error: true
       - name: Organize docs
-        if: ${{ steps.download-pages.outcome }} == 'success'
         run: |
-          mkdir -p gh-pages/snapshot/
-          if [[ ${{ env.version }} == 'snapshot' ]]; then
-            cp gh-pages-old/!(snapshot/*) gh-pages/
-            cp docs/book/html/* gh-pages/snapshot
+          mkdir -p gh-pages
+          if [[ ${{ steps.download-pages.outcome }} == 'success' ]]; then
+            mkdir -p gh-pages/snapshot
+            if [[ ${{ env.version }} == 'snapshot' ]]; then
+              cp gh-pages-old/!(snapshot/*) gh-pages/
+              cp docs/book/html/* gh-pages/snapshot
+            else
+              cp gh-pages-old/snapshot/* gh-pages/snapshot/
+              cp docs/book/html/* gh-pages/
+            fi
           else
-            cp gh-pages-old/snapshot/* gh-pages/snapshot/
             cp docs/book/html/* gh-pages/
           fi
       - name: Setup Pages
