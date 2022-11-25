@@ -12,7 +12,7 @@ on:
 # Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
 permissions:
   contents: read
-  pages: [read, write]
+  pages: write
   id-token: write
 
 # Allow one concurrent deployment
@@ -60,14 +60,17 @@ jobs:
       - name: build mdBook
         run: mdbook build docs/
       - name: Download existing artifacts
+        id: download-pages
         uses: actions/download-artifact@v3
         with:
           name: github-pages
           path: gh-pages-old
+        continue-on-error: true
       - name: Display structure of downloaded files
         run: ls -R
         working-directory: gh-pages-old
       - name: Organize docs
+        if: ${{ steps.download-pages.outcome }} == 'success'
         run: |
           mkdir -p gh-pages/snapshot/
           if [[ ${{ env.version }} == 'snapshot' ]]; then
@@ -83,6 +86,7 @@ jobs:
         uses: actions/upload-pages-artifact@v1
         with:
           path: 'gh-pages'
+          retention-days: 365 days
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v1
