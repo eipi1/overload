@@ -23,7 +23,7 @@ concurrency:
 jobs:
   # Single deploy job since we're just deploying
   deploy:
-    if: github.event.pull_request.merged == true || github.event == 'release' || github.event == 'workflow_dispatch'
+    #if: github.event.pull_request.merged == true || github.event == 'release' || github.event == 'workflow_dispatch'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -33,6 +33,7 @@ jobs:
         uses: actions/checkout@v3
       - name: Config version
         run: |
+          echo ${{ github.event }}
           if [[ ${{ github.event_name }} == 'release' ]]; then
               PKG_VERSION=$(cargo pkgid -p file://$(pwd)/overload | cut -d# -f2)
               TAG_VERSION=${GITHUB_REF:11}
