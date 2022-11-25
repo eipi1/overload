@@ -4,6 +4,9 @@ name: Github Pages
 on:
   release:
     types: [ published ]
+  pull_request:
+    branches: [ master ]
+    type: [closed]
   workflow_dispatch:
 
 # Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
@@ -20,6 +23,7 @@ concurrency:
 jobs:
   # Single deploy job since we're just deploying
   deploy:
+    if: github.event.pull_request.merged == true || github.event == 'release' || github.event == 'workflow_dispatch'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -27,6 +31,19 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v3
+      - name: Config version
+        run: |
+          if [[ ${{ github.event_name }} == 'release' ]]; then
+              PKG_VERSION=$(cargo pkgid -p file://$(pwd)/overload | cut -d# -f2)
+              TAG_VERSION=${GITHUB_REF:11}
+              if [[ $PKG_VERSION != $TAG_VERSION ]]; then
+                  echo "::error::version mismatch: pkg=$PKG_VERSION, tag=$GITHUB_REF"
+                  exit 1
+              fi
+              echo "version=$PKG_VERSION" >> "$GITHUB_ENV"
+          else
+              echo "version=snapshot" >> "$GITHUB_ENV"
+          fi
       - name: Install mdbook
         run: |
           mkdir bin
@@ -41,13 +58,30 @@ jobs:
           cd ..
       - name: build mdBook
         run: mdbook build docs/
+      - name: Download existing artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: github-pages
+          path: gh-pages-old
+      - name: Display structure of downloaded files
+        run: ls -R
+        working-directory: gh-pages-old
+      - name: Organize docs
+        run: |
+          mkdir -p gh-pages/snapshot/
+          if [[ ${{ version }} == 'snapshot' ]]; then
+            cp gh-pages-old/!(snapshot/*) gh-pages/
+            cp docs/book/html/* gh-pages/snapshot
+          else
+            cp gh-pages-old/snapshot/* gh-pages/snapshot/
+            cp docs/book/html/* gh-pages/
+          fi
       - name: Setup Pages
         uses: actions/configure-pages@v2
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v1
         with:
-          # Upload entire repository
-          path: 'docs/book/html'
+          path: 'gh-pages'
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v1
