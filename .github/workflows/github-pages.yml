@@ -4,9 +4,6 @@ name: Github Pages
 on:
   release:
     types: [ published ]
-  pull_request:
-    branches: [ master ]
-    type: [closed]
   workflow_dispatch:
 
 # Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
@@ -23,7 +20,6 @@ concurrency:
 jobs:
   # Single deploy job since we're just deploying
   deploy:
-    if: github.event.pull_request.merged == true || github.event == 'release' || github.event_name == 'workflow_dispatch'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -31,20 +27,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v3
-      - name: Config version
-        run: |
-          echo ${{ github.event }}
-          if [[ ${{ github.event_name }} == 'release' ]]; then
-              PKG_VERSION=$(cargo pkgid -p file://$(pwd)/overload | cut -d# -f2)
-              TAG_VERSION=${GITHUB_REF:11}
-              if [[ $PKG_VERSION != $TAG_VERSION ]]; then
-                  echo "::error::version mismatch: pkg=$PKG_VERSION, tag=$GITHUB_REF"
-                  exit 1
-              fi
-              echo "version=$PKG_VERSION" >> "$GITHUB_ENV"
-          else
-              echo "version=snapshot" >> "$GITHUB_ENV"
-          fi
       - name: Install mdbook
         run: |
           mkdir bin
@@ -59,45 +41,13 @@ jobs:
           cd ..
       - name: build mdBook
         run: mdbook build docs/
-      - name: Download existing artifacts
-        id: download-pages
-        uses: actions/download-artifact@v3
-        with:
-          name: github-pages
-          path: gh-pages-old
-        continue-on-error: true
-      - name: Display structure of downloaded files
-        run: ls -R
-        working-directory: gh-pages-old
-        continue-on-error: true
-      - name: Organize docs
-        run: |
-          set -x
-          mkdir -p gh-pages
-          if [[ ${{ steps.download-pages.outcome }} == 'success' ]]; then
-            mkdir -p gh-pages/snapshot
-            if [[ ${{ env.version }} == 'snapshot' ]]; then
-              cp -r gh-pages-old/* gh-pages/
-              rm -rf gh-pages/snapshot
-              cp -r docs/book/html/* gh-pages/snapshot
-            else
-              cp -r gh-pages-old/snapshot/* gh-pages/snapshot/ || true
-              cp -r docs/book/html/* gh-pages/
-            fi
-          else
-            cp -r docs/book/html/* gh-pages/
-          fi
       - name: Setup Pages
-        # download may fail due to retention policy. don't overwrite existing pages with snapshot
-        if: (${{ steps.download-pages.outcome }} == 'success' || github.event == 'release')
         uses: actions/configure-pages@v2
       - name: Upload artifact
-        if: (${{ steps.download-pages.outcome }} == 'success' || github.event == 'release')
         uses: actions/upload-pages-artifact@v1
         with:
-          path: 'gh-pages'
-          retention-days: 90 days
+          # Upload entire repository
+          path: 'docs/book/html'
       - name: Deploy to GitHub Pages
-        if: (${{ steps.download-pages.outcome }} == 'success' || github.event == 'release')
         id: deployment
         uses: actions/deploy-pages@v1
