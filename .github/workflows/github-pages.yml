@@ -76,15 +76,15 @@ jobs:
           if [[ ${{ steps.download-pages.outcome }} == 'success' ]]; then
             mkdir -p gh-pages/snapshot
             if [[ ${{ env.version }} == 'snapshot' ]]; then
-              cp gh-pages-old/* gh-pages/
+              cp -r gh-pages-old/* gh-pages/
               rm -rf gh-pages/snapshot
-              cp docs/book/html/* gh-pages/snapshot
+              cp -r docs/book/html/* gh-pages/snapshot
             else
-              cp gh-pages-old/snapshot/* gh-pages/snapshot/
-              cp docs/book/html/* gh-pages/
+              cp -r gh-pages-old/snapshot/* gh-pages/snapshot/ || true
+              cp -r docs/book/html/* gh-pages/
             fi
           else
-            cp docs/book/html/* gh-pages/
+            cp -r docs/book/html/* gh-pages/
           fi
       - name: Setup Pages
         uses: actions/configure-pages@v2
