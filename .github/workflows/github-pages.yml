@@ -69,7 +69,7 @@ jobs:
       - name: Organize docs
         run: |
           mkdir -p gh-pages/snapshot/
-          if [[ ${{ version }} == 'snapshot' ]]; then
+          if [[ ${{ env.version }} == 'snapshot' ]]; then
             cp gh-pages-old/!(snapshot/*) gh-pages/
             cp docs/book/html/* gh-pages/snapshot
           else
