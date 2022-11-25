@@ -76,7 +76,8 @@ jobs:
           if [[ ${{ steps.download-pages.outcome }} == 'success' ]]; then
             mkdir -p gh-pages/snapshot
             if [[ ${{ env.version }} == 'snapshot' ]]; then
-              cp gh-pages-old/!(snapshot/*) gh-pages/
+              cp gh-pages-old/* gh-pages/
+              rm -rf gh-pages/snapshot
               cp docs/book/html/* gh-pages/snapshot
             else
               cp gh-pages-old/snapshot/* gh-pages/snapshot/
