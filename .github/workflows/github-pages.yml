@@ -87,12 +87,16 @@ jobs:
             cp -r docs/book/html/* gh-pages/
           fi
       - name: Setup Pages
+        # download may fail due to retention policy. don't overwrite existing pages with snapshot
+        if: ${{ steps.download-pages.outcome }} == 'success' || github.event == 'release'
         uses: actions/configure-pages@v2
       - name: Upload artifact
+        if: ${{ steps.download-pages.outcome }} == 'success' || github.event == 'release'
         uses: actions/upload-pages-artifact@v1
         with:
           path: 'gh-pages'
-          retention-days: 365 days
+          retention-days: 90 days
       - name: Deploy to GitHub Pages
+        if: ${{ steps.download-pages.outcome }} == 'success' || github.event == 'release'
         id: deployment
         uses: actions/deploy-pages@v1
