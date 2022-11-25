@@ -1,10 +1,15 @@
 # overload
-
-A distributed load testing utility written in Rust.
-
+[![Github Pages](https://github.com/eipi1/overload/actions/workflows/github-pages.yml/badge.svg)](https://eipi1.github.io/overload/)
 ![Rust](https://github.com/eipi1/overload/actions/workflows/rust.yml/badge.svg)
 [![MIT licensed][mit-badge]][mit-url]
 [![Github][github-badge]][github-rep]
+
+
+Overload is a distributed, scalable performance testing application. It mainly focuses on ease-of-use.
+* Distributed - users don't need to handle complex cluster management - the application creates and manages the cluster by itself once deployed.
+* Control - better control over QPS, connection pool, request data
+
+For details usage and reference please check https://eipi1.github.io/overload/
 
 [mit-badge]: https://img.shields.io/badge/license-MIT-blue.svg
 
