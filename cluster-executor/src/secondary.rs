@@ -17,6 +17,7 @@ use hyper::body::Bytes;
 use hyper::{Body, Client};
 use lazy_static::lazy_static;
 use log::{debug, error, info, trace, warn};
+use once_cell::sync::OnceCell;
 use overload_http::{HttpReq, Request, RequestSpecEnum, Target, PATH_REQUEST_DATA_FILE_DOWNLOAD};
 use overload_metrics::{Metrics, MetricsFactory, METRICS_FACTORY};
 use regex::Regex;
@@ -25,12 +26,12 @@ use remoc::rch::base::{Receiver, RecvError};
 use response_assert::ResponseAssertion;
 use std::cmp::{max, min};
 use std::collections::HashMap;
-use std::io;
 use std::net::Ipv4Addr;
 use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use std::{env, io};
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
@@ -39,6 +40,19 @@ use tokio::sync::RwLock;
 use tokio::time::{sleep, timeout};
 use tokio_stream::StreamExt;
 use uuid::Uuid;
+
+pub const ENV_NAME_BUNDLE_SIZE: &str = "REQUEST_BUNDLE_SIZE";
+pub static REQUEST_BUNDLE_SIZE: OnceCell<u16> = OnceCell::new();
+pub static DEFAULT_REQUEST_BUNDLE_SIZE: u16 = 50;
+
+pub fn request_bundle_size() -> u16 {
+    *REQUEST_BUNDLE_SIZE.get_or_init(|| {
+        env::var(ENV_NAME_BUNDLE_SIZE)
+            .map_err(|_| ())
+            .and_then(|port| u16::from_str(&port).map_err(|_| ()))
+            .unwrap_or(DEFAULT_REQUEST_BUNDLE_SIZE)
+    })
+}
 
 /// Listen to request from primary
 pub async fn primary_listener(port: u16, metrics_factory: &'static MetricsFactory) {
@@ -391,10 +405,10 @@ async fn send_multiple_requests(
         remaining_time_in_cycle as f32 / remaining_requests as f32
     };
     let mut total_remaining_qps = number_of_req;
-    let request_bundle_size: u32 = max((number_of_req / 100) + 1, 10);
+    let request_bundle_size: u32 = max((number_of_req / 100) + 1, request_bundle_size() as u32);
     let bundle_size = if connection_count == 0 {
         //elastic pool
-        request_bundle_size
+        min(number_of_req, request_bundle_size)
     } else {
         min(number_of_req, min(connection_count, request_bundle_size))
     };
