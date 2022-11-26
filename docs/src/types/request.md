@@ -1,0 +1,13 @@
+# `Request`
+
+| Field                | Required | Default                         | Data type                                       | Description                                                                                                                                          |
+|----------------------|----------|---------------------------------|-------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------|
+| name                 | ❎        | UUID                            | String                                          | Test name/job id, application will append UUID to ensure unique identifier, this field is ignored during multi request test                          |
+| duration             | ✅        |                                 | uint32                                          | Test duration in seconds                                                                                                                             |
+| target               | ✅        |                                 | [Target](../types/target.md)                    | Target details                                                                                                                                       |
+| req                  | ✅        |                                 | [Request Specification](../request/)            | Request Specification                                                                                                                                |
+| qps                  | ✅        |                                 | [QPS Specification](../qps/)                    | Request per second specification                                                                                                                     |
+| concurrentConnection | ❎        | Elastic                         | [Connection Pool Specification](../connection/) | Concurrent number of requests to use to send request                                                                                                 |
+| responseAssertion    | ❎        |                                 |                                                 | [Assert response](../assertion)                                                                                                                      |
+| histogramBuckets     | ❎        | \[20, 50, 100, 300, 700, 1100\] | \[uint16\]                                      | Prometheus histogram buckets. For details check [monitoring](../monitoring.md) & [Prometheus](https://prometheus.io/docs/practices/histograms/) docs |
+

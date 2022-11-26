@@ -1,0 +1,20 @@
+[book]
+authors = ["Md Sarowar Alam <sarowar.cse@gmail.com>"]
+language = "en"
+multilingual = false
+src = "src"
+title = "Overload"
+
+[rust]
+edition = "2021"
+
+[output.html]
+additional-css = ["theme/custom.css"]
+
+[output.html.playground]
+copyable = false          # include the copy button for copying code snippets
+copy-js = false           # includes the JavaScript for the code editor
+line-numbers = false     # displays line numbers for editable code
+runnable = false
+
+[output.linkcheck]
