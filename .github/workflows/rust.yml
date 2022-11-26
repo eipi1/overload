@@ -5,6 +5,7 @@ on:
     branches: [ master ]
   pull_request:
     branches: [ master ]
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -31,7 +32,28 @@ jobs:
         restore-keys: ${{ runner.os }}-cargo-
     - name: Lint
       run: cargo fmt --all -- --check
-    - name: Run standalone tests
-      run: cargo test -- --test-threads=1
     - name: Run cluster tests
-      run: cargo test --all-features -- --test-threads=1
+      run: cargo test --all-features
+    - name: Install mdbook
+      run: |
+        mkdir bin
+        curl -sSL https://github.com/rust-lang/mdBook/releases/download/v0.4.21/mdbook-v0.4.21-x86_64-unknown-linux-gnu.tar.gz | tar -xz --directory=bin
+        echo "$(pwd)/bin" >> $GITHUB_PATH
+    - name: Install mdbook-lintcheck
+      run: |
+        cd bin && \
+        curl -L https://github.com/Michael-F-Bryan/mdbook-linkcheck/releases/latest/download/mdbook-linkcheck.x86_64-unknown-linux-gnu.zip -o mdbook-linkcheck.zip && \
+        unzip "$_" && \
+        chmod +x mdbook-linkcheck && \
+        cd ..
+    - name: Test mdBook
+      run: |
+        rm ./target/debug/deps/liboverload_http-*
+        rm ./target/debug/deps/libserde_json-*
+        rm ./target/debug/deps/libresponse_assert-*
+        cargo build -p overload-http --all-features
+        mdbook test docs -L ./target/debug/deps/
+    - name: build mdBook
+      run: mdbook build docs/
+    - name: Run standalone tests
+      run: cargo test
