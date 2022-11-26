@@ -989,32 +989,24 @@
 //! [endpoint-api]: https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.19/#read-endpoints-v1-core
 
 #![allow(clippy::upper_case_acronyms)]
-// #![allow(deprecated)]
 #![warn(unused_lifetimes)]
 #![forbid(unsafe_code)]
 #![allow(clippy::single_match)]
 
 use cluster_executor::cleanup_job;
 use lazy_static::lazy_static;
+use overload_http::{Request, RequestSpecEnum};
 use overload_metrics::MetricsFactory;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use sqlx::sqlite::SqliteRow;
-use sqlx::Row;
-use std::collections::HashMap;
-use std::convert::TryInto;
-use std::fmt::Display;
-use std::hash::{Hash, Hasher};
+use std::env;
 use std::path::PathBuf;
 use std::time::Duration;
-use std::{env, fmt};
 use uuid::Uuid;
 
 pub use cluster_executor::ErrorCode;
 pub use cluster_executor::JobStatus;
 
-// mod datagen;
-// pub mod executor;
 #[cfg(feature = "cluster")]
 pub mod cluster;
 pub mod file_uploader;
@@ -1038,85 +1030,11 @@ pub fn data_dir() -> String {
     env::var("DATA_DIR").unwrap_or_else(|_| DEFAULT_DATA_DIR.to_string())
 }
 
-#[deprecated(note = "use data_dir_path")]
+#[deprecated(note = "use cluster_executor::data_dir_path")]
 pub fn data_dir_path() -> PathBuf {
     env::var("DATA_DIR")
         .map(|env| PathBuf::from("/").join(env))
         .unwrap_or_else(|_| PathBuf::from(DEFAULT_DATA_DIR))
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct HttpReq {
-    #[serde(default = "uuid")]
-    pub id: String,
-    #[serde(with = "http_serde::method")]
-    pub method: http::Method,
-    //todo as a http::Uri
-    //panic in send_request if doesn't start with /
-    pub url: String,
-    pub body: Option<Vec<u8>>,
-    #[serde(default = "HashMap::new")]
-    pub headers: HashMap<String, String>,
-}
-
-impl HttpReq {
-    pub fn new(url: String) -> Self {
-        HttpReq {
-            id: uuid(),
-            method: http::Method::GET,
-            url,
-            body: None,
-            headers: HashMap::new(),
-        }
-    }
-}
-
-impl Display for HttpReq {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        //todo print body length
-        write!(f, "{:?} {}", &self.method, &self.url)
-    }
-}
-
-impl PartialEq for HttpReq {
-    /// The purpose is not to test if two request is exactly equal, rather to check if two
-    /// represent the same request.
-    /// For a test, each request will be given a uuid. As long as uuid is equal
-    /// the request will be treated as same request.
-    fn eq(&self, other: &Self) -> bool {
-        self.id == other.id
-    }
-}
-
-impl Eq for HttpReq {}
-
-impl Hash for HttpReq {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.id.hash(state);
-    }
-}
-
-impl<'a> sqlx::FromRow<'a, SqliteRow> for HttpReq {
-    fn from_row(row: &'a SqliteRow) -> Result<Self, sqlx::Error> {
-        let id: i64 = row.get("rowid");
-        let method: String = row.get("method");
-        let url: String = row.get("url");
-        let body: Option<Vec<u8>> = row.get("body");
-        let headers: String = row.get("headers");
-
-        let req = HttpReq {
-            id: id.to_string(),
-            method: method.as_str().try_into().unwrap(),
-            url,
-            body,
-            headers: serde_json::from_str(headers.as_str()).unwrap_or_default(),
-        };
-        Ok(req)
-    }
-}
-
-fn uuid() -> String {
-    uuid::Uuid::new_v4().to_string()
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1133,6 +1051,26 @@ impl Response {
     pub fn get_status(&self) -> JobStatus {
         self.status
     }
+}
+
+pub(crate) fn pre_check(request: &Request) -> Result<(), ErrorCode> {
+    match &request.req {
+        RequestSpecEnum::RequestFile(file) => {
+            if !request_file_exists(&file.file_name) {
+                Err(ErrorCode::RequestFileNotFound)
+            } else {
+                Ok(())
+            }
+        }
+        _ => Ok(()),
+    }
+}
+
+#[inline(always)]
+fn request_file_exists(file_name: &str) -> bool {
+    let mut path = cluster_executor::data_dir_path().join(file_name);
+    path.set_extension("sqlite");
+    path.exists()
 }
 
 //todo verify for cluster mode. using job id as name for secondary request
@@ -1155,7 +1093,6 @@ fn job_id(request_name: &Option<String>) -> String {
         })
 }
 
-//todo do recheck
 pub async fn init() {
     //no need to remove pools with improved cluster communication
     //as secondaries receive stop/finish message they'll can be cleaned up when done.

@@ -1,11 +1,10 @@
-#![allow(deprecated)]
+// #![allow(deprecated)]
 #[cfg(feature = "cluster")]
 use cloud_discovery_kubernetes::KubernetesDiscoverService;
 use cluster_executor::{remoc_port, REMOC_PORT};
 #[cfg(feature = "cluster")]
 use cluster_mode::ClusterConfig;
 use log::info;
-use overload::data_dir;
 #[cfg(feature = "cluster")]
 use rust_cloud_discovery::DiscoveryClient;
 #[cfg(feature = "cluster")]
@@ -32,7 +31,10 @@ const ENV_NAME_CLUSTER_MIN_NODE: &str = "CLUSTER_MIN_NODE";
 async fn main() {
     //init logging
     tracing_subscriber::fmt::init();
-    info!("data directory: {}", data_dir());
+    info!(
+        "data directory: {:?}",
+        cluster_executor::data_dir_path().as_path().to_str()
+    );
 
     let mut _cluster_up = true;
     #[cfg(feature = "cluster")]

@@ -1,7 +1,7 @@
 use crate::cluster::secondary::{
     forward_get_status_request, forward_stop_request_to_primary, forward_test_request,
 };
-use crate::{job_id, Response, PATH_FILE_UPLOAD};
+use crate::{job_id, pre_check, Response, PATH_FILE_UPLOAD};
 use bytes::Buf;
 use cluster_executor::{get_status_all, get_status_by_job_id, ErrorCode, JobStatus};
 use cluster_mode::{Cluster, RestClusterNode};
@@ -29,7 +29,10 @@ pub async fn handle_request_cluster(mut request: Request, cluster: Arc<Cluster>)
     } else if cluster.is_primary().await {
         let secondaries = cluster.secondaries().await;
         if secondaries.is_none() || cluster.secondaries().await.unwrap().is_empty() {
-            return Response::new(job_id, JobStatus::Error(ErrorCode::InactiveCluster));
+            return Response::new(job_id, JobStatus::Error(ErrorCode::NoSecondary));
+        }
+        if let Err(e) = pre_check(&request) {
+            return Response::new(job_id, JobStatus::Error(e));
         }
         tokio::spawn(cluster_executor::primary::handle_request(
             request,

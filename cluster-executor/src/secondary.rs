@@ -609,13 +609,13 @@ fn prepare(
     request: &mut Request,
     primary_uri: String,
 ) -> BoxFuture<'static, Result<(), anyhow::Error>> {
-    initiator_for_request_from_secondary(request, primary_uri)
+    initiator_for_request_from_primary(request, primary_uri)
 }
 
 /// For RequestFile -
 /// * Update file name with full path
 /// * Download file from primary
-pub(crate) fn initiator_for_request_from_secondary(
+pub(crate) fn initiator_for_request_from_primary(
     request: &mut Request,
     primary_uri: String,
 ) -> BoxFuture<'static, Result<(), anyhow::Error>> {

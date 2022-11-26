@@ -16,6 +16,8 @@ use futures_core::ready;
 use futures_util::Stream;
 use http::{Method, Uri};
 use log::{error, trace};
+use overload_http::HttpReq;
+use overload_http::{GenericError, GenericResponse};
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{ConnectOptions, Connection};
@@ -23,10 +25,6 @@ use tokio::io::AsyncRead;
 use tokio_stream::StreamExt;
 use tokio_util::io::StreamReader;
 use uuid::Uuid;
-
-use overload_http::{GenericError, GenericResponse};
-
-use crate::HttpReq;
 
 pub async fn csv_stream_to_sqlite<S, B>(
     http_stream: S,
