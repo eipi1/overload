@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 use crate::filters_common;
 use crate::filters_common::prometheus_metric;
 use bytes::{Buf, Bytes, BytesMut};
@@ -8,8 +9,6 @@ use http::StatusCode;
 use hyper::Body;
 use lazy_static::lazy_static;
 use log::trace;
-// use overload::http_util::request::{JobStatusQueryParams, MultiRequest, Request};
-// use overload::http_util::{handle_history_all, GenericError};
 use overload::cluster::handle_history_all;
 use overload::data_dir;
 use overload_http::{GenericError, JobStatusQueryParams, MultiRequest, Request};

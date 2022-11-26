@@ -78,9 +78,11 @@ pub enum JobStatus {
 #[derive(Debug, Serialize, Deserialize, Copy, Clone)]
 pub enum ErrorCode {
     InactiveCluster,
+    NoSecondary,
     SqliteOpenFailed,
     PreparationFailed,
     SecondaryClusterNode,
+    RequestFileNotFound,
     Others,
 }
 
