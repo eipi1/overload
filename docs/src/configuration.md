@@ -13,6 +13,17 @@ components. For example -
 ### DATA_DIR
 Path to store uploaded CSV files, default is `/tmp`.
 
+### REQUEST_BUNDLE_SIZE
+Overload divides total requests to be sent in a second to smaller chunks and process these chunks at
+certain intervals. This variable can be used to set the max chunk size. Default is `50`.
+
+For example, if QPS is 100 at certain point and REQUEST_BUNDLE_SIZE=10, Overload will send 10 requests
+at 100ms interval; if REQUEST_BUNDLE_SIZE=20, app will send 20 requests at 200ms interval.
+
+Note that, if the value is too less, application may fail to fulfill the QPS, setting too high will
+increase memory usage. Application should be scaled horizontally in that case.
+
+
 ### K8S_ENDPOINT_NAME
 Name of the [endpoints](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.19/#read-endpoints-v1-core), default is `overload`.
 
