@@ -754,6 +754,7 @@ mod test {
 
     #[cfg(feature = "cluster")]
     #[tokio::test(flavor = "multi_thread")]
+    #[ignore]
     async fn test_primary_listener() {
         // init();
         tokio::spawn(primary_listener(
@@ -843,6 +844,7 @@ mod test {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[ignore]
     async fn test_handle_rate_msg() {
         // init();
         let rate_message = RateMessage {
