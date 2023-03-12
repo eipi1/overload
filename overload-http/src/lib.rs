@@ -76,7 +76,7 @@ pub struct HttpReq {
     //todo as a http::Uri
     //panic in send_request if doesn't start with /
     pub url: String,
-    pub body: Option<Vec<u8>>,
+    pub body: Option<String>,
     #[serde(default = "HashMap::new")]
     pub headers: HashMap<String, String>,
 }
@@ -86,7 +86,7 @@ impl<'a> sqlx::FromRow<'a, SqliteRow> for HttpReq {
         let id: i64 = row.get("rowid");
         let method: String = row.get("method");
         let url: String = row.get("url");
-        let body: Option<Vec<u8>> = row.get("body");
+        let body: Option<String> = row.get("body");
         let headers: String = row.get("headers");
 
         let req = HttpReq {
@@ -387,5 +387,20 @@ mod test {
         let result: Result<JobStatusQueryParams, GenericError> = query.try_into();
         println!("{:?}", &result);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn deserialize_post_http_req() {
+        let req_str = r#"
+          {
+            "method": "POST",
+            "url": "/anything",
+            "headers": {
+              "Host": "127.0.0.1:2080",
+              "Connection":"keep-alive"
+            },
+            "body": "{\"data\":[{\"shopId\":12345,\"itemId\":54321},{\"shopId\":12345,\"itemId\":54321}]}"
+          }"#;
+        let _req: HttpReq = serde_json::from_str(req_str).unwrap();
     }
 }

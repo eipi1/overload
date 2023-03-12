@@ -17,6 +17,9 @@ path = "../datagen"
 [dependencies.overload-metrics]
 path = "../overload-metrics"
 
+[dependencies.lua-helper]
+path = "../lua-helper"
+
 [dependencies.rust-cloud-discovery]
 version = "0.2"
 
@@ -88,6 +91,10 @@ version = "1.16"
 [dependencies.uuid]
 version = "1.2"
 features = ["v4"]
+
+[dependencies.mlua]
+version = "0.8"
+features = ["lua53", "send", "serialize", "mlua_derive"]
 
 [dev-dependencies.tracing-subscriber]
 version = "0.3"

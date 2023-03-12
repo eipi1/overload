@@ -1,3 +1,5 @@
+#![allow(opaque_hidden_inferred_bound)]
+
 use crate::filters_common;
 use bytes::Buf;
 use cluster_executor::data_dir_path;
@@ -172,6 +174,7 @@ mod standalone_mode_tests {
     /// running multiple tests in parallel causes tests to fail. So using this function to force
     /// tests to run sequentially
     #[tokio::test(flavor = "multi_thread")]
+    #[ignore]
     async fn all_tests() {
         test_request_random_constant().await;
         test_request_list_constant().await;

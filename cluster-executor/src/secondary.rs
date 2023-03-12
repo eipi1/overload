@@ -4,7 +4,7 @@ use crate::connection::{HttpConnection, QueuePool};
 use crate::request_providers::RequestProvider;
 use crate::{
     data_dir_path, log_error, HttpRequestFuture, HttpRequestState, MessageFromPrimary, Metadata,
-    RateMessage, ReturnableConnection, CYCLE_LENGTH_IN_MILLIS,
+    OriginalRequest, RateMessage, ReturnableConnection, CYCLE_LENGTH_IN_MILLIS,
 };
 use anyhow::{anyhow, Error as AnyError, Result as AnyResult};
 use cluster_mode::Cluster;
@@ -17,17 +17,20 @@ use hyper::body::Bytes;
 use hyper::{Body, Client};
 use lazy_static::lazy_static;
 use log::{debug, error, info, trace, warn};
+use lua_helper::{init_lua, load_lua_func, load_lua_func_with_registry, LuaAssertionResult};
+use mlua::Value::Function;
 use once_cell::sync::OnceCell;
 use overload_http::{HttpReq, Request, RequestSpecEnum, Target, PATH_REQUEST_DATA_FILE_DOWNLOAD};
 use overload_metrics::{Metrics, MetricsFactory, METRICS_FACTORY};
 use regex::Regex;
 use remoc::rch;
 use remoc::rch::base::{Receiver, RecvError};
-use response_assert::ResponseAssertion;
+use response_assert::{LuaExecSender, ResponseAssertion};
 use std::cmp::{max, min};
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
 use std::pin::Pin;
+use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -35,7 +38,9 @@ use std::{env, io};
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
+use tokio::sync::mpsc::{UnboundedReceiver as TkMpscReceiver, UnboundedSender as TkMpscSender};
 use tokio::sync::oneshot::Sender;
+use tokio::sync::oneshot::{Receiver as TkOneShotReceiver, Sender as TkOneShotSender};
 use tokio::sync::RwLock;
 use tokio::time::{sleep, timeout};
 use tokio_stream::StreamExt;
@@ -60,7 +65,7 @@ pub async fn primary_listener(port: u16, metrics_factory: &'static MetricsFactor
     // Listen for incoming TCP connection.
     let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, port))
         .await
-        .unwrap();
+        .unwrap_or_else(|_| panic!("Failed to bind port: {}", &port));
     info!("Started remoc server at: {}", &port);
     loop {
         let (socket, address) = listener.accept().await.unwrap();
@@ -121,6 +126,7 @@ async fn handle_connection_from_primary(
     let mut prev_connection_count = 0;
     let mut time_offset: i128 = 0;
     let response_assertion = Arc::new(request.response_assertion.unwrap_or_default());
+    let lua_executor_sender = response_assert::init_lua_executor(&response_assertion).await;
     loop {
         let msg = tokio::time::timeout(Duration::from_secs(2), rx.recv()).await;
         if msg.is_err() {
@@ -161,6 +167,7 @@ async fn handle_connection_from_primary(
                             &mut queue_pool,
                             &mut request_spec,
                             response_assertion.clone(),
+                            lua_executor_sender.clone(),
                         )
                         .await;
                     }
@@ -328,6 +335,7 @@ async fn handle_rate_msg(
     queue_pool: &mut QueuePool,
     req_spec: &mut RequestSpecEnum,
     response_assertion: Arc<ResponseAssertion>,
+    lua_executor_sender: Option<LuaExecSender>,
 ) -> (u32, i128) {
     let start_of_cycle = Instant::now();
     let connection_count = rate.connections;
@@ -346,7 +354,9 @@ async fn handle_rate_msg(
     if time_offset > 0 {
         //the previous cycle took longer than cycle duration
         // use less time for next one
-        corrected_with_offset = start_of_cycle - Duration::from_millis(time_offset as u64);
+        corrected_with_offset = start_of_cycle
+            .checked_sub(Duration::from_millis(time_offset as u64))
+            .unwrap();
     }
 
     send_multiple_requests(
@@ -358,6 +368,7 @@ async fn handle_rate_msg(
         corrected_with_offset,
         &response_assertion,
         req_spec,
+        lua_executor_sender,
     )
     .await;
     time_offset = start_of_cycle.elapsed().as_millis() as i128 - CYCLE_LENGTH_IN_MILLIS;
@@ -374,6 +385,7 @@ async fn send_multiple_requests(
     start_of_cycle: Instant,
     response_assertion: &Arc<ResponseAssertion>,
     req_spec: &mut RequestSpecEnum,
+    lua_executor_sender: Option<LuaExecSender>,
 ) {
     debug!(
         "[{}] [send_multiple_requests] - count: {}, connection count: {}",
@@ -470,6 +482,7 @@ async fn send_multiple_requests(
             let m = metrics.clone();
             let rp = return_pool.clone();
             let assertion = response_assertion.clone();
+            let lua_sender = lua_executor_sender.clone();
             tokio::spawn(async move {
                 let mut requests: FuturesUnordered<_> = connections
                     .drain(..)
@@ -480,6 +493,7 @@ async fn send_multiple_requests(
                             &m,
                             connection,
                             &assertion,
+                            lua_sender.clone(),
                         )
                     })
                     .collect();
@@ -532,13 +546,14 @@ async fn send_single_requests(
     metrics: &Arc<Metrics>,
     mut connection: HttpConnection,
     assertion: &ResponseAssertion,
+    lua_executor_sender: Option<LuaExecSender>,
 ) -> HttpConnection {
-    let body = if let Some(body) = req.body {
+    let body = if let Some(body) = req.body.clone() {
         Bytes::from(body)
     } else {
         Bytes::new()
     };
-    let request_uri = Uri::try_from(req.url).unwrap();
+    let request_uri = Uri::try_from(req.url.clone()).unwrap();
     //todo remove unwrap
     let mut request = http::Request::builder()
         .uri(request_uri.clone())
@@ -559,9 +574,11 @@ async fn send_single_requests(
         body: None,
         status: None,
         metrics,
-        connection: ReturnableConnection::PlaceHolder,
         assertion,
         request_uri,
+        original_request: OriginalRequest::Request(req),
+        lua_executor_sender,
+        lua_assert_future: None,
     };
     request_future.await;
     connection
@@ -801,6 +818,7 @@ mod test {
             start,
             &assertion,
             &mut req_spec,
+            None,
         )
         .await;
         tokio::time::sleep(Duration::from_millis(max(
@@ -861,6 +879,7 @@ mod test {
             &mut queue_pool,
             &mut req_spec,
             assertion,
+            None,
         )
         .await;
         tokio::time::sleep(Duration::from_millis(max(

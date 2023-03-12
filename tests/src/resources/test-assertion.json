@@ -1,0 +1,60 @@
+{
+  "request": {
+    "duration": 10,
+    "name": "test-assertion",
+    "qps": {
+      "ConstantRate": {
+        "countPerSec": 3
+      }
+    },
+    "req": {
+      "RequestList": {
+        "data": [
+          {
+            "method": "POST",
+            "url": "/anything",
+            "headers": {
+              "Host": "127.0.0.1:2080",
+              "Connection":"keep-alive"
+            },
+            "body": "{\"keys\":[\"0001\",\"0002\",\"0004\"]}"
+          }
+        ]
+      }
+    },
+    "target": {
+      "host": "127.0.0.1",
+      "port": 2080,
+      "protocol": "HTTP"
+    },
+    "concurrentConnection": {
+      "ConstantRate": {
+        "countPerSec": 3
+      }
+    },
+    "responseAssertion": {
+      "luaAssertion": [
+        "function (method, url, reqBody, respBody)",
+        "    result ={}",
+        "    if method~=\"POST\" then",
+        "        local err={}",
+        "        err.id=1",
+        "        err.success=false",
+        "        err.error=\"Invalid method\"",
+        "        table.insert(result,err)",
+        "    end",
+        "    jsonReq=json.decode(reqBody)",
+        "    jsonResp=json.decode(respBody)",
+        "    for k,v in pairs(jsonReq) do",
+        "        print(k)",
+        "        print(v)",
+        "    end",
+        "    return result",
+        "end"
+      ]
+    }
+  },
+  "expectation": {
+    "qps": [3,3,3,3,3,3,3,3,3,3]
+  }
+}
