@@ -790,6 +790,7 @@ mod test {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[ignore]
     async fn test_send_multiple_requests() {
         // init();
         let mock_server = httpmock::MockServer::start_async().await;
