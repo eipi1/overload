@@ -13,9 +13,11 @@ env:
 jobs:
   build:
 
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-20.04
 
     steps:
+    - name: install lua
+      run: sudo apt install -y liblua5.3-dev
     - uses: actions/checkout@v2
     - name: Run tests for cluster
       run: cargo test --features="cluster" --verbose

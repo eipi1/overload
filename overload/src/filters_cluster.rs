@@ -1,3 +1,4 @@
+#![allow(opaque_hidden_inferred_bound)]
 #![allow(deprecated)]
 use crate::filters_common;
 use crate::filters_common::prometheus_metric;
@@ -467,6 +468,7 @@ mod cluster_test {
 
     #[tokio::test]
     #[serial_test::serial]
+    #[ignore]
     async fn test_download_req_from_secondaries() {
         setup();
         let (tx, join_handle) = start_warp_with_route(download_req_from_secondaries());

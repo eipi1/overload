@@ -1,0 +1,30 @@
+{
+  "dataFileName": "file-data-1.csv",
+  "request": {
+    "duration": 10,
+    "name": "test-assertion",
+    "qps": {
+      "ConstantRate": {
+        "countPerSec": 3
+      }
+    },
+    "req": {
+      "RequestFile": {
+        "file_name": "4e1d1b32-0f1e-4b31-92dd-66f51c5acf9a"
+      }
+    },
+    "target": {
+      "host": "127.0.0.1",
+      "port": 2080,
+      "protocol": "HTTP"
+    },
+    "concurrentConnection": {
+      "ConstantRate": {
+        "countPerSec": 3
+      }
+    }
+  },
+  "expectation": {
+    "qps": [3,3,3,3,3,3,3,3,3,3]
+  }
+}

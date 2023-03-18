@@ -1,0 +1,38 @@
+{
+  "request": {
+    "duration": 10,
+    "name": "test-assertion",
+    "qps": {
+      "ConstantRate": {
+        "countPerSec": 3
+      }
+    },
+    "req": {
+      "RequestList": {
+        "data": [
+          {
+            "method": "GET",
+            "url": "/get",
+            "headers": {
+              "Host": "127.0.0.1:2080",
+              "Connection":"keep-alive"
+            }
+          }
+        ]
+      }
+    },
+    "target": {
+      "host": "127.0.0.1",
+      "port": 2080,
+      "protocol": "HTTP"
+    },
+    "concurrentConnection": {
+      "ConstantRate": {
+        "countPerSec": 3
+      }
+    }
+  },
+  "expectation": {
+    "qps": [3,3,3,3,3,3,3,3,3,3]
+  }
+}

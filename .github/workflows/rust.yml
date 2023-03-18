@@ -16,6 +16,8 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+    - name: install lua
+      run: sudo apt install -y liblua5.3-dev
     - name: Checkout
       uses: actions/checkout@v2
     - name: Set up cargo cache

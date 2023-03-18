@@ -177,7 +177,7 @@ impl TryInto<HttpReq> for HttpReqCsvHelper {
             id: "".to_string(),
             method,
             url: self.url,
-            body: self.body.map(|s| s.into_bytes()),
+            body: self.body,
             headers,
         })
     }

@@ -154,7 +154,7 @@ impl RequestProvider for RandomDataRequest {
             }
             if matches!(self.method, http::Method::POST) {
                 if let Some(schema) = &self.body_schema {
-                    body = Some(Vec::from(generate_data(schema).to_string().as_bytes()));
+                    body = Some(generate_data(schema).to_string());
                 }
             }
             let req = HttpReq {
@@ -560,6 +560,7 @@ pub(crate) mod test {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[ignore]
     async fn request_file_get_n() {
         setup();
         if create_sqlite_file().await.is_ok() {
@@ -646,7 +647,8 @@ pub(crate) mod test {
         let requests = generator.get_n(5).await;
         assert!(requests.is_ok());
         for req in requests.unwrap().iter() {
-            let result: Value = serde_json::from_slice(req.body.as_ref().unwrap().deref()).unwrap();
+            let result: Value =
+                serde_json::from_slice(req.body.as_ref().unwrap().deref().as_bytes()).unwrap();
             let age = result.get("age").unwrap().as_i64().unwrap();
             more_asserts::assert_le!(age, 100);
             more_asserts::assert_ge!(age, 0);

@@ -124,7 +124,7 @@ impl RandomDataRequest {
                         .as_i64()
                         .map_or(String::from("unknown"), |t| t.to_string())
                 };
-                url.replace_range(url_param.start..url_param.end as usize, &val);
+                url.replace_range(url_param.start..url_param.end, &val);
             }
         }
     }

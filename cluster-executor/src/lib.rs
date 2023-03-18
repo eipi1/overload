@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::str::FromStr;
 use std::task::{Context, Poll};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::Result as AnyResult;
 use futures_core::future::BoxFuture;
@@ -22,12 +22,13 @@ use remoc::rch::base::{Receiver, SendError, Sender};
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpStream;
 use tokio::sync::RwLock;
+use tokio::time::timeout;
 
 use overload_http::{
     ConcurrentConnectionRateSpec, Elastic, HttpReq, RateSpecEnum, Request, RequestSpecEnum, Target,
 };
 use overload_metrics::Metrics;
-use response_assert::ResponseAssertion;
+use response_assert::{AssertionError, LuaAssertionResultSender, LuaExecSender, ResponseAssertion};
 
 use crate::rate_spec::RateScheme;
 use crate::request_providers::RequestProvider;
@@ -83,6 +84,7 @@ pub enum ErrorCode {
     PreparationFailed,
     SecondaryClusterNode,
     RequestFileNotFound,
+    LuaParseFailure,
     Others,
 }
 
@@ -151,7 +153,7 @@ impl RequestGenerator {
         let time_scale: u8 = 1;
         let total = duration * time_scale as u32;
         let concurrent_connection =
-            concurrent_connection.unwrap_or_else(|| Box::new(Elastic::default()));
+            concurrent_connection.unwrap_or_else(|| Box::<Elastic>::default());
         RequestGenerator {
             duration,
             time_scale,
@@ -241,6 +243,11 @@ enum ReturnableConnection {
     PlaceHolder,
 }
 
+enum OriginalRequest {
+    Request(HttpReq),
+    PlaceHolder,
+}
+
 //todo remove unnecessary fields
 #[must_use = "futures do nothing unless polled"]
 struct HttpRequestFuture<'a> {
@@ -251,9 +258,11 @@ struct HttpRequestFuture<'a> {
     body: Option<BoxFuture<'a, Result<Bytes, Error>>>,
     status: Option<StatusCode>,
     metrics: &'a Metrics,
-    connection: ReturnableConnection,
     assertion: &'a ResponseAssertion,
     request_uri: Uri,
+    original_request: OriginalRequest,
+    lua_executor_sender: Option<LuaExecSender>,
+    lua_assert_future: Option<BoxFuture<'a, ReturnableConnection>>,
 }
 
 impl Future for HttpRequestFuture<'_> {
@@ -267,6 +276,20 @@ impl Future for HttpRequestFuture<'_> {
             trace!("HttpRequestFuture [{}] - Begin", &self.job_id);
         }
 
+        if self.lua_assert_future.is_some() {
+            let fut = self.lua_assert_future.as_mut().unwrap();
+            return match Pin::new(fut).poll(cx) {
+                Poll::Ready(r) => Poll::Ready(r),
+                Poll::Pending => {
+                    trace!(
+                        "HttpRequestFuture [{}] - lua_assert_future - Pending",
+                        &self.job_id
+                    );
+                    Poll::Pending
+                }
+            };
+        }
+
         if self.body.is_some() {
             let fut = self.body.as_mut().unwrap();
             return match Pin::new(fut).poll(cx) {
@@ -278,38 +301,50 @@ impl Future for HttpRequestFuture<'_> {
                         &elapsed
                     );
                     if let Ok(body) = body {
-                        if !self.assertion.is_empty() {
-                            trace!(
-                                "[HttpRequestFuture] [{}] - asserting - {:?}",
-                                &self.job_id,
-                                &self.assertion
-                            );
-                            let _ = serde_json::from_slice(body.as_ref())
-                                .map_err(|e| {
-                                    self.metrics.assertion_parse_failure(&e.to_string());
-                                    vec![]
-                                })
-                                .and_then(|json_resp| {
-                                    response_assert::assert(
-                                        self.assertion,
-                                        &self.request_uri,
-                                        None,
-                                        &json_resp,
-                                    )
-                                })
-                                .map_err(|errors| {
-                                    for err in errors {
-                                        info!("assertion error - {:?}", &err);
-                                        self.metrics.assertion_failure(err.get_id(), err.into());
+                        if self.assertion.simple_assertions.is_some() {
+                            do_simple_assertion(&self, &body);
+                        }
+                        match self.lua_executor_sender.clone() {
+                            None => {}
+                            Some(lua_sender) => {
+                                trace!(
+                                    "HttpRequestFuture [{}] - doing lua assertion",
+                                    &self.job_id
+                                );
+                                let original_request = std::mem::replace(
+                                    &mut self.original_request,
+                                    OriginalRequest::PlaceHolder,
+                                );
+                                let body_str = std::str::from_utf8(body.as_ref());
+                                match body_str {
+                                    Ok(body_str) => match original_request {
+                                        OriginalRequest::Request(req) => {
+                                            let sender_future = do_lua_assertion(
+                                                self.metrics,
+                                                lua_sender,
+                                                body_str.to_string(),
+                                                req,
+                                                self.job_id.clone(),
+                                            );
+                                            self.lua_assert_future = Some(sender_future.boxed());
+                                            self.body = None;
+                                            cx.waker().wake_by_ref();
+                                            let fut = self.lua_assert_future.as_mut().unwrap();
+                                            return Pin::new(fut).poll(cx);
+                                        }
+                                        OriginalRequest::PlaceHolder => {}
+                                    },
+                                    Err(e) => {
+                                        error!("HttpRequestFuture [{}] - error - body can not convert to string - {}",
+                                            &self.job_id,
+                                            e.to_string())
                                     }
-                                });
+                                }
+                            }
                         }
                     };
                     //add metrics here if it's necessary to include time to fetch body
-                    Poll::Ready(std::mem::replace(
-                        &mut self.connection,
-                        ReturnableConnection::PlaceHolder,
-                    ))
+                    Poll::Ready(ReturnableConnection::PlaceHolder)
                 }
                 Poll::Pending => {
                     trace!("HttpRequestFuture [{}] - body - Pending", &self.job_id);
@@ -321,10 +356,7 @@ impl Future for HttpRequestFuture<'_> {
                 "HttpRequestFuture [{}] - body: None - completing",
                 &self.job_id
             );
-            return Poll::Ready(std::mem::replace(
-                &mut self.connection,
-                ReturnableConnection::PlaceHolder,
-            ));
+            return Poll::Ready(ReturnableConnection::PlaceHolder);
         }
 
         match Pin::new(&mut self.request).poll(cx) {
@@ -355,14 +387,99 @@ impl Future for HttpRequestFuture<'_> {
                         trace!("HttpRequestFuture [{}] - ERROR: {}", &self.job_id, &err);
                         self.metrics
                             .upstream_request_status_count(1, err.to_string().as_str());
-                        Poll::Ready(std::mem::replace(
-                            &mut self.connection,
-                            ReturnableConnection::PlaceHolder,
-                        ))
+                        Poll::Ready(ReturnableConnection::PlaceHolder)
                     }
                 }
             }
         }
+    }
+}
+
+async fn do_lua_assertion(
+    metrics: &Metrics,
+    lua_sender: LuaExecSender,
+    body_str: String,
+    req: HttpReq,
+    job_id: String,
+) -> ReturnableConnection {
+    trace!("do_lua_assertion - [{}]", &job_id);
+    let (one_shot_sender, one_shot_recv): (LuaAssertionResultSender, _) =
+        tokio::sync::oneshot::channel();
+    let result = lua_sender.send((
+        body_str,
+        req.method,
+        req.url,
+        req.body,
+        req.headers,
+        one_shot_sender,
+    ));
+    if let Err(e) = result {
+        error!(
+            "do_lua_assertion [{}] - error - failed to send to lua executor - {}",
+            &job_id,
+            e.to_string()
+        )
+    }
+
+    match timeout(Duration::from_millis(50), one_shot_recv).await {
+        Ok(received) => match received {
+            Ok(received) => {
+                let _ = received.map_err(|e| {
+                    generate_metrics_on_failure(metrics, e);
+                });
+            }
+            Err(e) => {
+                error!(
+                    "do_lua_assertion [{}] - error - receiver error - {}",
+                    &job_id,
+                    e.to_string()
+                )
+            }
+        },
+        Err(e) => {
+            error!(
+                "do_lua_assertion [{}] - error - receiver timeout - {}",
+                &job_id,
+                e.to_string()
+            )
+        }
+    }
+
+    // if let Some(errors) = timeout(Duration::from_millis(50),one_shot_recv).await
+    //     .map_err(|e| {
+    //         error!("do_lua_assertion - [{}] - error getting resp - {}", &job_id, e.to_string());
+    //     })
+    //     .ok()
+    //     .and_then(|assertion_result| assertion_result.err())
+    // {
+    //     generate_metrics_on_failure(metrics, errors);
+    // };
+    ReturnableConnection::PlaceHolder
+}
+
+fn do_simple_assertion(self_: &Pin<&mut HttpRequestFuture>, body: &Bytes) {
+    trace!(
+        "[HttpRequestFuture] [{}] - asserting - {:?}",
+        &self_.job_id,
+        &self_.assertion
+    );
+    let _ = serde_json::from_slice(body.as_ref())
+        .map_err(|e| {
+            self_.metrics.assertion_parse_failure(&e.to_string());
+            vec![]
+        })
+        .and_then(|json_resp| {
+            response_assert::simple_assert(self_.assertion, &self_.request_uri, None, &json_resp)
+        })
+        .map_err(|errors| {
+            generate_metrics_on_failure(self_.metrics, errors);
+        });
+}
+
+fn generate_metrics_on_failure(metrics: &Metrics, errors: Vec<AssertionError>) {
+    for err in errors {
+        info!("assertion error - {:?}", &err);
+        metrics.assertion_failure(err.get_id(), err.into());
     }
 }
 
@@ -555,7 +672,7 @@ mod test_common {
         );
         let port2 = Port::new(
             Some("tcp-remoc".to_string()),
-            remoc as u32,
+            remoc,
             "tcp".to_string(),
             Some("tcp".to_string()),
         );

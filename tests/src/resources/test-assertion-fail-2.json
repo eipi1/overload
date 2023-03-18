@@ -1,0 +1,70 @@
+{
+  "request": {
+    "duration": 10,
+    "name": "test-assertion",
+    "qps": {
+      "ConstantRate": {
+        "countPerSec": 3
+      }
+    },
+    "req": {
+      "RequestList": {
+        "data": [
+          {
+            "method": "POST",
+            "url": "/anything",
+            "headers": {
+              "Host": "127.0.0.1:2080",
+              "Connection":"keep-alive",
+              "Content-type": "application/json"
+            },
+            "body": "{\"keys\":[\"0001\",\"0002\",\"0004\"]}"
+          }
+        ]
+      }
+    },
+    "target": {
+      "host": "127.0.0.1",
+      "port": 2080,
+      "protocol": "HTTP"
+    },
+    "concurrentConnection": {
+      "ConstantRate": {
+        "countPerSec": 3
+      }
+    },
+    "responseAssertion": {
+      "luaAssertion": [
+        "function (method, url, reqBody, respBody)",
+        "result ={}",
+        "print('inside lua')",
+        "if method~='POST' then",
+        "local err={}",
+        "err.id=1",
+        "err.success=false",
+        "err.error='Invalid method'",
+        "table.insert(result,err)",
+        "end",
+        "jsonReq=json.decode(reqBody)",
+        "jsonResp=json.decode(respBody)",
+        "for k,v in pairs(jsonReq.keys) do",
+        "if jsonResp.json.keys[k] ~= v then",
+        "local err={}",
+        "err.id=2",
+        "err.success=false",
+        "err.error='invalid value '..jsonResp.json.keys[k]..' at '..k",
+        "table.insert(result,err)",
+        "end",
+        "end",
+        "return result",
+        "end"
+      ]
+    }
+  },
+  "expectation": {
+    "qps": [3,3,3,3,3,3,3,3,3,3],
+    "assertionFailure": {
+      "2": [0,0,0,0,0,0,0,0,0,0]
+    }
+  }
+}

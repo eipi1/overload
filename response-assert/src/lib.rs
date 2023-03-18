@@ -1,11 +1,12 @@
 #![warn(unused_lifetimes)]
 #![forbid(unsafe_code)]
 
-use crate::AssertionError::{FailedAssert, InvalidActual, InvalidExpectation};
+use crate::AssertionError::{FailedAssert, InvalidActual, InvalidExpectation, LuaAssertionFailure};
 use anyhow::anyhow;
-use http::Uri;
+use http::{Method, Uri};
 use jsonpath_lib::Compiled;
 use log::trace;
+use lua_helper::{call_lua_func_from_registry, LuaAssertionResult};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -13,6 +14,8 @@ use std::fmt::{Debug, Formatter};
 use std::num::NonZeroU8;
 use std::ops::Deref;
 use strum::IntoStaticStr;
+use tokio::sync::mpsc::UnboundedSender as TkMpscSender;
+use tokio::sync::oneshot::Sender as TkOneShotSender;
 
 type SegmentNumber = NonZeroU8;
 
@@ -126,16 +129,10 @@ impl TryFrom<JsonPathShadowType> for JsonPath {
 }
 
 #[derive(Deserialize, Serialize, Debug, Default, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct ResponseAssertion {
-    pub(crate) assertions: Vec<Assertion>,
-}
-
-impl Deref for ResponseAssertion {
-    type Target = Vec<Assertion>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.assertions
-    }
+    pub simple_assertions: Option<Vec<Assertion>>,
+    pub lua_assertion: Option<Vec<String>>,
 }
 
 #[derive(Debug, IntoStaticStr)]
@@ -143,17 +140,32 @@ pub enum AssertionError {
     InvalidExpectation(u32, String),
     FailedAssert(u32, String),
     InvalidActual(u32, String),
+    LuaAssertionFailure(u32, String),
 }
 
 impl AssertionError {
     pub fn get_id(&self) -> u32 {
         match self {
-            &InvalidExpectation(id, ..) | &FailedAssert(id, ..) | &InvalidActual(id, ..) => id,
+            &InvalidExpectation(id, ..)
+            | &FailedAssert(id, ..)
+            | &InvalidActual(id, ..)
+            | &LuaAssertionFailure(id, ..) => id,
         }
     }
 }
 
-pub fn assert(
+impl TryFrom<LuaAssertionResult> for AssertionError {
+    type Error = ();
+
+    fn try_from(value: LuaAssertionResult) -> Result<Self, Self::Error> {
+        Ok(LuaAssertionFailure(
+            value.assertion_id as u32,
+            value.assertion_result.err().ok_or(())?,
+        ))
+    }
+}
+
+pub fn simple_assert(
     assertions: &ResponseAssertion,
     request_url: &Uri,
     request_body: Option<&Value>,
@@ -161,14 +173,22 @@ pub fn assert(
 ) -> Result<(), Vec<AssertionError>> {
     trace!(
         "Asserting - assertion count: {}, uri: {}",
-        assertions.assertions.len(),
+        assertions
+            .simple_assertions
+            .as_ref()
+            .map_or(0, |v| { v.len() }),
         request_url.to_string()
     );
     let mut errors = vec![];
     let mut paths: Option<Vec<&str>> = None;
     let mut params = None;
     let mut all_matched = true;
-    for assertion in assertions.iter() {
+    for assertion in assertions
+        .simple_assertions
+        .as_ref()
+        .unwrap_or(&vec![])
+        .iter()
+    {
         let id = assertion.id;
         //temporary container to avoid 'returns a value referencing data owned by the current function'
         let mut tmp = vec![];
@@ -313,9 +333,69 @@ pub fn assert(
     }
 }
 
+type ResponseBody = String;
+type UrlStr = String;
+type RequestBody = Option<String>;
+type RequestHeader = HashMap<String, String>;
+pub type LuaAssertionResultSender = TkOneShotSender<Result<(), Vec<AssertionError>>>;
+pub type LuaExecSender = TkMpscSender<(
+    ResponseBody,
+    Method,
+    UrlStr,
+    RequestBody,
+    RequestHeader,
+    LuaAssertionResultSender,
+)>;
+
+pub async fn init_lua_executor(response_assert: &ResponseAssertion) -> Option<LuaExecSender> {
+    let chunks = response_assert.lua_assertion.as_ref()?;
+    if !chunks.is_empty() {
+        let chunks = chunks.join("\n");
+        let lua = lua_helper::init_lua();
+        let func_key = lua_helper::load_lua_func_with_registry(&chunks, &lua)?;
+        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel::<(
+            String,
+            Method,
+            UrlStr,
+            RequestBody,
+            RequestHeader,
+            LuaAssertionResultSender,
+        )>();
+        tokio::spawn(async move {
+            loop {
+                let msg = receiver.recv().await;
+                if let Some((resp_body, method, url, req_body, _req_header, sender)) = msg {
+                    let lua_result = call_lua_func_from_registry(
+                        &lua,
+                        &func_key,
+                        method.as_str(),
+                        url,
+                        req_body,
+                        resp_body,
+                    )
+                    .map_err(|mut errors| {
+                        errors
+                            .drain(..)
+                            .map(AssertionError::try_from)
+                            .filter_map(|x| x.ok())
+                            .collect::<Vec<_>>()
+                    });
+                    trace!("init_lua_executor - sending back lua result");
+                    let _ = sender.send(lua_result);
+                } else {
+                    break;
+                }
+            }
+        });
+        Some(sender)
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::{assert, Actual, Assertion, Expectation, ResponseAssertion, SegmentNumber};
+    use crate::{simple_assert, Actual, Assertion, Expectation, ResponseAssertion, SegmentNumber};
     use http::Uri;
     use serde_json::Value;
 
@@ -343,16 +423,32 @@ mod tests {
 
         serde_json::from_str::<Assertion>(&serde_json::to_string(&assertion).unwrap()).unwrap();
         let vec1 = vec![assertion];
-        let validator = ResponseAssertion { assertions: vec1 };
+        let validator = ResponseAssertion {
+            simple_assertions: Some(vec1),
+            lua_assertion: None,
+        };
         let json = serde_json::to_string(&validator).unwrap();
         println!("{:?}", &json);
         let validator: ResponseAssertion = serde_json::from_str(&json).unwrap();
         // let expectation = ExpectationSource::Constant("iPhone".into());
         assert!(matches!(
-            &validator.assertions.get(0).unwrap().expectation,
+            &validator
+                .simple_assertions
+                .as_ref()
+                .unwrap()
+                .get(0)
+                .unwrap()
+                .expectation,
             Expectation::Constant(_)
         ));
-        match &validator.assertions.get(0).unwrap().expectation {
+        match &validator
+            .simple_assertions
+            .as_ref()
+            .unwrap()
+            .get(0)
+            .unwrap()
+            .expectation
+        {
             Expectation::Constant(x) => {
                 assert_eq!(x.as_str().unwrap(), "iPhone")
             }
@@ -362,7 +458,13 @@ mod tests {
         }
 
         assert!(matches!(
-            &validator.assertions.get(0).unwrap().actual,
+            &validator
+                .simple_assertions
+                .as_ref()
+                .unwrap()
+                .get(0)
+                .unwrap()
+                .actual,
             Actual::FromJsonResponse(_)
         ));
     }
@@ -397,7 +499,10 @@ mod tests {
         };
         assertions.push(assertion);
 
-        let assertions = ResponseAssertion { assertions };
+        let assertions = ResponseAssertion {
+            simple_assertions: Some(assertions),
+            ..Default::default()
+        };
 
         let uri = Uri::try_from("http://localhost:3030/hello/iPhone?eanye=dxwr&age=16".to_string())
             .unwrap();
@@ -406,7 +511,7 @@ mod tests {
         let selector = jsonpath_lib::Compiled::compile("$").unwrap();
         println!("selector: {:?}", selector.select(&response));
 
-        let assert_result = assert(&assertions, &uri, Some(&response), &response);
+        let assert_result = simple_assert(&assertions, &uri, Some(&response), &response);
         println!("{:?}", &assert_result);
         assert!(&assert_result.is_ok());
     }

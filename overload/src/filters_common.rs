@@ -1,3 +1,5 @@
+#![allow(opaque_hidden_inferred_bound)]
+
 use http::header::CONTENT_TYPE;
 use http::{Response, StatusCode};
 use hyper::Body;

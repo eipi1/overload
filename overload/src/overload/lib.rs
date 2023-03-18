@@ -995,6 +995,7 @@
 
 use cluster_executor::cleanup_job;
 use lazy_static::lazy_static;
+use log::error;
 use overload_http::{Request, RequestSpecEnum};
 use overload_metrics::MetricsFactory;
 use regex::Regex;
@@ -1053,8 +1054,9 @@ impl Response {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn pre_check(request: &Request) -> Result<(), ErrorCode> {
-    match &request.req {
+    let file_check = match &request.req {
         RequestSpecEnum::RequestFile(file) => {
             if !request_file_exists(&file.file_name) {
                 Err(ErrorCode::RequestFileNotFound)
@@ -1063,10 +1065,27 @@ pub(crate) fn pre_check(request: &Request) -> Result<(), ErrorCode> {
             }
         }
         _ => Ok(()),
+    };
+    if file_check.is_ok() {
+        request
+            .response_assertion
+            .as_ref()
+            .and_then(|assertion| assertion.lua_assertion.as_ref())
+            .map(|chunks| chunks.join("\n"))
+            .map(|chunk| {
+                lua_helper::verify_lua_chunk(&chunk).map_err(|e| {
+                    error!("lua verification failed - chunk: {}, error: {}", &chunk, e);
+                    ErrorCode::LuaParseFailure
+                })
+            })
+            .unwrap_or(Ok(()))
+    } else {
+        file_check
     }
 }
 
 #[inline(always)]
+#[allow(dead_code)]
 fn request_file_exists(file_name: &str) -> bool {
     let mut path = cluster_executor::data_dir_path().join(file_name);
     path.set_extension("sqlite");
