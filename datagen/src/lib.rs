@@ -5,12 +5,14 @@ use rand::thread_rng;
 use regex_generate::generate_from_hir;
 use regex_syntax::hir::Hir;
 use regex_syntax::Parser;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::convert::TryFrom;
 
 const PATTER_MAX_REPEAT: u32 = 10;
+
+const KEY_FOR_KEYLESS_SCHEMAS: &str = "__";
 
 #[derive(Debug, Serialize, Deserialize, Eq, PartialEq, Hash, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -23,7 +25,20 @@ pub enum Keywords {
     Pattern,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+impl Keywords {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Keywords::MinLength => "minLength",
+            Keywords::MaxLength => "maxLength",
+            Keywords::Minimum => "minimum",
+            Keywords::Maximum => "maximum",
+            Keywords::Constant => "constant",
+            Keywords::Pattern => "pattern",
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(untagged)]
 pub enum Constraints {
     MinLength(i64),
@@ -32,7 +47,15 @@ pub enum Constraints {
     Maximum(i64),
     ConstantInt(i64),
     ConstantStr(String),
-    Pattern(String, #[serde(skip)] Option<Hir>),
+    #[serde(serialize_with = "pattern_serializer")]
+    Pattern(String, #[serde(skip_deserializing)] Option<Hir>),
+}
+
+fn pattern_serializer<S>(pattern: &String, _hir: &Option<Hir>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+{
+    serializer.serialize_str(pattern.as_str())
 }
 
 impl Constraints {
@@ -70,6 +93,11 @@ pub enum DataSchema {
     String(String, HashMap<Keywords, Constraints>),
     Integer(String, HashMap<Keywords, Constraints>),
     Object(Option<String>, Vec<DataSchema>),
+    Array(
+        Option<String>,
+        Vec<DataSchema>,
+        HashMap<Keywords, Constraints>,
+    ),
 }
 
 #[allow(dead_code)]
@@ -136,11 +164,25 @@ fn convert_data_schema_to_map(schemas: Vec<DataSchema>) -> HashMap<String, Value
                 });
                 properties.insert(name, v);
             }
-            DataSchema::Object(name, schemax) => {
-                let serialized_obj = convert_data_schema_to_map(schemax);
+            DataSchema::Object(name, schema) => {
+                let serialized_obj = convert_data_schema_to_map(schema);
                 let mut map = HashMap::new();
                 map.insert("type", json!("object"));
                 map.insert("properties", serde_json::to_value(serialized_obj).unwrap());
+                properties.insert(name.unwrap(), serde_json::to_value(map).unwrap());
+            }
+            DataSchema::Array(name, schema, mut constraints) => {
+                let mut map = HashMap::new();
+                map.insert("type", json!("array"));
+                let mut items = convert_data_schema_to_map(schema);
+                // map.insert("items", serde_json::to_value(items).unwrap());
+                map.insert(
+                    "items",
+                    items.remove(KEY_FOR_KEYLESS_SCHEMAS).unwrap_or(json!("{}")),
+                );
+                for (keyword, constraint) in constraints.drain() {
+                    map.insert(keyword.as_str(), serde_json::to_value(constraint).unwrap());
+                }
                 properties.insert(name.unwrap(), serde_json::to_value(map).unwrap());
             }
         }
@@ -149,7 +191,7 @@ fn convert_data_schema_to_map(schemas: Vec<DataSchema>) -> HashMap<String, Value
 }
 
 pub fn data_schema_from_value(schema: &Value) -> AnyResult<DataSchema> {
-    trace!("generating DataSchema from: {:?}", schema);
+    trace!("generating DataSchema from: {}", serde_json::to_string(schema).unwrap());
     let data_schema = schema
         .get("properties")
         .and_then(|prop| prop.as_object())
@@ -157,6 +199,9 @@ pub fn data_schema_from_value(schema: &Value) -> AnyResult<DataSchema> {
         .map_err(anyhow::Error::msg)
         .and_then(parse_properties)
         .map(|data_schema| DataSchema::Object(Option::None, data_schema));
+    if let Err(e) = &data_schema {
+        error!("[data_schema_from_value] - parsing error: {}", e);
+    }
     trace!("generated DataSchema: {:?}", &data_schema);
     data_schema
 }
@@ -187,6 +232,24 @@ fn parse_properties(properties: &Map<String, Value>) -> AnyResult<Vec<DataSchema
             )),
             "integer" => data.push(DataSchema::Integer(
                 k.clone(),
+                get_constraints(v)
+                    .ok_or_else(|| format!("invalid constraints: {:?}", v))
+                    .map_err(AnyError::msg)?,
+            )),
+            "array" => data.push(DataSchema::Array(
+                Some(k.clone()),
+                {
+                    let mut map = Map::with_capacity(1);
+                    parse_properties(
+                        v.get("items")
+                            .map(|v| {
+                                map.insert(KEY_FOR_KEYLESS_SCHEMAS.to_string(), v.clone());
+                                &map
+                            })
+                            .ok_or_else(|| format!("array items not found for : {}", k))
+                            .map_err(AnyError::msg)?,
+                    )?
+                },
                 get_constraints(v)
                     .ok_or_else(|| format!("invalid constraints: {:?}", v))
                     .map_err(AnyError::msg)?,
@@ -274,9 +337,39 @@ fn generate_object_data(data: &[DataSchema]) -> Map<String, Value> {
                     Value::Object(generate_object_data(c)),
                 );
             }
+            DataSchema::Array(k, schema, constraints) => {
+                map.insert(
+                    k.as_ref().unwrap().clone(),
+                    Value::Array(generate_array_data(schema, constraints)),
+                );
+            }
         }
     }
     map
+}
+
+fn generate_array_data(
+    schema: &[DataSchema],
+    constraints: &HashMap<Keywords, Constraints>,
+) -> Vec<Value> {
+    let min = constraints
+        .get(&Keywords::MinLength)
+        .and_then(|constraint| constraint.as_i64())
+        .unwrap_or(1);
+    let max = constraints
+        .get(&Keywords::MaxLength)
+        .and_then(|constraint| constraint.as_i64())
+        .unwrap_or(20);
+    let len = fastrand::i64(min..=max);
+    let mut array_values = vec![];
+    for _ in 0..len {
+        array_values.push(
+            generate_object_data(schema)
+                .remove(KEY_FOR_KEYLESS_SCHEMAS)
+                .unwrap(),
+        );
+    }
+    array_values
 }
 
 fn generate_integer_data(constraints: &HashMap<Keywords, Constraints>) -> i64 {
@@ -341,8 +434,227 @@ fn generate_string_data(constraints: &HashMap<Keywords, Constraints>) -> String 
 
 #[cfg(test)]
 mod test {
-    use crate::{data_schema_from_value, generate_data};
+    use crate::{data_schema_from_value, generate_data, Constraints, DataSchema, Keywords};
     use serde_json::Value;
+    use std::str::FromStr;
+    use std::sync::Once;
+    use log::info;
+
+    static INIT: Once = Once::new();
+
+    pub fn init_logger() {
+        INIT.call_once(|| {
+            env_logger::init_from_env(
+                env_logger::Env::default().filter_or(env_logger::DEFAULT_FILTER_ENV, "trace"),
+            );
+        });
+    }
+
+    #[test]
+    fn array_json_to_schema() {
+        let data = array_sample_json_1();
+        let schema: Value = serde_json::from_str(data).unwrap();
+        let schema: DataSchema = TryFrom::try_from(schema).unwrap();
+        println!("{:?}", &schema);
+        match schema {
+            DataSchema::Object(_, values) => {
+                assert_eq!(values.len(), 1);
+                let array = values.get(0).unwrap();
+                match array {
+                    DataSchema::Array(k, values, c) => {
+                        assert_eq!(k, &Some("keys".to_string()));
+                        assert_eq!(values.len(), 1);
+                        let elements = values.get(0).unwrap();
+                        matches!(elements, DataSchema::Integer(_, _));
+                        assert_eq!(
+                            c.get(&Keywords::MinLength).unwrap(),
+                            &Constraints::MinLength(2)
+                        );
+                        assert_eq!(
+                            c.get(&Keywords::MaxLength).unwrap(),
+                            &Constraints::MaxLength(10)
+                        );
+                    }
+                    _ => panic!("expected array, got: {:?}", array),
+                }
+            }
+            _ => panic!("expected object, got: {:?}", schema),
+        }
+    }
+
+    #[test]
+    fn array_schema_to_value() {
+        let data = array_sample_json_1();
+        let original_schema: Value = serde_json::from_str(data).unwrap();
+        let schema: DataSchema = TryFrom::try_from(original_schema.clone()).unwrap();
+        let value: Value = schema.into();
+        assert_json_diff::assert_json_eq!(value, original_schema);
+    }
+
+    #[test]
+    fn array_schema_to_value_string_pattern() {
+        init_logger();
+        let data = array_sample_json_3();
+        let original_schema: Value = serde_json::from_str(data).unwrap();
+        let schema: DataSchema = TryFrom::try_from(original_schema.clone()).unwrap();
+        let value: Value = schema.into();
+        info!("schema to value: {}", serde_json::to_string(&value).unwrap());
+        assert_json_diff::assert_json_eq!(value, original_schema);
+    }
+
+    #[test]
+    fn array_schema_data_gen_integer() {
+        let data = array_sample_json_1();
+        let schema: DataSchema = serde_json::from_str(data).unwrap();
+        let value = generate_data(&schema);
+        matches!(value, Value::Object(_));
+        let array = value.get("keys").unwrap();
+        matches!(array, &Value::Array(_));
+        let array = array.as_array().unwrap();
+        (2..=10usize).contains(&array.len());
+        let arr_val_range = 1..=100i64;
+        for elm in array {
+            arr_val_range.contains(&elm.as_i64().unwrap());
+        }
+    }
+
+    #[test]
+    fn array_schema_data_gen_object() {
+        let data = array_sample_json_2();
+        let schema: DataSchema = serde_json::from_str(data).unwrap();
+        let value = generate_data(&schema);
+        println!("{:?}", &value);
+        matches!(value, Value::Object(_));
+        let array = value.get("keys").unwrap();
+        matches!(array, &Value::Array(_));
+        let array = array.as_array().unwrap();
+        (2..=10usize).contains(&array.len());
+
+        let key1_val_range = 1..=100i64;
+        for elm in array {
+            key1_val_range.contains(&elm.get("key1").unwrap().as_i64().unwrap());
+            let key2 = i64::from_str(elm.get("key2").unwrap().as_str().unwrap()).unwrap();
+            assert!(key2 > 1);
+            assert!(key2 < (1999999 - 1))
+        }
+    }
+
+    #[test]
+    fn array_schema_data_gen_string_pattern() {
+        let data = array_sample_json_3();
+        let schema: DataSchema = serde_json::from_str(data).unwrap();
+        let value = generate_data(&schema);
+        println!("{:?}", &value);
+        matches!(value, Value::Object(_));
+        let array = value.get("keys").unwrap();
+        matches!(array, &Value::Array(_));
+        let array = array.as_array().unwrap();
+        (2..=10usize).contains(&array.len());
+
+        let key1_val_range = 1..=100i64;
+        for elm in array {
+            key1_val_range.contains(&elm.get("key1").unwrap().as_i64().unwrap());
+            let key2 = i64::from_str(elm.get("key2").unwrap().as_str().unwrap()).unwrap();
+            assert!(key2 > 1);
+            assert!(key2 < (1999999 - 1))
+        }
+    }
+
+    fn array_sample_json_3() -> &'static str {
+        r#"
+        {
+          "properties": {
+            "firstName": {
+              "type": "string"
+            },
+            "lastName": {
+              "type": "string",
+                "pattern": "^a[0-9]{4}z$"
+            },
+            "age": {
+              "type": "integer",
+              "minimum": 10,
+              "maximum": 20
+            },
+            "objArrayKeys": {
+              "type": "array",
+              "maxLength": 20,
+              "minLength": 10,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "objKey1": {
+                    "type": "integer",
+                    "minimum": 10,
+                    "maximum": 1000
+                  },
+                  "objKey2": {
+                    "type": "string",
+                    "pattern": "^a[0-9]{4}z$"
+                  }
+                }
+              }
+            },
+            "scalarArray": {
+              "type": "array",
+              "maxLength": 20,
+              "minLength": 20,
+              "items": {
+                "type": "string",
+                "pattern": "^a[0-9]{4}z$"
+              }
+            }
+          }
+        }
+        "#
+    }
+
+    fn array_sample_json_2() -> &'static str {
+        r#"
+        {
+          "properties":{
+            "keys": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "key1": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100
+                  },
+                  "key2": {
+                    "type": "string",
+                    "pattern":"^1[0-9]{6}$"
+                  }
+                }
+              },
+              "maxLength": 10,
+              "minLength": 2
+            }
+          }
+        }
+        "#
+    }
+
+    fn array_sample_json_1() -> &'static str {
+        r#"
+        {
+          "properties":{
+            "keys": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100
+              },
+              "maxLength": 10,
+              "minLength": 2
+            }
+          }
+        }
+        "#
+    }
 
     #[test]
     fn test() {
