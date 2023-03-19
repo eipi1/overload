@@ -34,7 +34,7 @@ mod tests {
         "127.0.0.1"
     }
 
-    fn target_port() -> u16{
+    fn target_port() -> u16 {
         2080
     }
 
@@ -248,11 +248,11 @@ mod tests {
         (test_spec, job_id)
     }
 
-    fn set_target(request: &mut Value){
+    fn set_target(request: &mut Value) {
         let target = request.get_mut("target").unwrap();
         let host = target.get_mut("host").unwrap();
         *host = Value::String(target_host().to_string());
-        let port  = target.get_mut("port").unwrap();
+        let port = target.get_mut("port").unwrap();
         *port = Value::Number(target_port().into());
     }
 
