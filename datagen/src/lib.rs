@@ -51,9 +51,13 @@ pub enum Constraints {
     Pattern(String, #[serde(skip_deserializing)] Option<Hir>),
 }
 
-fn pattern_serializer<S>(pattern: &String, _hir: &Option<Hir>, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
+fn pattern_serializer<S>(
+    pattern: &String,
+    _hir: &Option<Hir>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
 {
     serializer.serialize_str(pattern.as_str())
 }
@@ -191,7 +195,10 @@ fn convert_data_schema_to_map(schemas: Vec<DataSchema>) -> HashMap<String, Value
 }
 
 pub fn data_schema_from_value(schema: &Value) -> AnyResult<DataSchema> {
-    trace!("generating DataSchema from: {}", serde_json::to_string(schema).unwrap());
+    trace!(
+        "generating DataSchema from: {}",
+        serde_json::to_string(schema).unwrap()
+    );
     let data_schema = schema
         .get("properties")
         .and_then(|prop| prop.as_object())
@@ -435,10 +442,12 @@ fn generate_string_data(constraints: &HashMap<Keywords, Constraints>) -> String 
 #[cfg(test)]
 mod test {
     use crate::{data_schema_from_value, generate_data, Constraints, DataSchema, Keywords};
+    use log::info;
     use serde_json::Value;
+    use std::fs::File;
+    use std::io::Write;
     use std::str::FromStr;
     use std::sync::Once;
-    use log::info;
 
     static INIT: Once = Once::new();
 
@@ -498,7 +507,10 @@ mod test {
         let original_schema: Value = serde_json::from_str(data).unwrap();
         let schema: DataSchema = TryFrom::try_from(original_schema.clone()).unwrap();
         let value: Value = schema.into();
-        info!("schema to value: {}", serde_json::to_string(&value).unwrap());
+        info!(
+            "schema to value: {}",
+            serde_json::to_string(&value).unwrap()
+        );
         assert_json_diff::assert_json_eq!(value, original_schema);
     }
 
