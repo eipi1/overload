@@ -448,6 +448,7 @@ mod test {
     use std::io::Write;
     use std::str::FromStr;
     use std::sync::Once;
+    use regex::Regex;
 
     static INIT: Once = Once::new();
 
@@ -558,17 +559,25 @@ mod test {
         let value = generate_data(&schema);
         println!("{:?}", &value);
         matches!(value, Value::Object(_));
-        let array = value.get("keys").unwrap();
+        let array = value.get("objArrayKeys").unwrap();
+        matches!(array, &Value::Array(_));
+
+        let key1_val_range = 10..=1000i64;
+        let regex = Regex::new("^a[0-9]{4}z$").unwrap();
+        for elm in array.as_array().unwrap() {
+            println!("{:?}", elm);
+            key1_val_range.contains(&elm.get("objKey1").unwrap().as_i64().unwrap());
+            let key2 = elm.get("objKey2").unwrap().as_str().unwrap();
+            assert!(regex.is_match(key2));
+        }
+
+        let array = value.get("scalarArray").unwrap();
         matches!(array, &Value::Array(_));
         let array = array.as_array().unwrap();
-        (2..=10usize).contains(&array.len());
-
-        let key1_val_range = 1..=100i64;
+        assert_eq!(array.len(), 20);
         for elm in array {
-            key1_val_range.contains(&elm.get("key1").unwrap().as_i64().unwrap());
-            let key2 = i64::from_str(elm.get("key2").unwrap().as_str().unwrap()).unwrap();
-            assert!(key2 > 1);
-            assert!(key2 < (1999999 - 1))
+            let key = elm.as_str().unwrap();
+            assert!(regex.is_match(key));
         }
     }
 
