@@ -443,12 +443,12 @@ fn generate_string_data(constraints: &HashMap<Keywords, Constraints>) -> String 
 mod test {
     use crate::{data_schema_from_value, generate_data, Constraints, DataSchema, Keywords};
     use log::info;
+    use regex::Regex;
     use serde_json::Value;
     use std::fs::File;
     use std::io::Write;
     use std::str::FromStr;
     use std::sync::Once;
-    use regex::Regex;
 
     static INIT: Once = Once::new();
 
