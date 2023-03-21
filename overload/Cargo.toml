@@ -1,6 +1,6 @@
 [package]
 name = "overload"
-version = "0.6.0"
+version = "0.7.0"
 authors = ["Md Sarowar Alam <sarowar.cse@gmail.com>"]
 edition = "2018"
 license = "MIT"
