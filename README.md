@@ -8,6 +8,7 @@
 Overload is a distributed, scalable performance testing application. It mainly focuses on ease-of-use.
 * Distributed - users don't need to handle complex cluster management - the application creates and manages the cluster by itself once deployed.
 * Control - better control over QPS, connection pool, request data
+* Assertion - easy assertion with lua script
 
 For details usage and reference please check https://eipi1.github.io/overload/
 
@@ -46,15 +47,22 @@ spec:
     spec:
       containers:
         - image: ghcr.io/eipi1/overload:latest-standalone-snapshot
-          imagePullPolicy: "Always"
+          imagePullPolicy: "IfNotPresent"
           name: overload
           ports:
             - containerPort: 3030
+            - containerPort: 3031
           env:
-            - name: LOG_LEVEL
-              value: "info"
             - name: DATA_DIR
               value: "/tmp"
+            - name: RUST_BACKTRACE
+              value: "1"
+            - name: K8S_ENDPOINT_NAME
+              value: "overload"
+            - name: K8S_NAMESPACE_NAME
+              value: "default"
+            - name: RUST_LOG
+              value: info
 ---
 apiVersion: v1
 kind: Service
@@ -68,20 +76,25 @@ spec:
     - protocol: TCP
       port: 3030
       targetPort: 3030
+      name: http-endpoint
+    - protocol: TCP
+      port: 3031
+      targetPort: 3031
+      name: tcp-remoc
 ```
 
 ### Start Test
 The following request will send two `GET` request per second(`"countPerSec": 2`) to `httpbin.org/get` for 120
 seconds(`"duration": 60`).
 ```shell
-curl --location --request POST 'localhost:3030/test' \
+curl --location --request POST '<overload-host>:3030/test' \
 --header 'Content-Type: application/json' \
 --data-raw '<json_request_body>'
 ```
 
 Sample JSON request body -
 
-```rust
+```json
 {
   "duration": 120,
   "name": "demo-test",
@@ -121,11 +134,14 @@ We'll need the `job_id` if we want to stop the test later.
 
 ### Get job status
 ```shell
-curl --location --request GET 'localhost:3030/test/status/'
+curl --location --request GET '<overload-host>:3030/test/status/'
 ```
 ### Stop a job
 ```shell
-curl --location --request GET 'localhost:3030/test/stop/demo-test-d2ae5ff0-7bf4-4daf-8784-83b642d7dd6b'
+curl --location --request GET '<overload-host>:3030/test/stop/demo-test-d2ae5ff0-7bf4-4daf-8784-83b642d7dd6b'
 ```
+
+## Monitoring
+Overload exposes details data on QPS, assertion result, etc through prometheus. For details please check [here](https://eipi1.github.io/overload/monitoring.html)
 
 License: MIT
