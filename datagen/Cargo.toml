@@ -39,3 +39,5 @@ version = "0.4"
 [dev-dependencies.assert-json-diff]
 version = "2.0"
 
+[dev-dependencies.env_logger]
+version = "0.10"

@@ -1,0 +1,140 @@
+{
+  "request": {
+    "duration": 10,
+    "name": "test-assertion",
+    "qps": {
+      "ConstantRate": {
+        "countPerSec": 3
+      }
+    },
+    "req": {
+      "RandomDataRequest": {
+        "url": "/anything",
+        "method": "POST",
+        "bodySchema": {
+          "title": "Person",
+          "type": "object",
+          "properties": {
+            "firstName": {
+              "type": "string",
+              "description": "The person's first name."
+            },
+            "lastName": {
+              "type": "string",
+              "description": "The person's last name."
+            },
+            "age": {
+              "description": "Age in years which must be equal to or greater than zero.",
+              "type": "integer",
+              "minimum": 10,
+              "maximum": 20
+            },
+            "objArrayKeys": {
+              "type": "array",
+              "maxLength": 20,
+              "minLength": 10,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "objKey1": {
+                    "type": "integer",
+                    "minimum": 10,
+                    "maximum": 1000
+                  },
+                  "objKey2": {
+                    "type": "string",
+                    "pattern": "^a[0-9]{4}z$"
+                  }
+                }
+              }
+            },
+            "scalarArray": {
+              "type": "array",
+              "maxLength": 20,
+              "minLength": 20,
+              "items": {
+                "type": "string",
+                "pattern": "^a[0-9]{4}z$"
+              }
+            }
+          }
+        }
+      }
+    },
+    "target": {
+      "host": "127.0.0.1",
+      "port": 2080,
+      "protocol": "HTTP"
+    },
+    "concurrentConnection": {
+      "ConstantRate": {
+        "countPerSec": 3
+      }
+    },
+    "responseAssertion": {
+      "luaAssertion": [
+        "function(method, url, reqBody, respBody)",
+        "result = {}",
+        "print('inside lua')",
+        "jsonReq = json.decode(reqBody)",
+        "if jsonReq.objArrayKeys == nil then",
+        "local err={}",
+        "err.id=1",
+        "err.success=false",
+        "err.error='objArrayKeys not found'",
+        "table.insert(result,err)",
+        "return result",
+        "end",
+        "local obj = jsonReq.objArrayKeys",
+        "local len = #obj",
+        "if len < 10 and len > 20 then",
+        "local err={}",
+        "err.id=2",
+        "err.success=false",
+        "err.error='wrong array length for jsonReq.objArrayKeys '..len",
+        "table.insert(result,err)",
+        "end",
+        "obj = jsonReq.scalarArray",
+        "len = #obj",
+        "if len ~= 20 then",
+        "local err={}",
+        "err.id=3",
+        "err.success=false",
+        "err.error='wrong array length for jsonReq.scalarArray '..len",
+        "table.insert(result,err)",
+        "end",
+        "for k,v in pairs(jsonReq.objArrayKeys) do",
+        "local key1 = v.objKey1",
+        "if key1 <10 and key1 >1000 then",
+        "local err={}",
+        "err.id=4",
+        "err.success=false",
+        "err.error='value out of range '..key1",
+        "table.insert(result,err)",
+        "end",
+        "local key2 = v.objKey2",
+        "if key2 == nil then",
+        "local err={}",
+        "err.id=5",
+        "err.success=false",
+        "err.error='no value for objKey2'",
+        "table.insert(result,err)",
+        "end",
+        "end",
+        "return result",
+        "end"
+      ]
+    }
+  },
+  "expectation": {
+    "qps": [3,3,3,3,3,3,3,3,3,3],
+    "assertionFailure": {
+      "1": [0,0,0,0,0,0,0,0,0,0],
+      "2": [0,0,0,0,0,0,0,0,0,0],
+      "3": [0,0,0,0,0,0,0,0,0,0],
+      "4": [0,0,0,0,0,0,0,0,0,0],
+      "5": [0,0,0,0,0,0,0,0,0,0],
+      "2147483647": [0,0,0,0,0,0,0,0,0,0]
+    }
+  }
+}

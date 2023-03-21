@@ -94,8 +94,8 @@ pub fn call_lua_func_from_registry(
         Ok(func) => func
             .call::<_, Vec<LuaAssertionResult>>((method, url, req_body, resp_body))
             .map_err(|e| {
-                error!("Error calling lua function: {}", e);
-                Vec::new()
+                error!("Error calling lua function: {}", &e);
+                vec![LuaAssertionResult::lua_error(e.to_string())]
             })
             .and_then(|r| if r.is_empty() { Ok(()) } else { Err(r) }),
         Err(e) => {

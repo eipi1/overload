@@ -30,6 +30,13 @@ mod tests {
     pub fn address() -> &'static str {
         "http://localhost:3030"
     }
+    fn target_host() -> &'static str {
+        "127.0.0.1"
+    }
+
+    fn target_port() -> u16 {
+        2080
+    }
 
     pub fn resource_dir() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/resources")
@@ -56,6 +63,7 @@ mod tests {
     #[case("test-assertion-fail-2.json")]
     #[case("test-assertion-fail.json")]
     #[case("test-generator-with-assertion.json")]
+    #[case("test-array-generator-with-assertion.json")]
     #[tokio::test]
     #[ignore]
     async fn test_scenarios_assertion(#[case] path: &str) {
@@ -96,7 +104,7 @@ mod tests {
             .and_then(|v| v.get_mut("file_name"))
             .map(|v| *v = Value::String(file_id));
 
-        let job_id = send_test_req_with_json(address(), request).await;
+        let job_id = send_test_req_with_json(address(), request.clone()).await;
 
         let duration = test_duration(&test_spec) as usize;
         let qps_expectation = qps_expectation(&test_spec);
@@ -115,12 +123,6 @@ mod tests {
         let file = tokio::fs::File::open(resource_dir().join(file_name))
             .await
             .unwrap();
-
-        // fn file_to_body(file: tokio::fs::File) -> Body {
-        //     let stream = FramedRead::new(file, BytesCodec::new());
-        //     let body = Body::wrap_stream(stream);
-        //     body
-        // }
 
         let client = reqwest::Client::new();
         let res = client
@@ -242,15 +244,24 @@ mod tests {
 
         let request = test_spec.get("request").unwrap();
 
-        let job_id = send_test_req_with_json(address, request).await;
+        let job_id = send_test_req_with_json(address, request.clone()).await;
         (test_spec, job_id)
     }
 
-    async fn send_test_req_with_json(address: &str, request: &Value) -> String {
+    fn set_target(request: &mut Value) {
+        let target = request.get_mut("target").unwrap();
+        let host = target.get_mut("host").unwrap();
+        *host = Value::String(target_host().to_string());
+        let port = target.get_mut("port").unwrap();
+        *port = Value::Number(target_port().into());
+    }
+
+    async fn send_test_req_with_json(address: &str, mut request: Value) -> String {
         let client = reqwest::Client::new();
+        set_target(&mut request);
         let res = client
             .post(format!("{}{}", address, TEST_PATH))
-            .json(request)
+            .json(&request)
             .send()
             .await
             .unwrap();
@@ -276,19 +287,6 @@ mod tests {
             assert!(range.contains(&(metrics_val as u64)));
         }
     }
-
-    // async fn get_metrics(job_id: &str) -> String {
-    //     let address = address();
-    //     get_all_metrics(address)
-    //         .await
-    //         .lines()
-    //         .filter(|m| m.contains(job_id))
-    //         .fold("".to_string(), |mut p, c| {
-    //             p.push('\n');
-    //             p.push_str(c);
-    //             p
-    //         })
-    // }
 
     async fn get_all_metrics() -> String {
         let address = address();
