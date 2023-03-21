@@ -16,7 +16,7 @@ Generate request with random data based on constraints specified using JSON Sche
 | string  | ✅         |
 | integer | ✅         |
 | object  | ✅         |
-| array   | ❎         |
+| array   | ✅         |
 | boolean | ❎         |
 | null    | ❎         |
 
@@ -57,8 +57,36 @@ Generate request with random data based on constraints specified using JSON Sche
           "age": {
             "description": "Age in years which must be equal to or greater than zero.",
             "type": "integer",
-            "minimum": 1,
-            "maximum": 100
+            "minimum": 10,
+            "maximum": 20
+          },
+          "objArrayKeys": {
+            "type": "array",
+            "maxLength": 20,
+            "minLength": 10,
+            "items": {
+              "type": "object",
+              "properties": {
+                "objKey1": {
+                  "type": "integer",
+                  "minimum": 10,
+                  "maximum": 1000
+                },
+                "objKey2": {
+                  "type": "string",
+                  "pattern": "^a[0-9]{4}z$"
+                }
+              }
+            }
+          },
+          "scalarArray": {
+            "type": "array",
+            "maxLength": 20,
+            "minLength": 20,
+            "items": {
+              "type": "string",
+              "pattern": "^a[0-9]{4}z$"
+            }
           }
         }
       },
