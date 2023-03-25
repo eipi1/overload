@@ -210,6 +210,7 @@ impl QueuePool {
         count: i64,
         metrics: Arc<Metrics>,
     ) {
+        debug!("Adding {} new connections", count);
         metrics.pool_connection_attempt(count as u64);
         let mut futures = FuturesUnordered::new();
         for _ in 0..count {
@@ -223,7 +224,7 @@ impl QueuePool {
             }
         }
         let len = conn.len();
-        debug!("Adding {} new connections", len);
+        debug!("Added {} new connections", len);
         metrics.pool_connection_success(len as u64);
         metrics.pool_connection_idle(len as f64);
         new_connections.write().await.append(&mut conn);

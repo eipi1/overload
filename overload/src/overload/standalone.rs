@@ -1,4 +1,4 @@
-use crate::{job_id, Response};
+use crate::{job_id, pre_check, Response};
 use cluster_executor::{get_status_all, get_status_by_job_id, JobStatus};
 use log::error;
 use overload_http::{GenericError, GenericResponse, JobStatusQueryParams, MultiRequest, Request};
@@ -8,6 +8,9 @@ pub async fn handle_request(request: Request) -> Response {
     let mut request = request;
     let job_id = job_id(&request.name);
     request.name = Some(job_id.clone());
+    if let Err(e) = pre_check(&request) {
+        return Response::new(job_id, JobStatus::Error(e));
+    }
     tokio::spawn(cluster_executor::standalone::handle_request(request));
     Response::new(job_id, JobStatus::Starting)
 }
@@ -18,6 +21,9 @@ pub async fn handle_multi_request(requests: MultiRequest) -> Response {
     for (idx, mut request) in requests.requests.into_iter().enumerate() {
         let job_id_for_req = format!("{}_{}", &job_id, idx);
         request.name = Some(job_id_for_req);
+        if let Err(e) = pre_check(&request) {
+            return Response::new(job_id, JobStatus::Error(e));
+        }
         tokio::spawn(cluster_executor::standalone::handle_request(request));
     }
     Response::new(job_id, JobStatus::Starting)

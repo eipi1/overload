@@ -85,6 +85,8 @@ pub enum ErrorCode {
     SecondaryClusterNode,
     RequestFileNotFound,
     LuaParseFailure,
+    BodyGenerationFailure,
+    UriParamGenerationFailure,
     Others,
 }
 

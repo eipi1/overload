@@ -1,0 +1,54 @@
+{
+  "request": {
+    "duration": 60,
+    "name": "error-wrong-constraint",
+    "qps": {
+      "ConstantRate": {
+        "countPerSec": 2
+      }
+    },
+    "req": {
+      "RandomDataRequest": {
+        "bodySchema": {
+          "type": "object",
+          "properties": {
+            "objectArray": {
+              "type": "array",
+              "maxLength": 1,
+              "minLength": 2,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "key1": {
+                    "type": "integer",
+                    "minimum": 100000,
+                    "maximum": 200000
+                  },
+                  "key2": {
+                    "type": "string",
+                    "pattern": "^a[0-9]{4}z$"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "method": "POST",
+        "url": "/anything"
+      }
+    },
+    "target": {
+      "host": "100.117.200.126",
+      "port": 80,
+      "protocol": "HTTP"
+    },
+    "concurrentConnection": {
+      "ConstantRate": {
+        "countPerSec": 1
+      }
+    }
+  },
+  "expectation": {
+    "errorContains": "minLength > maxLength"
+  }
+}
