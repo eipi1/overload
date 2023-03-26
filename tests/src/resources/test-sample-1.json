@@ -1,7 +1,7 @@
 {
   "request": {
     "duration": 10,
-    "name": "test-assertion",
+    "name": "test-sample-1",
     "qps": {
       "ConstantRate": {
         "countPerSec": 3

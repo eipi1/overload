@@ -238,6 +238,7 @@ async fn init_connection_pool(target: &Target, job_id: String) -> Option<(QueueP
         };
         if let Some(rx) = pool_usage_notification_rx {
             let mut rx = rx;
+            // 9_700 => almost 10 seconds. Why chose 10? - because primary retries after 10 secs
             let result = timeout(Duration::from_millis(9_700), async {
                 loop {
                     // this loop isn't necessary. added to breakdown time only for debugging purpose
@@ -245,7 +246,7 @@ async fn init_connection_pool(target: &Target, job_id: String) -> Option<(QueueP
                         match notification {
                             Ok(_) => break Ok(()),
                             Err(e) => {
-                                error!("Error from notification receiver: {}", e);
+                                error!("Error from pool notification receiver: {}", e);
                                 break Err(());
                             }
                         }
@@ -255,7 +256,7 @@ async fn init_connection_pool(target: &Target, job_id: String) -> Option<(QueueP
                 }
             })
             .await;
-            if result.is_err() {
+            if result.is_err() || result.unwrap().is_err() {
                 error!("pool not found within limit, no request will be sent, returning");
                 //return tx back to container
                 CONNECTION_POOLS_USAGE_LISTENER

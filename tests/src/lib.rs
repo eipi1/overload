@@ -118,6 +118,44 @@ mod tests {
         }
     }
 
+    #[rstest]
+    #[case("error-lua-parse-failure.json")]
+    #[case("error-no-file.json")]
+    #[case("error-wrong-constraint.json")]
+    #[tokio::test]
+    #[ignore]
+    async fn test_error_requests(#[case] path: &str) {
+        // let path = "error-wrong-constraint.json";
+        init_logger();
+
+        let address = address();
+        let resource_dir = resource_dir();
+        println!("{:?},{:?},{:?}", path, address, resource_dir);
+        let path = resource_dir.join(path);
+        let mut test_spec = serde_json::from_reader::<_, Value>(File::open(path).unwrap()).unwrap();
+
+        let request = test_spec.get_mut("request").unwrap();
+
+        let client = reqwest::Client::new();
+        set_target(request);
+        let resp = client
+            .post(format!("{}{}", address, TEST_PATH))
+            .json(&request)
+            .send()
+            .await
+            .unwrap();
+        let resp = resp.text().await.unwrap();
+        info!("text resp: {}", &resp);
+        let error = test_spec
+            .get("expectation")
+            .unwrap()
+            .get("errorContains")
+            .unwrap()
+            .as_str()
+            .unwrap();
+        assert!(resp.contains(error));
+    }
+
     async fn upload_file(file_name: &str) -> String {
         let address = address();
         let file = tokio::fs::File::open(resource_dir().join(file_name))

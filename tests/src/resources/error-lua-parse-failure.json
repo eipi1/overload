@@ -1,41 +1,39 @@
 {
   "request": {
-    "duration": 10,
-    "name": "test-assertion-fail-2",
+    "duration": 60,
+    "name": "error-lua-parse-failure",
     "qps": {
       "ConstantRate": {
-        "countPerSec": 3
+        "countPerSec": 2
       }
     },
     "req": {
       "RequestList": {
         "data": [
           {
-            "method": "POST",
-            "url": "/anything",
+            "method": "GET",
+            "url": "/get",
             "headers": {
               "Host": "127.0.0.1:2080",
-              "Connection":"keep-alive",
-              "Content-type": "application/json"
-            },
-            "body": "{\"keys\":[\"0001\",\"0002\",\"0004\"]}"
+              "Connection":"keep-alive"
+            }
           }
         ]
       }
     },
     "target": {
-      "host": "127.0.0.1",
-      "port": 2080,
+      "host": "100.117.200.126",
+      "port": 80,
       "protocol": "HTTP"
     },
     "concurrentConnection": {
       "ConstantRate": {
-        "countPerSec": 3
+        "countPerSec": 1
       }
     },
     "responseAssertion": {
       "luaAssertion": [
-        "function (method, url, reqBody, respBody)",
+        "function x(method, url, reqBody, respBody)",
         "result ={}",
         "print('inside lua')",
         "if method~='POST' then",
@@ -47,14 +45,25 @@
         "end",
         "jsonReq=json.decode(reqBody)",
         "jsonResp=json.decode(respBody)",
-        "for k,v in pairs(jsonReq.keys) do",
-        "if jsonResp.json.keys[k] ~= v then",
+        "if jsonResp.json.firstName == nil then",
         "local err={}",
         "err.id=2",
         "err.success=false",
-        "err.error='invalid value '..jsonResp.json.keys[k]..' at '..k",
+        "err.error='firstName not found'",
         "table.insert(result,err)",
         "end",
+        "if jsonResp.json..age == nil then",
+        "local err={}",
+        "err.id=3",
+        "err.success=false",
+        "err.error='age not found'",
+        "table.insert(result,err)",
+        "elseif jsonResp.json.age > 20 or jsonResp.json.age < 10 then",
+        "local err={}",
+        "err.id=4",
+        "err.success=false",
+        "err.error='age out of range: '..jsonResp.json.age",
+        "table.insert(result,err)",
         "end",
         "return result",
         "end"
@@ -62,10 +71,6 @@
     }
   },
   "expectation": {
-    "qps": [3,3,3,3,3,3,3,3,3,3],
-    "assertionFailure": {
-      "2": [0,0,0,0,0,0,0,0,0,0],
-      "2147483647": [0,0,0,0,0,0,0,0,0,0]
-    }
+    "errorContains": "LuaParseFailure"
   }
 }

@@ -1,11 +1,10 @@
 {
-  "dataFileName": "file-data-1.csv",
   "request": {
-    "duration": 10,
-    "name": "test-with-file-data",
+    "duration": 60,
+    "name": "error-no-file",
     "qps": {
       "ConstantRate": {
-        "countPerSec": 3
+        "countPerSec": 2
       }
     },
     "req": {
@@ -14,17 +13,17 @@
       }
     },
     "target": {
-      "host": "127.0.0.1",
-      "port": 2080,
+      "host": "100.117.200.126",
+      "port": 80,
       "protocol": "HTTP"
     },
     "concurrentConnection": {
       "ConstantRate": {
-        "countPerSec": 3
+        "countPerSec": 1
       }
     }
   },
   "expectation": {
-    "qps": [3,3,3,3,3,3,3,3,3,3]
+    "errorContains": "RequestFileNotFound"
   }
 }

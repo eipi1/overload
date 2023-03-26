@@ -1,7 +1,7 @@
 {
   "request": {
     "duration": 10,
-    "name": "test-assertion",
+    "name": "test-array-generator-with-assertion",
     "qps": {
       "ConstantRate": {
         "countPerSec": 3

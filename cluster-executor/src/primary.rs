@@ -66,15 +66,18 @@ pub async fn handle_request(request: Request, cluster: Arc<Cluster>) {
             &job_id, qps, connection_count
         );
 
-        let result = send_rate_message_to_secondaries(&mut senders, qps, connection_count).await;
-        if let Err(e) = result {
-            //remove failed senders
-            for instance_id in e {
-                debug!(
-                    "[handle_request] - dropping sender to instance: {}",
-                    &instance_id
-                );
-                senders.remove(&instance_id);
+        if !senders.is_empty() {
+            let result =
+                send_rate_message_to_secondaries(&mut senders, qps, connection_count).await;
+            if let Err(e) = result {
+                //remove failed senders
+                for instance_id in e {
+                    debug!(
+                        "[handle_request] - dropping sender to instance: {}",
+                        &instance_id
+                    );
+                    senders.remove(&instance_id);
+                }
             }
         }
     }
