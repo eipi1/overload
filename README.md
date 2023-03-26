@@ -46,7 +46,7 @@ spec:
         app: overload
     spec:
       containers:
-        - image: ghcr.io/eipi1/overload:latest-standalone-snapshot
+        - image: ghcr.io/eipi1/overload:latest-cluster-snapshot
           imagePullPolicy: "IfNotPresent"
           name: overload
           ports:
@@ -87,7 +87,7 @@ spec:
 The following request will send two `GET` request per second(`"countPerSec": 2`) to `httpbin.org/get` for 120
 seconds(`"duration": 60`).
 ```shell
-curl --location --request POST '<overload-host>:3030/test' \
+curl --location --request POST '{overload-host}:3030/test' \
 --header 'Content-Type: application/json' \
 --data-raw '<json_request_body>'
 ```
@@ -107,7 +107,6 @@ Sample JSON request body -
     "RequestList": {
       "data": [
         {
-          "body": null,
           "method": "GET",
           "url": "/get"
         }
@@ -134,11 +133,11 @@ We'll need the `job_id` if we want to stop the test later.
 
 ### Get job status
 ```shell
-curl --location --request GET '<overload-host>:3030/test/status/'
+curl --location --request GET '{overload-host}:3030/test/status/'
 ```
 ### Stop a job
 ```shell
-curl --location --request GET '<overload-host>:3030/test/stop/demo-test-d2ae5ff0-7bf4-4daf-8784-83b642d7dd6b'
+curl --location --request GET '{overload-host}:3030/test/stop/demo-test-d2ae5ff0-7bf4-4daf-8784-83b642d7dd6b'
 ```
 
 ## Monitoring
