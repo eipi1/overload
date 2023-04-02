@@ -107,6 +107,7 @@ pub(crate) enum MessageFromPrimary {
     Metadata(Metadata),
     Request(Request),
     Rates(RateMessage),
+    Reset,
     Stop,
     Finished,
 }
@@ -191,6 +192,14 @@ impl Into<RequestGenerator> for Request {
                 Box::new(req)
             }
             RequestSpecEnum::RandomDataRequest(req) => Box::new(req),
+            RequestSpecEnum::SplitRequestFile(mut req) => {
+                //todo why rename here?
+                // req.file_name = format!("{}/{}.sqlite", data_dir(), &req.file_name);
+                let mut path = data_dir_path().join(&req.file_name);
+                path.set_extension("sqlite");
+                req.file_name = path.to_str().unwrap().to_string();
+                Box::new(req)
+            }
         };
 
         let connection_rate = if let Some(connection_rate_spec) = self.concurrent_connection {
@@ -539,6 +548,20 @@ pub(crate) async fn init_sender(
         .send(MessageFromPrimary::Metadata(Metadata { primary_host }))
         .await?;
     sender.send(MessageFromPrimary::Request(request)).await
+}
+
+#[inline(always)]
+pub(crate) async fn send_metadata(
+    primary_host: String,
+    senders: &mut HashMap<String, Sender<MessageFromPrimary>>,
+) {
+    for sender in senders.values_mut() {
+        let _ = sender
+            .send(MessageFromPrimary::Metadata(Metadata {
+                primary_host: primary_host.clone(),
+            }))
+            .await;
+    }
 }
 
 async fn send_end_msg(sender: &mut Sender<MessageFromPrimary>, stop: bool) {

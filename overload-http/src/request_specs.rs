@@ -28,7 +28,7 @@ pub struct RequestFile {
     #[serde(skip)]
     pub inner: Option<SqliteConnection>,
     #[serde(skip)]
-    #[serde(default = "default_request_file_size")]
+    #[serde(default = "default_usize_max")]
     pub size: usize,
 }
 
@@ -37,7 +37,7 @@ impl RequestFile {
         RequestFile {
             file_name,
             inner: None,
-            size: default_request_file_size(),
+            size: default_usize_max(),
         }
     }
 }
@@ -45,6 +45,49 @@ impl RequestFile {
 impl Clone for RequestFile {
     fn clone(&self) -> Self {
         RequestFile::new(self.file_name.clone())
+    }
+}
+
+/// Test request with file data
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SplitRequestFile {
+    pub file_name: String,
+    #[serde(skip)]
+    pub inner: Option<SqliteConnection>,
+    #[serde(skip)]
+    #[serde(default = "default_usize_max")]
+    pub size: usize,
+    #[serde(default = "default_split_range")]
+    pub range_start_inclusive: usize,
+    #[serde(default = "default_split_range")]
+    pub range_end_inclusive: usize,
+    #[serde(default = "default_split_range")]
+    pub next_read_cursor: usize,
+}
+
+impl SplitRequestFile {
+    pub fn clone_with_new_range(&self, range: (usize, usize)) -> SplitRequestFile {
+        Self {
+            file_name: self.file_name.clone(),
+            inner: None,
+            size: self.size,
+            range_start_inclusive: range.0,
+            range_end_inclusive: range.1,
+            next_read_cursor: range.0,
+        }
+    }
+}
+
+impl Clone for SplitRequestFile {
+    fn clone(&self) -> Self {
+        Self {
+            file_name: self.file_name.clone(),
+            inner: None,
+            size: self.size,
+            range_start_inclusive: self.range_start_inclusive,
+            range_end_inclusive: self.range_end_inclusive,
+            next_read_cursor: self.next_read_cursor,
+        }
     }
 }
 
@@ -130,6 +173,9 @@ impl RandomDataRequest {
     }
 }
 
-fn default_request_file_size() -> usize {
-    999
+fn default_split_range() -> usize {
+    0
+}
+fn default_usize_max() -> usize {
+    2147483647 //i32::max
 }

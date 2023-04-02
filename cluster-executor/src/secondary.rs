@@ -104,14 +104,14 @@ async fn handle_connection_from_primary(
 
     //the second message secondary receive from primary should be request message
     let mut request = check_for_request_msg(&mut rx).await?;
-    trace!("[handle_connection_from_primary] - {:?}", &request);
+    info!("[handle_connection_from_primary] - {:?}", &request);
 
     let job_id = job_id(&request.name);
     let buckets = request.histogram_buckets.clone();
     let metrics = metrics_factory
         .metrics_with_buckets(buckets.to_vec(), &job_id)
         .await;
-    let init = prepare(&mut request, metadata.primary_host);
+    let init = prepare(&mut request, metadata.primary_host.clone());
     init.await?;
 
     let (mut queue_pool, tx) = init_connection_pool(&request.target, job_id.clone())
@@ -123,6 +123,8 @@ async fn handle_connection_from_primary(
     let mut stop = false;
     let mut finish = false;
     let mut error_exit = false;
+    let mut reset = false;
+
     let mut prev_connection_count = 0;
     let mut time_offset: i128 = 0;
     let response_assertion = Arc::new(request.response_assertion.unwrap_or_default());
@@ -147,41 +149,59 @@ async fn handle_connection_from_primary(
                 error_exit = true;
                 break;
             }
-            Ok(msg) => match msg {
-                None => {
-                    debug!("[handle_connection_from_primary] - None received, exiting loop");
-                    break;
+            Ok(msg) => {
+                match msg {
+                    None => {
+                        debug!("[handle_connection_from_primary] - None received, exiting loop");
+                        break;
+                    }
+                    Some(msg) => match msg {
+                        MessageFromPrimary::Metadata(_) => {
+                            error!("[handle_connection_from_primary] - [{}] - unexpected MessageFromPrimary::Request", &job_id);
+                        }
+                        MessageFromPrimary::Rates(rate) => {
+                            trace!("[handle_connection_from_primary] - {:?}", &rate);
+                            (prev_connection_count, time_offset) = handle_rate_msg(
+                                rate,
+                                prev_connection_count,
+                                &metrics,
+                                time_offset,
+                                job_id.clone(),
+                                &mut queue_pool,
+                                &mut request_spec,
+                                response_assertion.clone(),
+                                lua_executor_sender.clone(),
+                            )
+                            .await;
+                        }
+                        MessageFromPrimary::Stop => {
+                            stop = true;
+                            break;
+                        }
+                        MessageFromPrimary::Finished => {
+                            finish = true;
+                            stop = true;
+                            break;
+                        }
+                        MessageFromPrimary::Reset => {
+                            info!(
+                                "[handle_connection_from_primary] - [{}] - reset received",
+                                &job_id
+                            );
+                            reset = true;
+                        }
+                        MessageFromPrimary::Request(mut req) => {
+                            if !reset {
+                                error!("[handle_connection_from_primary] - [{}] - unexpected message - {:?}", &job_id, req);
+                            }
+                            info!("[handle_connection_from_primary] - [{}] - reset - new request - {:?}", &job_id, &req);
+                            prepare(&mut req, metadata.primary_host.clone()).await?;
+                            request_spec = req.req;
+                            reset = false;
+                        }
+                    },
                 }
-                Some(msg) => match msg {
-                    MessageFromPrimary::Request(_) | MessageFromPrimary::Metadata(_) => {
-                        error!("[handle_connection_from_primary] - [{}] - unexpected MessageFromPrimary::Request", &job_id);
-                    }
-                    MessageFromPrimary::Rates(rate) => {
-                        trace!("[handle_connection_from_primary] - {:?}", &rate);
-                        (prev_connection_count, time_offset) = handle_rate_msg(
-                            rate,
-                            prev_connection_count,
-                            &metrics,
-                            time_offset,
-                            job_id.clone(),
-                            &mut queue_pool,
-                            &mut request_spec,
-                            response_assertion.clone(),
-                            lua_executor_sender.clone(),
-                        )
-                        .await;
-                    }
-                    MessageFromPrimary::Stop => {
-                        stop = true;
-                        break;
-                    }
-                    MessageFromPrimary::Finished => {
-                        finish = true;
-                        stop = true;
-                        break;
-                    }
-                },
-            },
+            }
         }
     }
     // #[cfg(feature = "cluster")]
@@ -600,6 +620,7 @@ async fn get_requests(
         RequestSpecEnum::RequestList(req) => req.get_n(count),
         RequestSpecEnum::RequestFile(req) => req.get_n(count),
         RequestSpecEnum::RandomDataRequest(req) => req.get_n(count),
+        RequestSpecEnum::SplitRequestFile(req) => req.get_n(count),
     }
     .await
 }
@@ -646,7 +667,15 @@ pub(crate) fn initiator_for_request_from_primary(
             download_request_file_from_primary(format!("{}.sqlite", &file_name), primary_uri)
                 .boxed()
         }
-        _ => noop().boxed(),
+        RequestSpecEnum::SplitRequestFile(req) => {
+            let file_name = req.file_name.clone();
+            let mut path = data_dir_path().join(&file_name);
+            path.set_extension("sqlite");
+            req.file_name = path.to_str().unwrap().to_string();
+            download_request_file_from_primary(format!("{}.sqlite", &file_name), primary_uri)
+                .boxed()
+        }
+        RequestSpecEnum::RandomDataRequest(_) | RequestSpecEnum::RequestList(_) => noop().boxed(),
     };
 }
 

@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod tests {
     use env_logger::Env;
+    use httpmock::Method::GET;
     use log::info;
     use reqwest::{Body, Url};
     use rstest::rstest;
@@ -12,6 +13,7 @@ mod tests {
     use std::str::FromStr;
     use std::sync::Once;
     use std::time::Duration;
+    use tokio::sync::OnceCell;
     use tokio::time::sleep;
 
     pub static TEST_PATH: &str = "/test";
@@ -21,17 +23,19 @@ mod tests {
     static ONCE: Once = Once::new();
     fn init_logger() {
         ONCE.call_once(|| {
-            env_logger::Builder::from_env(Env::default().default_filter_or("info"))
+            env_logger::Builder::from_env(Env::default().default_filter_or("trace"))
                 .format_timestamp_millis()
                 .init();
         });
     }
 
     pub fn address() -> &'static str {
-        "http://localhost:3030"
+        // "http://localhost:3030"
+        "http://10.152.183.175:3030"
     }
     fn target_host() -> &'static str {
-        "127.0.0.1"
+        // "127.0.0.1"
+        "172.17.0.1"
     }
 
     fn target_port() -> u16 {
@@ -43,7 +47,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
+    // #[ignore]
     async fn test_scenarios_1() {
         let path = "test-assertion.json";
         init_logger();
@@ -65,7 +69,7 @@ mod tests {
     #[case("test-generator-with-assertion.json")]
     #[case("test-array-generator-with-assertion.json")]
     #[tokio::test]
-    #[ignore]
+    // #[ignore]
     async fn test_scenarios_assertion(#[case] path: &str) {
         // let path = "test-generator-with-assertion.json";
         init_logger();
@@ -85,7 +89,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
+    // #[ignore]
     async fn test_scenarios_file_data() {
         let path = "test-with-file-data.json";
         init_logger();
@@ -123,7 +127,7 @@ mod tests {
     #[case("error-no-file.json")]
     #[case("error-wrong-constraint.json")]
     #[tokio::test]
-    #[ignore]
+    // #[ignore]
     async fn test_error_requests(#[case] path: &str) {
         // let path = "error-wrong-constraint.json";
         init_logger();
@@ -183,6 +187,80 @@ mod tests {
         file_id.to_string()
     }
 
+    #[tokio::test]
+    // #[ignore]
+    async fn test_scenarios_split_file_data() {
+        let path = "test-with-split-file-data-2.json";
+        init_logger();
+
+        let (mock_server, url) = ASYNC_ONCE_HTTP_MOCK.get_or_init(init_http_mock).await;
+        println!("url - {:?}", &url);
+
+        let mut mocks = Vec::with_capacity(20);
+
+        for i in 0..20 {
+            let mock = mock_server.mock(|when, then| {
+                when.method(GET).path(format!("/split/file/{i}"));
+                then.status(200)
+                    .header("content-type", "application/json")
+                    .header("Connection", "keep-alive")
+                    .body(r#"{"hello": "world"}"#);
+            });
+            mocks.push(mock);
+        }
+
+        let path = resource_dir().join(path);
+        let mut test_spec = serde_json::from_reader::<_, Value>(File::open(path).unwrap()).unwrap();
+
+        let file_name = test_spec.get("dataFileName").unwrap().as_str().unwrap();
+        let file_id = upload_file(file_name).await;
+
+        let request = test_spec.get_mut("request").unwrap();
+
+        let _ = request
+            .get_mut("req")
+            .and_then(|v| v.get_mut("SplitRequestFile"))
+            .and_then(|v| v.get_mut("file_name"))
+            .map(|v| *v = Value::String(file_id));
+
+        // set_target_to(request, url.host_str().unwrap().to_string(), url.port().unwrap());
+
+        let job_id = send_test_req_with_json_target(
+            address(),
+            request.clone(),
+            target_host().to_string(),
+            url.port().unwrap(),
+        )
+        .await;
+
+        let duration = test_duration(&test_spec) as usize;
+        // let qps_expectation = qps_expectation(&test_spec);
+        //
+        sleep(Duration::from_secs(1)).await;
+        // for i in 1..duration - 1 {
+        //     assert_request_count(i, &job_id, &qps_expectation).await;
+        //     // assert_assertion_failure_count(i,&job_id, &failure_expectation).await;
+        //     sleep(Duration::from_secs(1)).await;
+        // }
+
+        sleep(Duration::from_secs(duration as u64)).await;
+        info!("{}", mocks.first().unwrap().hits_async().await);
+        info!("{}", mocks.get(1).unwrap().hits_async().await);
+        info!("{}", mocks.get(2).unwrap().hits_async().await);
+        assert_eq!(mocks.first().unwrap().hits_async().await, 10);
+        assert_eq!(mocks.get(1).unwrap().hits_async().await, 10);
+        assert_eq!(mocks.get(2).unwrap().hits_async().await, 10);
+    }
+
+    pub async fn init_http_mock() -> (httpmock::MockServer, url::Url) {
+        let mock_server = httpmock::MockServer::connect_async("localhost:3080").await;
+        let url = url::Url::parse(&mock_server.base_url()).unwrap();
+        (mock_server, url)
+    }
+
+    pub static ASYNC_ONCE_HTTP_MOCK: OnceCell<(httpmock::MockServer, url::Url)> =
+        OnceCell::const_new();
+
     async fn assert_request_count(i: usize, job_id: &str, qps_expectation: &[u64]) {
         let metrics = get_all_metrics().await;
         let metrics = filter_metrics(metrics, "upstream_request_count");
@@ -240,7 +318,7 @@ mod tests {
                     })
                     .collect::<HashMap<_, _>>()
             })
-            .unwrap()
+            .unwrap_or_default()
     }
 
     fn filter_metrics(metrics: String, filter: &str) -> String {
@@ -287,16 +365,32 @@ mod tests {
     }
 
     fn set_target(request: &mut Value) {
-        let target = request.get_mut("target").unwrap();
-        let host = target.get_mut("host").unwrap();
-        *host = Value::String(target_host().to_string());
-        let port = target.get_mut("port").unwrap();
-        *port = Value::Number(target_port().into());
+        let host = target_host().to_string();
+        let port = target_port();
+        set_target_to(request, host, port);
     }
 
-    async fn send_test_req_with_json(address: &str, mut request: Value) -> String {
+    fn set_target_to(request: &mut Value, host: String, port: u16) {
+        let target = request.get_mut("target").unwrap();
+        let host_val = target.get_mut("host").unwrap();
+        *host_val = Value::String(host);
+        let port_val = target.get_mut("port").unwrap();
+        *port_val = Value::Number(port.into());
+    }
+
+    async fn send_test_req_with_json(address: &str, request: Value) -> String {
+        send_test_req_with_json_target(address, request, target_host().to_string(), target_port())
+            .await
+    }
+
+    async fn send_test_req_with_json_target(
+        address: &str,
+        mut request: Value,
+        host: String,
+        port: u16,
+    ) -> String {
+        set_target_to(&mut request, host, port);
         let client = reqwest::Client::new();
-        set_target(&mut request);
         let res = client
             .post(format!("{}{}", address, TEST_PATH))
             .json(&request)
@@ -330,8 +424,7 @@ mod tests {
         let address = address();
         let url = Url::from_str(address).unwrap().join(METRICS_PATH).unwrap();
         let client = reqwest::Client::new();
-        let metrics = client.get(url).send().await.unwrap().text().await.unwrap();
-        metrics
+        client.get(url).send().await.unwrap().text().await.unwrap()
     }
 
     pub fn get_value_for_metrics(metrics: &str) -> i64 {

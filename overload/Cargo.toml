@@ -180,8 +180,8 @@ version = "0.3"
 [dev-dependencies.base64]
 version = "0.13"
 
-[dev-dependencies.wiremock]
-version = "0.5"
+#[dev-dependencies.wiremock]
+#version = "0.5"
 
 [dev-dependencies.httpmock]
 version = "0.6"

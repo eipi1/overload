@@ -1,7 +1,8 @@
 mod rate_spec;
 mod request_specs;
+
 pub use rate_spec::{ArraySpec, Bounded, ConstantRate, Elastic, Linear, Steps};
-pub use request_specs::{RandomDataRequest, RequestFile, RequestList};
+pub use request_specs::{RandomDataRequest, RequestFile, RequestList, SplitRequestFile};
 
 use anyhow::Error as AnyError;
 use once_cell::sync::OnceCell;
@@ -47,6 +48,7 @@ pub struct Target {
 pub enum RequestSpecEnum {
     RequestList(RequestList),
     RequestFile(RequestFile),
+    SplitRequestFile(SplitRequestFile),
     RandomDataRequest(RandomDataRequest),
 }
 

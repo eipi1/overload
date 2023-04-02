@@ -1,13 +1,15 @@
+use crate::request_providers::RequestProvider;
 use crate::{
-    get_sender_for_host_port, init_sender, remoc_port_name, send_end_msg, JobStatus,
+    get_sender_for_host_port, init_sender, log_error, remoc_port_name, send_end_msg, JobStatus,
     MessageFromPrimary, RateMessage, RequestGenerator, JOB_STATUS, REMOC_PORT_NAME,
 };
 use cluster_mode::{Cluster, RestClusterNode};
 use log::{debug, error, info};
-use overload_http::Request;
+use overload_http::{Request, RequestSpecEnum};
 use remoc::rch::base::Sender;
 use rust_cloud_discovery::ServiceInstance;
-use std::collections::{HashMap, HashSet};
+use std::cmp::min;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio_stream::StreamExt;
@@ -53,8 +55,14 @@ pub async fn handle_request(request: Request, cluster: Arc<Cluster>) {
         // update secondary list every 10 seconds
         if counter == 10 {
             {
-                let request = request.clone();
-                init_senders(&mut senders, &cluster, request).await;
+                let req = request.clone();
+                let prev_len = senders.len();
+                init_senders(&mut senders, &cluster, req).await;
+                //check if need to reset request
+                if prev_len != senders.len() {
+                    let req = request.clone();
+                    reset_request(req, &mut senders).await;
+                }
             }
             counter = 0;
         } else {
@@ -90,6 +98,53 @@ pub async fn handle_request(request: Request, cluster: Arc<Cluster>) {
         .write()
         .await
         .insert(job_id, JobStatus::Completed);
+}
+
+async fn reset_request(
+    request: Request,
+    senders: &mut HashMap<String, Sender<MessageFromPrimary>>,
+) {
+    let request_ = request.clone();
+    if let RequestSpecEnum::SplitRequestFile(mut req) = request.req {
+        if req.get_n(1).await.is_ok() {
+            let req_data_size = req.size_hint();
+            let mut splits = split_ranges(req_data_size, senders.len());
+            info!("[reset_request] resetting secondaries");
+            for sender in senders.values_mut() {
+                let result = sender.send(MessageFromPrimary::Reset).await;
+                log_error!(result);
+                let mut request = request_.clone();
+                request.req = RequestSpecEnum::SplitRequestFile(
+                    req.clone_with_new_range(splits.pop_front().unwrap()),
+                );
+                let result = sender.send(MessageFromPrimary::Request(request)).await;
+                log_error!(result);
+            }
+        } else {
+            error!(
+                "[reset_request] - could not get the sample count from the file - {:?}",
+                &req
+            );
+        }
+    }
+}
+
+fn split_ranges(size: usize, split_size: usize) -> VecDeque<(usize, usize)> {
+    let block_size = size / split_size;
+    let remainder = size % split_size;
+    let mut splits = VecDeque::with_capacity(split_size);
+    let mut last_end = 0;
+    for _ in 0..remainder {
+        let new_end = min(size, last_end + block_size + 1);
+        splits.push_back((min(last_end + 1, size), new_end));
+        last_end = new_end;
+    }
+    for _ in remainder..split_size {
+        let new_end = min(size, last_end + block_size);
+        splits.push_back((min(last_end + 1, size), new_end));
+        last_end = new_end;
+    }
+    splits
 }
 
 /// Send rate message to secondaries.
@@ -162,6 +217,31 @@ async fn init_senders(
     if let Some(secondaries) = cluster.secondaries().await {
         let primary = cluster.get_service_instance().await.unwrap();
         init_senders_for_cluster_nodes(senders, &secondaries, &primary, request).await;
+        create_senders_for_cluster_nodes(senders, &secondaries).await;
+    }
+}
+
+async fn create_senders_for_cluster_nodes(
+    senders: &mut HashMap<String, Sender<MessageFromPrimary>>,
+    secondaries: &HashSet<RestClusterNode>,
+) {
+    for secondary in secondaries.iter() {
+        let instance_id = secondary
+            .service_instance()
+            .instance_id()
+            .as_ref()
+            .cloned()
+            .unwrap();
+        if senders.get(&instance_id).is_none() {
+            if let Some(sender) = get_sender_for_secondary(secondary).await {
+                senders.insert(instance_id.clone(), sender);
+            } else {
+                error!(
+                    "[create_senders_for_cluster_nodes] - error creating sender for instance [{}]",
+                    instance_id
+                )
+            }
+        }
     }
 }
 
@@ -211,7 +291,9 @@ pub(crate) async fn get_sender_for_secondary(
 
 #[cfg(test)]
 mod test {
-    use crate::primary::{get_sender_for_secondary, init_sender, send_rate_message_to_secondaries};
+    use crate::primary::{
+        get_sender_for_secondary, init_sender, send_rate_message_to_secondaries, split_ranges,
+    };
     use crate::test_common::{cluster_node, get_request, init};
     use crate::{log_error, MessageFromPrimary};
     use log::trace;
@@ -219,13 +301,43 @@ mod test {
     use remoc::rch::base::Receiver;
     use remoc::rtc::async_trait;
     use rust_cloud_discovery::{DiscoveryService, ServiceInstance};
-    use std::collections::HashMap;
+    use std::collections::{HashMap, VecDeque};
     use std::error::Error;
     use std::net::Ipv4Addr;
     use std::sync::mpsc::{channel, Receiver as StdReceiver, Sender as StdSender};
     use std::time::Duration;
     use tokio::net::TcpListener;
     use tokio::time::sleep;
+
+    #[test]
+    fn test_split_ranges() {
+        let verify = |splits: VecDeque<(usize, usize)>, end: usize, size: usize| {
+            println!("{:?}", splits);
+            assert_eq!(splits.len(), size);
+            let (_, e) = splits.back().unwrap();
+            assert_eq!(*e, end);
+            let (s, last_e) = splits.get(0).unwrap();
+            assert!(s <= last_e);
+            let mut last_e = *last_e;
+            for i in 1..splits.len() {
+                let (s, e) = splits.get(i).unwrap();
+                assert!(s <= e);
+                if end > size * 2 {
+                    assert_eq!(s - last_e, 1);
+                }
+                last_e = *e;
+            }
+        };
+        verify(split_ranges(10, 4), 10, 4);
+        verify(split_ranges(10, 3), 10, 3);
+        verify(split_ranges(11, 4), 11, 4);
+        verify(split_ranges(11, 3), 11, 3);
+        verify(split_ranges(1, 4), 1, 4);
+        verify(split_ranges(4, 4), 4, 4);
+        verify(split_ranges(7, 4), 7, 4);
+        verify(split_ranges(8, 4), 8, 4);
+        verify(split_ranges(9, 4), 9, 4);
+    }
 
     async fn start_tcp_listener_random_port() -> (TcpListener, u16) {
         let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0)).await.unwrap();
