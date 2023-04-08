@@ -162,10 +162,14 @@ impl RequestProvider for SplitRequestFile {
             if self.range_start_inclusive == 0 {
                 self.range_start_inclusive = 1;
                 self.next_read_cursor = 1;
+            } else {
+                self.next_read_cursor = self.range_start_inclusive;
             }
             if self.range_end_inclusive == 0 {
                 self.range_end_inclusive = self.size;
             }
+            trace!("[SplitRequestFile] - init - range_start_inclusive:{}, range_end_inclusive:{}, next_read_cursor:{}", 
+                self.range_start_inclusive, self.range_end_inclusive, self.next_read_cursor)
         }
 
         let mut data_need = n;
@@ -175,7 +179,10 @@ impl RequestProvider for SplitRequestFile {
                 break;
             }
             let start = self.next_read_cursor;
-            let end = min(self.range_end_inclusive, self.next_read_cursor + data_need);
+            let end = min(
+                self.range_end_inclusive + 1,
+                self.next_read_cursor + data_need,
+            );
             let data: Vec<HttpReq> = sqlx::query_as(
                 format!(
                     "SELECT ROWID, * FROM http_req WHERE ROWID >= {} and ROWID < {}",
@@ -187,7 +194,7 @@ impl RequestProvider for SplitRequestFile {
             .await?;
             data_need = max(data_need - data.len(), 0);
             request_data.extend(data);
-            self.next_read_cursor = end + 1;
+            self.next_read_cursor = end;
             if self.next_read_cursor > self.range_end_inclusive {
                 self.next_read_cursor = self.range_start_inclusive;
             }

@@ -15,18 +15,28 @@ use std::collections::HashMap;
 use std::error::Error as StdError;
 use std::fmt::{Display, Formatter};
 use std::io::Error as StdIoError;
+use std::path::PathBuf;
 use std::str::FromStr;
 use std::{env, fmt};
 
 pub const DEFAULT_HTTP_PORT: u16 = 3030;
 pub const ENV_NAME_HTTP_PORT: &str = "HTTP_ENDPOINT_PORT";
 pub static HTTP_PORT: OnceCell<u16> = OnceCell::new();
+pub const DEFAULT_DATA_DIR: &str = "/tmp";
+
+pub fn data_dir_path() -> PathBuf {
+    env::var("DATA_DIR")
+        .map(|env| PathBuf::from("/").join(env))
+        .unwrap_or_else(|_| PathBuf::from(DEFAULT_DATA_DIR))
+}
 
 pub fn http_port() -> u16 {
-    env::var(ENV_NAME_HTTP_PORT)
-        .map_err(|_| ())
-        .and_then(|port| u16::from_str(&port).map_err(|_| ()))
-        .unwrap_or(DEFAULT_HTTP_PORT)
+    *HTTP_PORT.get_or_init(|| {
+        env::var(ENV_NAME_HTTP_PORT)
+            .map_err(|_| ())
+            .and_then(|port| u16::from_str(&port).map_err(|_| ()))
+            .unwrap_or(DEFAULT_HTTP_PORT)
+    })
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -295,7 +305,7 @@ fn uuid() -> String {
 }
 
 pub const DEFAULT_HISTOGRAM_BUCKET: [f64; 6] = [20f64, 50f64, 100f64, 300f64, 700f64, 1100f64];
-pub const PATH_REQUEST_DATA_FILE_DOWNLOAD: &str = "/cluster/data-file";
+pub const PATH_REQUEST_DATA_FILE_DOWNLOAD: &str = "/cluster/data-file/";
 
 #[cfg(test)]
 mod test {

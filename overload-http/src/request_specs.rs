@@ -1,9 +1,9 @@
-use crate::HttpReq;
+use crate::{data_dir_path, HttpReq};
 // use anyhow::Result as AnyResult;
 use datagen::DataSchema;
 use http::Method;
 use regex::Regex;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use smol_str::SmolStr;
 use sqlx::SqliteConnection;
@@ -21,9 +21,20 @@ impl From<Vec<HttpReq>> for RequestList {
     }
 }
 
+fn file_name_deserializer<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let file_name: String = serde::de::Deserialize::deserialize(deserializer)?;
+    let mut path = data_dir_path().join(file_name);
+    path.set_extension("sqlite");
+    Ok(path.to_str().unwrap().to_string())
+}
+
 /// Test request with file data
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RequestFile {
+    #[serde(deserialize_with = "file_name_deserializer")]
     pub file_name: String,
     #[serde(skip)]
     pub inner: Option<SqliteConnection>,
@@ -51,6 +62,7 @@ impl Clone for RequestFile {
 /// Test request with file data
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SplitRequestFile {
+    #[serde(deserialize_with = "file_name_deserializer")]
     pub file_name: String,
     #[serde(skip)]
     pub inner: Option<SqliteConnection>,

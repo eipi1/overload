@@ -96,6 +96,9 @@ features = ["v4"]
 version = "0.8"
 features = ["lua53", "send", "serialize", "mlua_derive"]
 
+[dependencies.url]
+version = "2.3"
+
 [dev-dependencies.tracing-subscriber]
 version = "0.3"
 features = ["fmt", "env-filter"]

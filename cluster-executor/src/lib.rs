@@ -18,7 +18,7 @@ use hyper::Error;
 use lazy_static::lazy_static;
 use log::{error, info, trace};
 use once_cell::sync::OnceCell;
-use remoc::rch::base::{Receiver, SendError, Sender};
+use remoc::rch::base::{Receiver, Sender};
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpStream;
 use tokio::sync::RwLock;
@@ -32,6 +32,7 @@ use response_assert::{AssertionError, LuaAssertionResultSender, LuaExecSender, R
 
 use crate::rate_spec::RateScheme;
 use crate::request_providers::RequestProvider;
+use crate::split_request::process_and_send_request;
 
 mod connection;
 #[cfg(feature = "cluster")]
@@ -39,6 +40,7 @@ pub mod primary;
 mod rate_spec;
 mod request_providers;
 pub mod secondary;
+mod split_request;
 #[cfg(not(feature = "cluster"))]
 pub mod standalone;
 
@@ -183,23 +185,9 @@ impl Into<RequestGenerator> for Request {
         };
         let req: Box<dyn RequestProvider + Send> = match self.req {
             RequestSpecEnum::RequestList(req) => Box::new(req),
-            RequestSpecEnum::RequestFile(mut req) => {
-                //todo why rename here?
-                // req.file_name = format!("{}/{}.sqlite", data_dir(), &req.file_name);
-                let mut path = data_dir_path().join(&req.file_name);
-                path.set_extension("sqlite");
-                req.file_name = path.to_str().unwrap().to_string();
-                Box::new(req)
-            }
+            RequestSpecEnum::RequestFile(req) => Box::new(req),
             RequestSpecEnum::RandomDataRequest(req) => Box::new(req),
-            RequestSpecEnum::SplitRequestFile(mut req) => {
-                //todo why rename here?
-                // req.file_name = format!("{}/{}.sqlite", data_dir(), &req.file_name);
-                let mut path = data_dir_path().join(&req.file_name);
-                path.set_extension("sqlite");
-                req.file_name = path.to_str().unwrap().to_string();
-                Box::new(req)
-            }
+            RequestSpecEnum::SplitRequestFile(req) => Box::new(req),
         };
 
         let connection_rate = if let Some(connection_rate_spec) = self.concurrent_connection {
@@ -537,30 +525,53 @@ async fn get_sender_for_host_port(port: u16, host: &str) -> Option<Sender<Messag
     Some(tx)
 }
 
-/// Sends messages requires for initialization
-#[inline(always)]
-pub(crate) async fn init_sender(
-    request: Request,
-    primary_host: String,
-    sender: &mut Sender<MessageFromPrimary>,
-) -> Result<(), SendError<MessageFromPrimary>> {
-    sender
-        .send(MessageFromPrimary::Metadata(Metadata { primary_host }))
-        .await?;
-    sender.send(MessageFromPrimary::Request(request)).await
+#[cfg(feature = "cluster")]
+pub(crate) async fn send_metadata(
+    cluster: &cluster_mode::Cluster,
+    senders: &mut HashMap<String, Sender<MessageFromPrimary>>,
+    instances: &[String],
+) {
+    let primary_host = cluster.get_service_instance().await.unwrap();
+    let primary_host = primary_host.host().as_ref().unwrap().clone();
+    send_metadata_with_primary(&primary_host, senders, instances).await;
 }
 
-#[inline(always)]
-pub(crate) async fn send_metadata(
-    primary_host: String,
+pub(crate) async fn send_metadata_with_primary(
+    primary_host: &str,
     senders: &mut HashMap<String, Sender<MessageFromPrimary>>,
+    instances: &[String],
 ) {
-    for sender in senders.values_mut() {
+    for (_, sender) in senders.iter_mut().filter(|(id, _)| instances.contains(id)) {
         let _ = sender
             .send(MessageFromPrimary::Metadata(Metadata {
-                primary_host: primary_host.clone(),
+                primary_host: primary_host.to_string(),
             }))
             .await;
+    }
+}
+
+pub(crate) async fn send_request_to_secondary(
+    request: Request,
+    senders: &mut HashMap<String, Sender<MessageFromPrimary>>,
+) -> Result<(), Vec<&String>> {
+    if let RequestSpecEnum::SplitRequestFile(_) = request.req {
+        let request_ = request.clone();
+        process_and_send_request(request_, senders).await
+    } else {
+        let mut error_instances = vec![];
+        for (id, sender) in senders {
+            let request_ = request.clone();
+            let result = sender.send(MessageFromPrimary::Request(request_)).await;
+            if let Err(e) = result {
+                error!("[send_request_to_secondary] - error - {:?}", e);
+                error_instances.push(id);
+            }
+        }
+        if error_instances.is_empty() {
+            Ok(())
+        } else {
+            Err(error_instances)
+        }
     }
 }
 

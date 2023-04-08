@@ -1,6 +1,6 @@
 [package]
 name = "overload"
-version = "0.7.1"
+version = "0.8.0"
 authors = ["Md Sarowar Alam <sarowar.cse@gmail.com>"]
 edition = "2018"
 license = "MIT"
@@ -180,9 +180,6 @@ version = "0.3"
 [dev-dependencies.base64]
 version = "0.13"
 
-#[dev-dependencies.wiremock]
-#version = "0.5"
-
 [dev-dependencies.httpmock]
 version = "0.6"
 
@@ -206,3 +203,6 @@ version = "0.4"
 
 [features]
 cluster = ["rust-cloud-discovery", "cloud-discovery-kubernetes", "cluster-mode"]
+
+[profile.release]
+debug = true

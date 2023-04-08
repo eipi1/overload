@@ -1,6 +1,6 @@
 # `POST /test/requests-bin`
 
-Currently, supports CSV file only.
+Currently, supports CSV file only. Internally, application converts the uploaded file sqlite database.
 
 Curl sample
 

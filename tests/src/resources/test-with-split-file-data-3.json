@@ -1,8 +1,8 @@
 {
-  "dataFileName": "split-file-data-1.csv",
+  "dataFileName": "split-file-data-3.csv",
   "request": {
     "duration": 10,
-    "name": "test-with-split-file-data",
+    "name": "test-with-split-file-data-3",
     "qps": {
       "ConstantRate": {
         "countPerSec": 3
@@ -27,7 +27,12 @@
   "expectation": {
     "qps": [3,3,3,3,3,3,3,3,3,3],
     "mock": {
-      "0": 30
+      "0": 5,
+      "1": 5,
+      "2": 5,
+      "3": 5,
+      "4": 5,
+      "5": 5
     }
   }
 }

@@ -433,7 +433,7 @@ mod cluster_test {
     use hyper::Body;
     use log::info;
     use overload::file_uploader::csv_reader_to_sqlite;
-    use overload::{init, JobStatus, PATH_REQUEST_DATA_FILE_DOWNLOAD};
+    use overload::{init, JobStatus};
     use regex::Regex;
     use rust_cloud_discovery::DiscoveryService;
     use rust_cloud_discovery::ServiceInstance;
@@ -480,7 +480,8 @@ mod cluster_test {
             .method("POST")
             .uri(format!(
                 "http://127.0.0.1:3030{}/{}",
-                PATH_REQUEST_DATA_FILE_DOWNLOAD, filename
+                overload_http::PATH_REQUEST_DATA_FILE_DOWNLOAD,
+                filename
             ))
             .body(Body::empty())
             .expect("request builder");

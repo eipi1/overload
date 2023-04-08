@@ -28,7 +28,6 @@ pub mod standalone;
 
 pub const TEST_REQ_TIMEOUT: u8 = 30; // 30 sec hard timeout for requests to test target
 pub const DEFAULT_DATA_DIR: &str = "/tmp";
-pub const PATH_REQUEST_DATA_FILE_DOWNLOAD: &str = "/cluster/data-file";
 
 pub const PATH_JOB_STATUS: &str = "/test/status";
 pub const PATH_STOP_JOB: &str = "/test/stop";
@@ -104,8 +103,7 @@ pub(crate) fn pre_check(request: &Request) -> Result<(), ErrorCode> {
 #[inline(always)]
 #[allow(dead_code)]
 fn request_file_exists(file_name: &str) -> bool {
-    let mut path = cluster_executor::data_dir_path().join(file_name);
-    path.set_extension("sqlite");
+    let path = PathBuf::from(file_name);
     path.exists()
 }
 

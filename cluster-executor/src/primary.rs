@@ -1,15 +1,14 @@
-use crate::request_providers::RequestProvider;
+use crate::split_request::process_and_send_request;
 use crate::{
-    get_sender_for_host_port, init_sender, log_error, remoc_port_name, send_end_msg, JobStatus,
-    MessageFromPrimary, RateMessage, RequestGenerator, JOB_STATUS, REMOC_PORT_NAME,
+    get_sender_for_host_port, log_error, remoc_port_name, send_end_msg, send_metadata,
+    send_request_to_secondary, JobStatus, MessageFromPrimary, RateMessage, RequestGenerator,
+    JOB_STATUS, REMOC_PORT_NAME,
 };
 use cluster_mode::{Cluster, RestClusterNode};
 use log::{debug, error, info};
-use overload_http::{Request, RequestSpecEnum};
+use overload_http::Request;
 use remoc::rch::base::Sender;
-use rust_cloud_discovery::ServiceInstance;
-use std::cmp::min;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio_stream::StreamExt;
@@ -54,15 +53,11 @@ pub async fn handle_request(request: Request, cluster: Arc<Cluster>) {
         }
         // update secondary list every 10 seconds
         if counter == 10 {
-            {
+            let new_nodes = create_senders_for_cluster_nodes(&mut senders, &cluster).await;
+            if !new_nodes.is_empty() {
+                send_metadata(&cluster, &mut senders, &new_nodes).await;
                 let req = request.clone();
-                let prev_len = senders.len();
-                init_senders(&mut senders, &cluster, req).await;
-                //check if need to reset request
-                if prev_len != senders.len() {
-                    let req = request.clone();
-                    reset_request(req, &mut senders).await;
-                }
+                reset_request(req, &mut senders).await;
             }
             counter = 0;
         } else {
@@ -104,47 +99,14 @@ async fn reset_request(
     request: Request,
     senders: &mut HashMap<String, Sender<MessageFromPrimary>>,
 ) {
-    let request_ = request.clone();
-    if let RequestSpecEnum::SplitRequestFile(mut req) = request.req {
-        if req.get_n(1).await.is_ok() {
-            let req_data_size = req.size_hint();
-            let mut splits = split_ranges(req_data_size, senders.len());
-            info!("[reset_request] resetting secondaries");
-            for sender in senders.values_mut() {
-                let result = sender.send(MessageFromPrimary::Reset).await;
-                log_error!(result);
-                let mut request = request_.clone();
-                request.req = RequestSpecEnum::SplitRequestFile(
-                    req.clone_with_new_range(splits.pop_front().unwrap()),
-                );
-                let result = sender.send(MessageFromPrimary::Request(request)).await;
-                log_error!(result);
-            }
-        } else {
-            error!(
-                "[reset_request] - could not get the sample count from the file - {:?}",
-                &req
-            );
-        }
+    //send reset
+    info!("[reset_request] resetting secondaries");
+    for sender in senders.values_mut() {
+        let result = sender.send(MessageFromPrimary::Reset).await;
+        log_error!(result);
     }
-}
-
-fn split_ranges(size: usize, split_size: usize) -> VecDeque<(usize, usize)> {
-    let block_size = size / split_size;
-    let remainder = size % split_size;
-    let mut splits = VecDeque::with_capacity(split_size);
-    let mut last_end = 0;
-    for _ in 0..remainder {
-        let new_end = min(size, last_end + block_size + 1);
-        splits.push_back((min(last_end + 1, size), new_end));
-        last_end = new_end;
-    }
-    for _ in remainder..split_size {
-        let new_end = min(size, last_end + block_size);
-        splits.push_back((min(last_end + 1, size), new_end));
-        last_end = new_end;
-    }
-    splits
+    // update the request
+    let _ = process_and_send_request(request, senders).await;
 }
 
 /// Send rate message to secondaries.
@@ -214,66 +176,36 @@ async fn init_senders(
     cluster: &Cluster,
     request: Request,
 ) {
-    if let Some(secondaries) = cluster.secondaries().await {
-        let primary = cluster.get_service_instance().await.unwrap();
-        init_senders_for_cluster_nodes(senders, &secondaries, &primary, request).await;
-        create_senders_for_cluster_nodes(senders, &secondaries).await;
-    }
+    let new_instances = create_senders_for_cluster_nodes(senders, cluster).await;
+    send_metadata(cluster, senders, &new_instances).await;
+    let _ = send_request_to_secondary(request, senders).await;
 }
 
+/// create sender if it doesn't exists
+/// ### Returns
+/// Instance id of newly created senders
 async fn create_senders_for_cluster_nodes(
     senders: &mut HashMap<String, Sender<MessageFromPrimary>>,
-    secondaries: &HashSet<RestClusterNode>,
-) {
-    for secondary in secondaries.iter() {
-        let instance_id = secondary
-            .service_instance()
-            .instance_id()
-            .as_ref()
-            .cloned()
-            .unwrap();
-        if senders.get(&instance_id).is_none() {
-            if let Some(sender) = get_sender_for_secondary(secondary).await {
-                senders.insert(instance_id.clone(), sender);
-            } else {
-                error!(
-                    "[create_senders_for_cluster_nodes] - error creating sender for instance [{}]",
-                    instance_id
-                )
-            }
-        }
-    }
-}
-
-async fn init_senders_for_cluster_nodes(
-    senders: &mut HashMap<String, Sender<MessageFromPrimary>>,
-    secondaries: &HashSet<RestClusterNode>,
-    primary: &ServiceInstance,
-    request: Request,
-) {
-    let primary_host = primary.host().as_ref().unwrap().clone();
-    for secondary in secondaries.iter() {
-        let instance_id: &Option<String> = secondary.service_instance().instance_id();
-        if senders.get(instance_id.as_ref().unwrap()).is_none() {
-            if let Some(mut sender) = get_sender_for_secondary(secondary).await {
-                let result = {
-                    let request = request.clone();
-                    init_sender(request, primary_host.clone(), &mut sender).await
-                };
-                match result {
-                    Ok(_) => {
-                        senders.insert(instance_id.as_ref().cloned().unwrap(), sender);
-                    }
-                    Err(e) => {
-                        error!(
-                            "[init_senders_for_cluster_nodes] - error initializing sender: {:?}",
-                            e
-                        )
-                    }
+    cluster: &Cluster,
+) -> Vec<String> {
+    let mut new_nodes = vec![];
+    if let Some(secondaries) = cluster.secondaries().await {
+        for secondary in secondaries.iter() {
+            let instance_id = secondary.service_instance().instance_id().as_ref().unwrap();
+            if senders.get(instance_id).is_none() {
+                if let Some(sender) = get_sender_for_secondary(secondary).await {
+                    senders.insert(instance_id.clone(), sender);
+                    new_nodes.push(instance_id.clone());
+                } else {
+                    error!(
+                        "[create_senders_for_cluster_nodes] - error creating sender for instance [{}]",
+                        instance_id
+                    )
                 }
             }
         }
     }
+    new_nodes
 }
 
 pub(crate) async fn get_sender_for_secondary(
@@ -291,53 +223,21 @@ pub(crate) async fn get_sender_for_secondary(
 
 #[cfg(test)]
 mod test {
-    use crate::primary::{
-        get_sender_for_secondary, init_sender, send_rate_message_to_secondaries, split_ranges,
-    };
+    use crate::primary::{get_sender_for_secondary, send_rate_message_to_secondaries};
     use crate::test_common::{cluster_node, get_request, init};
-    use crate::{log_error, MessageFromPrimary};
-    use log::trace;
+    use crate::{send_request_to_secondary, MessageFromPrimary};
+    use log::{info, trace};
     use remoc::rch;
     use remoc::rch::base::Receiver;
     use remoc::rtc::async_trait;
     use rust_cloud_discovery::{DiscoveryService, ServiceInstance};
-    use std::collections::{HashMap, VecDeque};
+    use std::collections::HashMap;
     use std::error::Error;
     use std::net::Ipv4Addr;
     use std::sync::mpsc::{channel, Receiver as StdReceiver, Sender as StdSender};
     use std::time::Duration;
     use tokio::net::TcpListener;
     use tokio::time::sleep;
-
-    #[test]
-    fn test_split_ranges() {
-        let verify = |splits: VecDeque<(usize, usize)>, end: usize, size: usize| {
-            println!("{:?}", splits);
-            assert_eq!(splits.len(), size);
-            let (_, e) = splits.back().unwrap();
-            assert_eq!(*e, end);
-            let (s, last_e) = splits.get(0).unwrap();
-            assert!(s <= last_e);
-            let mut last_e = *last_e;
-            for i in 1..splits.len() {
-                let (s, e) = splits.get(i).unwrap();
-                assert!(s <= e);
-                if end > size * 2 {
-                    assert_eq!(s - last_e, 1);
-                }
-                last_e = *e;
-            }
-        };
-        verify(split_ranges(10, 4), 10, 4);
-        verify(split_ranges(10, 3), 10, 3);
-        verify(split_ranges(11, 4), 11, 4);
-        verify(split_ranges(11, 3), 11, 3);
-        verify(split_ranges(1, 4), 1, 4);
-        verify(split_ranges(4, 4), 4, 4);
-        verify(split_ranges(7, 4), 7, 4);
-        verify(split_ranges(8, 4), 8, 4);
-        verify(split_ranges(9, 4), 9, 4);
-    }
 
     async fn start_tcp_listener_random_port() -> (TcpListener, u16) {
         let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0)).await.unwrap();
@@ -394,29 +294,46 @@ mod test {
         // sleep(Duration::from_millis(5)).await;
 
         let mut sender_map = HashMap::new();
+        let mut instances = vec![];
 
         let node = cluster_node(3030, port as u32);
-        let mut sender = get_sender_for_secondary(&node).await.unwrap();
-        let result = init_sender(
-            get_request("localhost".to_string(), 8082),
-            "localhost".to_string(),
-            &mut sender,
-        )
-        .await;
-        log_error!(result);
+        let sender = get_sender_for_secondary(&node).await.unwrap();
         let id: String = node
             .service_instance()
             .instance_id()
             .as_ref()
             .unwrap()
             .clone();
-        sender_map.insert(id, sender);
+        sender_map.insert(id.clone(), sender);
+        instances.push(id);
+
+        let (tx2, rx2) = channel();
+        let (listener2, port2) = start_tcp_listener_random_port().await;
+        tokio::spawn(start_server_with_listener(listener2, tx2));
+        let node2 = cluster_node(3030, port2 as u32);
+        let sender = get_sender_for_secondary(&node2).await.unwrap();
+        let id: String = node2
+            .service_instance()
+            .instance_id()
+            .as_ref()
+            .unwrap()
+            .clone();
+        sender_map.insert(id.clone(), sender);
+        instances.push(id);
+
+        crate::send_metadata_with_primary("localhost", &mut sender_map, &instances).await;
+        let _ =
+            send_request_to_secondary(get_request("localhost".to_string(), 8082), &mut sender_map)
+                .await;
 
         // expect a message with metadata, and then request
         let msg = rx1.recv_timeout(Duration::from_millis(500)).unwrap();
         assert!(matches!(msg, MessageFromPrimary::Metadata(_)));
         let msg = rx1.recv_timeout(Duration::from_millis(500)).unwrap();
         assert!(matches!(msg, MessageFromPrimary::Request(_)));
+
+        //temporarily remove one sender to test rates when there's one node
+        let sender2 = sender_map.remove(instances.last().unwrap()).unwrap();
 
         let _ = send_rate_message_to_secondaries(&mut sender_map, 10, 5).await;
         let primary = rx1.recv_timeout(Duration::from_millis(500)).unwrap();
@@ -430,18 +347,22 @@ mod test {
             }
         }
 
-        let (tx2, rx2) = channel();
-        let (listener2, port2) = start_tcp_listener_random_port().await;
-        tokio::spawn(start_server_with_listener(listener2, tx2));
+        // let (tx2, rx2) = channel();
+        // let (listener2, port2) = start_tcp_listener_random_port().await;
+        // tokio::spawn(start_server_with_listener(listener2, tx2));
 
-        let node2 = cluster_node(3030, port2 as u32);
-        let mut sender = get_sender_for_secondary(&node2).await.unwrap();
-        let _ = init_sender(
-            get_request("localhost".to_string(), 8082),
-            "localhost".to_string(),
-            &mut sender,
-        )
-        .await;
+        // let node2 = cluster_node(3030, port2 as u32);
+        // let sender = get_sender_for_secondary(&node2).await.unwrap();
+        // let id: String = node2
+        //     .service_instance()
+        //     .instance_id()
+        //     .as_ref()
+        //     .unwrap()
+        //     .clone();
+        // sender_map.insert(id.clone(), sender);
+        // crate::send_metadata_with_primary("localhost", &mut sender_map, &[id]).await;
+        // let _ = send_request_to_secondary(get_request("localhost".to_string(), 8082), &mut sender_map)
+        //     .await;
 
         //verify init request for node 2, expect metadata, then request
         let msg = rx2.recv_timeout(Duration::from_millis(500)).unwrap();
@@ -449,14 +370,8 @@ mod test {
         let msg = rx2.recv_timeout(Duration::from_millis(500)).unwrap();
         assert!(matches!(msg, MessageFromPrimary::Request(_)));
 
-        let id: String = node2
-            .service_instance()
-            .instance_id()
-            .as_ref()
-            .unwrap()
-            .clone();
-        sender_map.insert(id, sender);
-
+        //put the sender2 back to test
+        sender_map.insert(instances.last().unwrap().clone(), sender2);
         let _ = send_rate_message_to_secondaries(&mut sender_map, 10, 5).await;
         let mut qps_count = 0;
         let mut conn_count = 0;
@@ -501,8 +416,9 @@ mod test {
         qps: Vec<u32>,
         conn_c: Vec<u32>,
     ) {
-        let primary = rx2.recv_timeout(Duration::from_millis(500)).unwrap();
-        match primary {
+        let msg = rx2.recv_timeout(Duration::from_millis(500)).unwrap();
+        info!("[assert_rate_msg] - received: {:?}", &msg);
+        match msg {
             MessageFromPrimary::Rates(r) => {
                 *conn_count += r.connections;
                 *qps_count += r.qps;

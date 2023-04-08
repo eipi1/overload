@@ -13,7 +13,7 @@ use futures_util::stream::FuturesUnordered;
 use futures_util::{FutureExt, TryStreamExt};
 use http::header::HeaderName;
 use http::{HeaderMap, HeaderValue, Uri};
-use hyper::body::Bytes;
+use hyper::body::{Bytes, HttpBody};
 use hyper::{Body, Client};
 use lazy_static::lazy_static;
 use log::{debug, error, info, trace, warn};
@@ -29,6 +29,7 @@ use response_assert::{LuaExecSender, ResponseAssertion};
 use std::cmp::{max, min};
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::str::FromStr;
@@ -44,6 +45,7 @@ use tokio::sync::oneshot::{Receiver as TkOneShotReceiver, Sender as TkOneShotSen
 use tokio::sync::RwLock;
 use tokio::time::{sleep, timeout};
 use tokio_stream::StreamExt;
+use url::Url;
 use uuid::Uuid;
 
 pub const ENV_NAME_BUNDLE_SIZE: &str = "REQUEST_BUNDLE_SIZE";
@@ -80,7 +82,10 @@ pub async fn primary_listener(port: u16, metrics_factory: &'static MetricsFactor
         match result {
             Ok((conn, _tx, rx)) => {
                 tokio::spawn(conn);
-                tokio::spawn(handle_connection_from_primary(rx, metrics_factory));
+                tokio::spawn(async {
+                    let result = handle_connection_from_primary(rx, metrics_factory).await;
+                    log_error!(result);
+                });
             }
             Err(e) => {
                 error!(
@@ -100,7 +105,7 @@ async fn handle_connection_from_primary(
 
     //the first message secondary receive from primary should be metadata message
     let metadata = check_for_metadata_msg(&mut rx).await?;
-    trace!("[handle_connection_from_primary] - {:?}", &metadata);
+    info!("[handle_connection_from_primary] - {:?}", &metadata);
 
     //the second message secondary receive from primary should be request message
     let mut request = check_for_request_msg(&mut rx).await?;
@@ -319,16 +324,27 @@ async fn get_existing_queue_pool(job_id: &str) -> Option<QueuePool> {
 }
 
 async fn check_for_request_msg(rx: &mut Receiver<MessageFromPrimary>) -> Result<Request, AnyError> {
-    //close the connection if nothing received for 30 sec
-    let msg = tokio::time::timeout(Duration::from_secs(30), rx.recv()).await;
-    let msg = msg??.ok_or_else(|| anyhow!("No message received"))?;
+    //Request message can come after a Reset message, so try twice
+    for _ in 0..=1 {
+        //timeout of 30 sec
+        trace!("[check_for_request_msg] ...");
+        let msg = tokio::time::timeout(Duration::from_secs(30), rx.recv()).await;
+        info!("[check_for_request_msg] - received {:?}", msg);
+        let msg = msg??.ok_or_else(|| anyhow!("No message received"))?;
 
-    match msg {
-        MessageFromPrimary::Request(request) => Ok(request),
-        _ => Err(anyhow!(
-            "Expected MessageFromPrimary::Request, but didn't receive"
-        )),
+        match msg {
+            MessageFromPrimary::Request(request) => {
+                return Ok(request);
+            }
+            MessageFromPrimary::Reset => {}
+            _ => {
+                return Err(anyhow!(
+                    "Expected MessageFromPrimary::Request|Reset, but didn't receive"
+                ))
+            }
+        }
     }
+    Err(anyhow!("No message received"))
 }
 
 async fn check_for_metadata_msg(
@@ -660,20 +676,10 @@ pub(crate) fn initiator_for_request_from_primary(
 ) -> BoxFuture<'static, Result<(), anyhow::Error>> {
     return match &mut request.req {
         RequestSpecEnum::RequestFile(req) => {
-            let file_name = req.file_name.clone();
-            let mut path = data_dir_path().join(&file_name);
-            path.set_extension("sqlite");
-            req.file_name = path.to_str().unwrap().to_string();
-            download_request_file_from_primary(format!("{}.sqlite", &file_name), primary_uri)
-                .boxed()
+            download_request_file_from_primary(req.file_name.to_string(), primary_uri).boxed()
         }
         RequestSpecEnum::SplitRequestFile(req) => {
-            let file_name = req.file_name.clone();
-            let mut path = data_dir_path().join(&file_name);
-            path.set_extension("sqlite");
-            req.file_name = path.to_str().unwrap().to_string();
-            download_request_file_from_primary(format!("{}.sqlite", &file_name), primary_uri)
-                .boxed()
+            download_request_file_from_primary(req.file_name.to_string(), primary_uri).boxed()
         }
         RequestSpecEnum::RandomDataRequest(_) | RequestSpecEnum::RequestList(_) => noop().boxed(),
     };
@@ -684,10 +690,10 @@ pub async fn noop() -> Result<(), anyhow::Error> {
 }
 
 async fn download_request_file_from_primary(
-    filename: String,
+    file_path: String,
     primary_uri: String,
 ) -> Result<(), anyhow::Error> {
-    let file_path = data_dir_path().join(&filename);
+    let file_path = PathBuf::from(&file_path);
     debug!(
         "[download_request_file_from_primary] - downloading file {:?} from primary",
         &file_path
@@ -697,33 +703,30 @@ async fn download_request_file_from_primary(
         return Ok(());
     }
 
+    // next steps will never be executed in standalone mode
     let mut data_file_destination = File::create(&file_path).await.map_err(|e| {
         error!("[download_request_file_from_primary] - error: {:?}", e);
         anyhow::anyhow!("filed to create file {:?}", &file_path)
     })?;
-    debug!(
-        "downloading file {:?} from primary: {}",
-        &filename, &primary_uri
-    );
-    download_file_from_url(&primary_uri, &filename, &mut data_file_destination).await?;
+    let filename = &file_path.file_name().and_then(|f| f.to_str()).unwrap();
+    download_file_from_url(&primary_uri, filename, &mut data_file_destination).await?;
     Ok(())
 }
 
 pub async fn download_file_from_url(
-    uri: &str,
+    host: &str,
     filename: &str,
     data_file_destination: &mut File,
 ) -> Result<(), anyhow::Error> {
-    let url = format!(
-        "http://{}:{}{}/{}",
-        &uri,
-        overload_http::HTTP_PORT.get_or_init(overload_http::http_port),
-        PATH_REQUEST_DATA_FILE_DOWNLOAD,
-        filename
-    );
+    let url =
+        Url::parse(format!("http://{}:{}", &host, overload_http::http_port()).as_str()).unwrap();
+    let url = url
+        .join(PATH_REQUEST_DATA_FILE_DOWNLOAD)
+        .and_then(|url| url.join(filename))
+        .unwrap();
     debug!("[download_file_from_url] - downloading file from {}", &url);
     let req = hyper::Request::builder()
-        .uri(&url)
+        .uri(url.as_str())
         .method("GET")
         .body(Body::empty())
         .map_err(|e| {
@@ -757,13 +760,16 @@ mod test {
     use crate::test_common::init;
     #[cfg(feature = "cluster")]
     use crate::test_common::{cluster_node, get_request};
-    use crate::{init_sender, RateMessage, DEFAULT_REMOC_PORT};
+    use crate::{
+        send_metadata_with_primary, send_request_to_secondary, RateMessage, DEFAULT_REMOC_PORT,
+    };
     use log::info;
     use overload_http::{HttpReq, RequestList, RequestSpecEnum};
     use overload_metrics::MetricsFactory;
     use regex::Regex;
     use response_assert::ResponseAssertion;
     use std::cmp::max;
+    use std::collections::HashMap;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
     use url::Url;
@@ -796,9 +802,13 @@ mod test {
         let handle1 = tokio::spawn(async move {
             let sender = get_sender_for_secondary(&node).await;
             assert!(sender.is_some());
-            let mut sender = sender.unwrap();
+            let sender = sender.unwrap();
             let request = get_request("localhost".to_string(), 8082);
-            let result = init_sender(request, "127.0.0.1".to_string(), &mut sender).await;
+            let mut senders = HashMap::new();
+            senders.insert("localhost".to_string(), sender);
+            send_metadata_with_primary("127.0.0.1", &mut senders, &["localhost".to_string()]).await;
+            let result = send_request_to_secondary(request, &mut senders).await;
+            // let result = init_sender(request, "127.0.0.1".to_string(), &mut sender).await;
             info!("init result: {:?}", &result);
             assert!(result.is_ok());
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -808,9 +818,14 @@ mod test {
         let handle2 = tokio::spawn(async move {
             let sender = get_sender_for_secondary(&node).await;
             assert!(sender.is_some());
-            let mut sender = sender.unwrap();
+            let sender = sender.unwrap();
             let request = get_request("localhost".to_string(), 8082);
-            let result = init_sender(request, "127.0.0.1".to_string(), &mut sender).await;
+            let mut senders = HashMap::new();
+            senders.insert("localhost".to_string(), sender);
+            send_metadata_with_primary("localhost", &mut senders, &["localhost".to_string()]).await;
+            // send_metadata("localhost", &mut senders).await;
+            let result = send_request_to_secondary(request, &mut senders).await;
+            // let result = init_sender(request, "127.0.0.1".to_string(), &mut sender).await;
             info!("init result: {:?}", &result);
             assert!(result.is_ok());
             tokio::time::sleep(Duration::from_millis(10)).await;

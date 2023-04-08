@@ -1,0 +1,130 @@
+{
+  "request": {
+    "duration": 10,
+    "name": "test-generator-with-assertion",
+    "qps": {
+      "ConstantRate": {
+        "countPerSec": 3
+      }
+    },
+    "req": {
+      "RandomDataRequest": {
+        "url": "/anything/shop/{shop}/item/{item}",
+        "method": "POST",
+        "bodySchema": {
+          "title": "Person",
+          "type": "object",
+          "properties": {
+            "firstName": {
+              "type": "string",
+              "description": "The person's first name."
+            },
+            "lastName": {
+              "type": "string",
+              "description": "The person's last name."
+            },
+            "age": {
+              "description": "Age in years which must be equal to or greater than zero.",
+              "type": "integer",
+              "minimum": 10,
+              "maximum": 20
+            }
+          }
+        },
+        "uriParamSchema": {
+          "type": "object",
+          "properties": {
+            "shop": {
+              "type": "integer",
+              "minimum": 1000000,
+              "maximum": 1100000
+            },
+            "item": {
+              "type": "integer",
+              "minimum": 20000,
+              "maximum": 30000
+            }
+          }
+        }
+      }
+    },
+    "target": {
+      "host": "127.0.0.1",
+      "port": 2080,
+      "protocol": "HTTP"
+    },
+    "concurrentConnection": {
+      "ConstantRate": {
+        "countPerSec": 3
+      }
+    },
+    "responseAssertion": {
+      "luaAssertion": [
+        "function (method, url, reqBody, respBody)",
+        "result ={}",
+        "print('inside lua')",
+        "if method~='POST' then",
+        "local err={}",
+        "err.id=1",
+        "err.success=false",
+        "err.error='Invalid method'",
+        "table.insert(result,err)",
+        "end",
+        "jsonReq=json.decode(reqBody)",
+        "jsonResp=json.decode(respBody)",
+        "if jsonResp.json.firstName == nil then",
+        "local err={}",
+        "err.id=2",
+        "err.success=false",
+        "err.error='firstName not found'",
+        "table.insert(result,err)",
+        "end",
+        "if jsonResp.json.age == nil then",
+        "local err={}",
+        "err.id=3",
+        "err.success=false",
+        "err.error='age not found'",
+        "table.insert(result,err)",
+        "elseif jsonResp.json.age > 20 or jsonResp.json.age < 10 then",
+        "local err={}",
+        "err.id=4",
+        "err.success=false",
+        "err.error='age out of range: '..jsonResp.json.age",
+        "table.insert(result,err)",
+        "end",
+        "local url = jsonResp.url",
+        "local counter=-1",
+        "for token in string.gmatch(url, '[^/]+') do",
+        "    print(token)",
+        "    counter=counter+1",
+        "    if counter == 4 and not (tonumber(token) >= 1000000 and tonumber(token) <=1100000) then",
+        "        local err = {}",
+        "        err.id = 5",
+        "        err.success = false",
+        "        err.error = 'shop out of range: ' .. token",
+        "        table.insert(result, err)",
+        "    end",
+        "    if counter == 6 and not (tonumber(token) >= 20000 and tonumber(token) <=30000) then",
+        "        local err = {}",
+        "        err.id = 6",
+        "        err.success = false",
+        "        err.error = 'item out of range: ' .. token",
+        "        table.insert(result, err)",
+        "    end",
+        "end",
+        "return result",
+        "end"
+      ]
+    }
+  },
+  "expectation": {
+    "qps": [3,3,3,3,3,3,3,3,3,3],
+    "assertionFailure": {
+      "2": [0,0,0,0,0,0,0,0,0,0],
+      "4": [0,0,0,0,0,0,0,0,0,0],
+      "5": [0,0,0,0,0,0,0,0,0,0],
+      "6": [0,0,0,0,0,0,0,0,0,0],
+      "2147483647": [0,0,0,0,0,0,0,0,0,0]
+    }
+  }
+}
