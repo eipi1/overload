@@ -30,10 +30,6 @@ pub trait RequestProvider {
     /// The provider can be shared between instances in cluster. This will allow sending requests to
     /// secondary/worker instances without request data.
     fn shared(&self) -> bool;
-
-    // /// Not a good solution; it creates circular dependency, temporary hack, should find better solution
-    // #[deprecated]
-    // fn to_json_str(&self) -> String;
 }
 
 #[async_trait]
@@ -63,13 +59,6 @@ impl RequestProvider for RequestList {
     fn shared(&self) -> bool {
         false
     }
-
-    // fn to_json_str(&self) -> String {
-    //     let spec_enum = RequestSpecEnum::RequestList(RequestList {
-    //         data: self.data.clone(),
-    //     });
-    //     serde_json::to_string(&spec_enum).unwrap()
-    // }
 }
 
 #[async_trait]
@@ -118,18 +107,6 @@ impl RequestProvider for RequestFile {
     fn shared(&self) -> bool {
         true
     }
-
-    // fn to_json_str(&self) -> String {
-    //     let file_name = self
-    //         .file_name
-    //         .rsplit('/')
-    //         .next()
-    //         .and_then(|s| s.strip_suffix(".sqlite"))
-    //         .expect("RequestFile to enum conversion failed. File name should end with .sqlite")
-    //         .to_string();
-    //     let spec_enum = RequestSpecEnum::RequestFile(RequestFile::new(file_name));
-    //     serde_json::to_string(&spec_enum).unwrap()
-    // }
 }
 
 #[async_trait]
@@ -211,18 +188,6 @@ impl RequestProvider for SplitRequestFile {
     fn shared(&self) -> bool {
         true
     }
-
-    // fn to_json_str(&self) -> String {
-    //     let file_name = self
-    //         .file_name
-    //         .rsplit('/')
-    //         .next()
-    //         .and_then(|s| s.strip_suffix(".sqlite"))
-    //         .expect("RequestFile to enum conversion failed. File name should end with .sqlite")
-    //         .to_string();
-    //     let spec_enum = RequestSpecEnum::RequestFile(RequestFile::new(file_name));
-    //     serde_json::to_string(&spec_enum).unwrap()
-    // }
 }
 
 #[async_trait]
@@ -270,10 +235,6 @@ impl RequestProvider for RandomDataRequest {
     fn shared(&self) -> bool {
         true
     }
-
-    // fn to_json_str(&self) -> String {
-    //     serde_json::to_string(self).unwrap()
-    // }
 }
 
 #[cfg(test)]

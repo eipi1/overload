@@ -365,23 +365,6 @@ mod test {
             }
         }
 
-        // let (tx2, rx2) = channel();
-        // let (listener2, port2) = start_tcp_listener_random_port().await;
-        // tokio::spawn(start_server_with_listener(listener2, tx2));
-
-        // let node2 = cluster_node(3030, port2 as u32);
-        // let sender = get_sender_for_secondary(&node2).await.unwrap();
-        // let id: String = node2
-        //     .service_instance()
-        //     .instance_id()
-        //     .as_ref()
-        //     .unwrap()
-        //     .clone();
-        // sender_map.insert(id.clone(), sender);
-        // crate::send_metadata_with_primary("localhost", &mut sender_map, &[id]).await;
-        // let _ = send_request_to_secondary(get_request("localhost".to_string(), 8082), &mut sender_map)
-        //     .await;
-
         //verify init request for node 2, expect metadata, then request
         let msg = rx2.recv_timeout(Duration::from_millis(500)).unwrap();
         assert!(matches!(msg, MessageFromPrimary::Metadata(_)));
