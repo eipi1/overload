@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::time::Duration;
 
 use log::debug;
@@ -9,8 +10,9 @@ use overload_http::Request;
 ///! Standalone mode is a wrapper around cluster mode, instead of connecting to secondary nodes,
 ///! it connects localhost
 use crate::{
-    get_sender_for_host_port, init_sender, log_error, remoc_port, send_end_msg, JobStatus,
-    MessageFromPrimary, RateMessage, RequestGenerator, JOB_STATUS, REMOC_PORT,
+    get_sender_for_host_port, log_error, remoc_port, send_end_msg, send_metadata_with_primary,
+    send_request_to_secondary, JobStatus, MessageFromPrimary, RateMessage, RequestGenerator,
+    JOB_STATUS, REMOC_PORT,
 };
 
 pub async fn handle_request(request: Request) {
@@ -29,21 +31,26 @@ pub async fn handle_request(request: Request) {
     let stream = generator.throttle(Duration::from_secs(1));
     tokio::pin!(stream);
 
-    let mut sender = get_sender_for_host_port(*REMOC_PORT.get_or_init(remoc_port), "127.0.0.1")
+    //todo remove unwrap
+    let sender = get_sender_for_host_port(*REMOC_PORT.get_or_init(remoc_port), "127.0.0.1")
         .await
-        .unwrap(); //todo remove unwrap
-    let result = init_sender(request, "127.0.0.1".to_string(), &mut sender).await;
-    log_error!(result);
+        .unwrap();
+    let mut senders = HashMap::with_capacity(1);
+    senders.insert("localhost".to_string(), sender);
+    let instances = ["localhost".to_string()];
+    send_metadata_with_primary("127.0.0.1", &mut senders, &instances).await;
+    let _ = send_request_to_secondary(request, &mut senders, &instances).await;
     {
         JOB_STATUS
             .write()
             .await
             .insert(job_id.clone(), JobStatus::InProgress);
     }
+    let sender = senders.get_mut("localhost").unwrap();
     while let Some((qps, connection_count)) = stream.next().await {
-        send_rate_message_to_executor(&mut sender, qps, connection_count).await;
+        send_rate_message_to_executor(sender, qps, connection_count).await;
     }
-    send_end_msg(&mut sender, false).await;
+    send_end_msg(sender, false).await;
     {
         JOB_STATUS
             .write()

@@ -9,3 +9,6 @@ members = [
     "lua-helper",
     "tests"
 ]
+
+[profile.release]
+debug = true

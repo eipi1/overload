@@ -1,0 +1,2 @@
+method,url,body,headers
+"GET","/test-with-split-file-data.json/file/0",,"{\"Connection\":\"keep-alive\"}"

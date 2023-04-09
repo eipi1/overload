@@ -1,10 +1,11 @@
-use anyhow::Result as AnyResult;
+use anyhow::{anyhow, Result as AnyResult};
 use datagen::generate_data;
-use log::{debug, trace};
-use overload_http::{HttpReq, RandomDataRequest, RequestFile, RequestList, RequestSpecEnum};
+use log::{debug, error, trace};
+use overload_http::{HttpReq, RandomDataRequest, RequestFile, RequestList, SplitRequestFile};
 use remoc::rtc::async_trait;
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::ConnectOptions;
+use std::cmp::{max, min};
 use std::iter::repeat_with;
 use std::str::FromStr;
 
@@ -29,10 +30,6 @@ pub trait RequestProvider {
     /// The provider can be shared between instances in cluster. This will allow sending requests to
     /// secondary/worker instances without request data.
     fn shared(&self) -> bool;
-
-    /// Not a good solution; it creates circular dependency, temporary hack, should find better solution
-    #[deprecated]
-    fn to_json_str(&self) -> String;
 }
 
 #[async_trait]
@@ -61,13 +58,6 @@ impl RequestProvider for RequestList {
 
     fn shared(&self) -> bool {
         false
-    }
-
-    fn to_json_str(&self) -> String {
-        let spec_enum = RequestSpecEnum::RequestList(RequestList {
-            data: self.data.clone(),
-        });
-        serde_json::to_string(&spec_enum).unwrap()
     }
 }
 
@@ -117,17 +107,86 @@ impl RequestProvider for RequestFile {
     fn shared(&self) -> bool {
         true
     }
+}
 
-    fn to_json_str(&self) -> String {
-        let file_name = self
-            .file_name
-            .rsplit('/')
-            .next()
-            .and_then(|s| s.strip_suffix(".sqlite"))
-            .expect("RequestFile to enum conversion failed. File name should end with .sqlite")
-            .to_string();
-        let spec_enum = RequestSpecEnum::RequestFile(RequestFile::new(file_name));
-        serde_json::to_string(&spec_enum).unwrap()
+#[async_trait]
+impl RequestProvider for SplitRequestFile {
+    async fn get_n(&mut self, n: usize) -> AnyResult<Vec<HttpReq>> {
+        if n == 0 {
+            panic!("SplitRequestFile: shouldn't request data of 0 size");
+        }
+        if self.inner.is_none() {
+            //open sqlite connection
+            let sqlite_file = format!("sqlite://{}", &self.file_name);
+            debug!("Opening sqlite file at: {}", &sqlite_file);
+            let mut connection = SqliteConnectOptions::from_str(sqlite_file.as_str())?
+                .read_only(true)
+                .connect()
+                .await?;
+            let size: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM http_req")
+                .fetch_one(&mut connection)
+                .await?;
+            self.size = size.0 as usize;
+            trace!("found rows: {}", &self.size);
+            if self.size < 1 {
+                error!(
+                    "SplitRequestFile: [{}] -  found rows: {}",
+                    &self.file_name, &self.size
+                );
+                return Err(anyhow!("Empty request file"));
+            }
+            self.inner = Some(connection);
+            if self.range_start_inclusive == 0 {
+                self.range_start_inclusive = 1;
+                self.next_read_cursor = 1;
+            } else {
+                self.next_read_cursor = self.range_start_inclusive;
+            }
+            if self.range_end_inclusive == 0 {
+                self.range_end_inclusive = self.size;
+            }
+            trace!("[SplitRequestFile] - init - range_start_inclusive:{}, range_end_inclusive:{}, next_read_cursor:{}", 
+                self.range_start_inclusive, self.range_end_inclusive, self.next_read_cursor)
+        }
+
+        let mut data_need = n;
+        let mut request_data = Vec::with_capacity(data_need);
+        loop {
+            if request_data.len() >= n {
+                break;
+            }
+            let start = self.next_read_cursor;
+            let end = min(
+                self.range_end_inclusive + 1,
+                self.next_read_cursor + data_need,
+            );
+            let data: Vec<HttpReq> = sqlx::query_as(
+                format!(
+                    "SELECT ROWID, * FROM http_req WHERE ROWID >= {} and ROWID < {}",
+                    start, end
+                )
+                .as_str(),
+            )
+            .fetch_all(self.inner.as_mut().unwrap())
+            .await?;
+            data_need = max(data_need - data.len(), 0);
+            request_data.extend(data);
+            self.next_read_cursor = end;
+            if self.next_read_cursor > self.range_end_inclusive {
+                self.next_read_cursor = self.range_start_inclusive;
+            }
+        }
+
+        trace!("requested size: {}, returning: {}", n, request_data.len());
+        Ok(request_data)
+    }
+
+    fn size_hint(&self) -> usize {
+        self.size
+    }
+
+    fn shared(&self) -> bool {
+        true
     }
 }
 
@@ -175,10 +234,6 @@ impl RequestProvider for RandomDataRequest {
 
     fn shared(&self) -> bool {
         true
-    }
-
-    fn to_json_str(&self) -> String {
-        serde_json::to_string(self).unwrap()
     }
 }
 

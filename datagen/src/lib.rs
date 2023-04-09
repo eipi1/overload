@@ -114,6 +114,7 @@ impl DataSchema {
     }
 }
 
+#[allow(clippy::derivable_impls)]
 impl Default for DataSchema {
     fn default() -> Self {
         Empty

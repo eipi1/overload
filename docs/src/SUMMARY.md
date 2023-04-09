@@ -23,6 +23,7 @@
   - [RequestList](request/list.md)
   - [RequestFile](request/file.md)
   - [RandomDataRequest](request/random.md)
+  - [SplitRequestFile](request/split-file.md)
 - [QPS Specification](qps/README.md)
   - [ConstantRate](qps/constant.md)
   - [Linear](qps/linear.md)
