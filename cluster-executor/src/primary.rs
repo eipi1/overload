@@ -1,8 +1,8 @@
 use crate::split_request::process_and_send_request;
 use crate::{
-    get_sender_for_host_port, log_error, remoc_port_name, send_end_msg, send_metadata,
-    send_request_to_secondary, JobStatus, MessageFromPrimary, RateMessage, RequestGenerator,
-    JOB_STATUS, REMOC_PORT_NAME,
+    get_sender_for_host_port, log_error, remoc_port_name, require_reset, send_end_msg,
+    send_metadata, send_request_to_secondary, JobStatus, MessageFromPrimary, RateMessage,
+    RequestGenerator, JOB_STATUS, REMOC_PORT_NAME,
 };
 use cluster_mode::{Cluster, RestClusterNode};
 use log::{debug, error, info};
@@ -40,6 +40,8 @@ pub async fn handle_request(request: Request, cluster: Arc<Cluster>) {
             .await
             .insert(job_id.clone(), JobStatus::InProgress);
     }
+    let mut sender_dropped = false;
+    let require_reset = require_reset(&request);
     while let Some((qps, connection_count)) = stream.next().await {
         if counter % 5 == 0 {
             // check for stop every 5 seconds
@@ -51,11 +53,20 @@ pub async fn handle_request(request: Request, cluster: Arc<Cluster>) {
                 break;
             }
         }
-        // update secondary list every 10 seconds
+        // update secondary list every 10 seconds, reset request if required
         if counter == 10 {
             let new_nodes = create_senders_for_cluster_nodes(&mut senders, &cluster).await;
             if !new_nodes.is_empty() {
+                info!("discovered new nodes: {:?}", &new_nodes);
                 send_metadata(&cluster, &mut senders, &new_nodes).await;
+                let req = request.clone();
+                if require_reset {
+                    reset_request(req, &mut senders).await;
+                } else {
+                    let _ = send_request_to_secondary(req, &mut senders, &new_nodes).await;
+                }
+            } else if require_reset && sender_dropped {
+                sender_dropped = false;
                 let req = request.clone();
                 reset_request(req, &mut senders).await;
             }
@@ -73,11 +84,12 @@ pub async fn handle_request(request: Request, cluster: Arc<Cluster>) {
             let result =
                 send_rate_message_to_secondaries(&mut senders, qps, connection_count).await;
             if let Err(e) = result {
+                sender_dropped = !e.is_empty();
                 //remove failed senders
                 for instance_id in e {
-                    debug!(
-                        "[handle_request] - dropping sender to instance: {}",
-                        &instance_id
+                    info!(
+                        "[handle_request] - [{}] - dropping sender to instance: {}",
+                        &job_id, &instance_id
                     );
                     senders.remove(&instance_id);
                 }
@@ -86,7 +98,10 @@ pub async fn handle_request(request: Request, cluster: Arc<Cluster>) {
     }
 
     for (instance, mut sender) in senders.drain() {
-        debug!("[handle_request] - sending end message to: {}", instance);
+        info!(
+            "[handle_request] - [{}] - sending end message to: {}",
+            &job_id, instance
+        );
         send_end_msg(&mut sender, false).await;
     }
     JOB_STATUS
@@ -178,7 +193,7 @@ async fn init_senders(
 ) {
     let new_instances = create_senders_for_cluster_nodes(senders, cluster).await;
     send_metadata(cluster, senders, &new_instances).await;
-    let _ = send_request_to_secondary(request, senders).await;
+    let _ = send_request_to_secondary(request, senders, &new_instances).await;
 }
 
 /// create sender if it doesn't exists
@@ -322,9 +337,12 @@ mod test {
         instances.push(id);
 
         crate::send_metadata_with_primary("localhost", &mut sender_map, &instances).await;
-        let _ =
-            send_request_to_secondary(get_request("localhost".to_string(), 8082), &mut sender_map)
-                .await;
+        let _ = send_request_to_secondary(
+            get_request("localhost".to_string(), 8082),
+            &mut sender_map,
+            &instances,
+        )
+        .await;
 
         // expect a message with metadata, and then request
         let msg = rx1.recv_timeout(Duration::from_millis(500)).unwrap();

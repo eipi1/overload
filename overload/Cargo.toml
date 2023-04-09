@@ -203,6 +203,3 @@ version = "0.4"
 
 [features]
 cluster = ["rust-cloud-discovery", "cloud-discovery-kubernetes", "cluster-mode"]
-
-[profile.release]
-debug = true

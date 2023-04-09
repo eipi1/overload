@@ -1,6 +1,6 @@
 use crate::request_providers::RequestProvider;
 use crate::{log_error, MessageFromPrimary};
-use log::error;
+use log::{error, info};
 use overload_http::{Request, RequestSpecEnum};
 use remoc::rch::base::Sender;
 use std::cmp::min;
@@ -21,10 +21,15 @@ pub(crate) async fn process_and_send_request(
         } else {
             let req_data_size = req.size_hint();
             let mut splits = split_ranges(req_data_size, senders.len());
+            info!("[process_and_send_request] - split ranges: {:?}", &splits);
             for (id, sender) in senders {
                 let mut request = request_.clone();
                 request.req = RequestSpecEnum::SplitRequestFile(
                     req.clone_with_new_range(splits.pop_front().unwrap()),
+                );
+                info!(
+                    "[process_and_send_request] - sending to secondary: {:?}",
+                    &request
                 );
                 let result = sender.send(MessageFromPrimary::Request(request)).await;
                 log_error!(result);

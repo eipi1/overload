@@ -37,8 +37,9 @@ pub async fn handle_request(request: Request) {
         .unwrap();
     let mut senders = HashMap::with_capacity(1);
     senders.insert("localhost".to_string(), sender);
-    send_metadata_with_primary("127.0.0.1", &mut senders, &["localhost".to_string()]).await;
-    let _ = send_request_to_secondary(request, &mut senders).await;
+    let instances = ["localhost".to_string()];
+    send_metadata_with_primary("127.0.0.1", &mut senders, &instances).await;
+    let _ = send_request_to_secondary(request, &mut senders, &instances).await;
     {
         JOB_STATUS
             .write()

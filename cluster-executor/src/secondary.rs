@@ -798,7 +798,15 @@ mod test {
             &overload_metrics::METRICS_FACTORY,
         ));
 
+        let mut instances = vec![];
         let node = cluster_node(3030, 3031);
+        instances.push(
+            node.service_instance()
+                .instance_id()
+                .as_ref()
+                .unwrap()
+                .clone(),
+        );
         let handle1 = tokio::spawn(async move {
             let sender = get_sender_for_secondary(&node).await;
             assert!(sender.is_some());
@@ -806,8 +814,9 @@ mod test {
             let request = get_request("localhost".to_string(), 8082);
             let mut senders = HashMap::new();
             senders.insert("localhost".to_string(), sender);
-            send_metadata_with_primary("127.0.0.1", &mut senders, &["localhost".to_string()]).await;
-            let result = send_request_to_secondary(request, &mut senders).await;
+            let instances = ["localhost".to_string()];
+            send_metadata_with_primary("127.0.0.1", &mut senders, &instances).await;
+            let result = send_request_to_secondary(request, &mut senders, &instances).await;
             // let result = init_sender(request, "127.0.0.1".to_string(), &mut sender).await;
             info!("init result: {:?}", &result);
             assert!(result.is_ok());
@@ -815,6 +824,13 @@ mod test {
         });
 
         let node = cluster_node(3030, 3031);
+        instances.push(
+            node.service_instance()
+                .instance_id()
+                .as_ref()
+                .unwrap()
+                .clone(),
+        );
         let handle2 = tokio::spawn(async move {
             let sender = get_sender_for_secondary(&node).await;
             assert!(sender.is_some());
@@ -822,9 +838,9 @@ mod test {
             let request = get_request("localhost".to_string(), 8082);
             let mut senders = HashMap::new();
             senders.insert("localhost".to_string(), sender);
-            send_metadata_with_primary("localhost", &mut senders, &["localhost".to_string()]).await;
+            send_metadata_with_primary("localhost", &mut senders, &instances).await;
             // send_metadata("localhost", &mut senders).await;
-            let result = send_request_to_secondary(request, &mut senders).await;
+            let result = send_request_to_secondary(request, &mut senders, &instances).await;
             // let result = init_sender(request, "127.0.0.1".to_string(), &mut sender).await;
             info!("init result: {:?}", &result);
             assert!(result.is_ok());

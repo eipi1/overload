@@ -550,16 +550,17 @@ pub(crate) async fn send_metadata_with_primary(
     }
 }
 
-pub(crate) async fn send_request_to_secondary(
+pub(crate) async fn send_request_to_secondary<'a>(
     request: Request,
-    senders: &mut HashMap<String, Sender<MessageFromPrimary>>,
-) -> Result<(), Vec<&String>> {
+    senders: &'a mut HashMap<String, Sender<MessageFromPrimary>>,
+    instances: &[String],
+) -> Result<(), Vec<&'a String>> {
     if let RequestSpecEnum::SplitRequestFile(_) = request.req {
         let request_ = request.clone();
         process_and_send_request(request_, senders).await
     } else {
         let mut error_instances = vec![];
-        for (id, sender) in senders {
+        for (id, sender) in senders.iter_mut().filter(|(id, _)| instances.contains(id)) {
             let request_ = request.clone();
             let result = sender.send(MessageFromPrimary::Request(request_)).await;
             if let Err(e) = result {
@@ -583,6 +584,11 @@ async fn send_end_msg(sender: &mut Sender<MessageFromPrimary>, stop: bool) {
     };
     let result = sender.send(msg).await;
     log_error!(result);
+}
+
+#[cfg(feature = "cluster")]
+fn require_reset(request: &Request) -> bool {
+    matches!(request.req, RequestSpecEnum::SplitRequestFile(_))
 }
 
 pub async fn stop_request_by_job_id(job_id: &String) -> Vec<(String, Option<JobStatus>)> {
