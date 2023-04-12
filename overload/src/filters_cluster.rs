@@ -3,6 +3,7 @@
 use crate::filters_common;
 use crate::filters_common::prometheus_metric;
 use bytes::{Buf, Bytes, BytesMut};
+use cluster_executor::data_dir_path;
 use cluster_mode::{get_cluster_info, Cluster};
 use futures_util::future::Either;
 use futures_util::{FutureExt, Stream, StreamExt};
@@ -35,6 +36,8 @@ pub fn get_routes_with_cluster(
     cluster: Arc<Cluster>,
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     let upload_binary_file = upload_binary_file(cluster.clone());
+    let upload_csv_file = upload_csv_file(cluster.clone());
+    let upload_sqlite_file = upload_sqlite_file(cluster.clone());
     let stop_req = stop_req(cluster.clone());
     let history = history(cluster.clone());
     // let overload_req_secondary = overload_req_secondary(cluster.clone());
@@ -54,7 +57,9 @@ pub fn get_routes_with_cluster(
         .or(overload_multi_req)
         .or(stop_req)
         .or(history)
-        .or(upload_binary_file);
+        .or(upload_binary_file)
+        .or(upload_csv_file)
+        .or(upload_sqlite_file);
 
     routes
         .or(info)
@@ -83,7 +88,7 @@ pub fn overload_multi_req(
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     warp::post()
         .and(warp::path("tests").and(warp::path::end()))
-        .and(warp::body::content_length_limit(1024 * 1024))
+        .and(warp::body::content_length_limit(1024 * 1024 * 1024))
         .and(warp::body::json())
         .and_then(move |request: MultiRequest| {
             let tmp = cluster.clone();
@@ -104,7 +109,43 @@ pub fn upload_binary_file(
         .and(warp::body::stream())
         .and_then(move |content_len, stream| {
             let tmp = cluster.clone();
-            async move { upload_binary_file_handler(stream, tmp, content_len).await }
+            async move { upload_csv_file_handler(stream, tmp, content_len).await }
+        })
+}
+
+pub fn upload_csv_file(
+    cluster: Arc<Cluster>,
+) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+    warp::post()
+        .and(
+            warp::path("request-file")
+                .and(warp::path("csv"))
+                .and(warp::path::end()),
+        )
+        .and(warp::body::content_length_limit(1024 * 1024 * 32))
+        .and(warp::header::<u64>("content-length"))
+        .and(warp::body::stream())
+        .and_then(move |content_len, stream| {
+            let tmp = cluster.clone();
+            async move { upload_csv_file_handler(stream, tmp, content_len).await }
+        })
+}
+
+pub fn upload_sqlite_file(
+    cluster: Arc<Cluster>,
+) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+    warp::post()
+        .and(
+            warp::path("request-file")
+                .and(warp::path("sqlite"))
+                .and(warp::path::end()),
+        )
+        .and(warp::body::content_length_limit(1024 * 1024 * 32))
+        .and(warp::header::<u64>("content-length"))
+        .and(warp::body::stream())
+        .and_then(move |content_len, stream| {
+            let tmp = cluster.clone();
+            async move { upload_sqlite_file_handler(stream, tmp, content_len).await }
         })
 }
 
@@ -211,7 +252,7 @@ async fn execute_multi_req_cluster(
 }
 
 /// should use shared storage, no need to forward upload request
-async fn upload_binary_file_handler<S, B>(
+async fn upload_csv_file_handler<S, B>(
     data: S,
     cluster: Arc<Cluster>,
     content_len: u64,
@@ -223,6 +264,28 @@ where
     let data_dir = data_dir();
     trace!("req: upload_binary_file_handler");
     let result = overload::cluster::handle_file_upload(data, &data_dir, cluster, content_len).await;
+    match result {
+        Ok(r) => Ok(reply::with_status(reply::json(&r), StatusCode::OK)),
+        Err(e) => Ok(reply::with_status(
+            reply::json(&e),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        )),
+    }
+}
+
+/// should use shared storage, no need to forward upload request
+async fn upload_sqlite_file_handler<S, B>(
+    data: S,
+    cluster: Arc<Cluster>,
+    content_len: u64,
+) -> Result<impl warp::Reply, Infallible>
+where
+    S: Stream<Item = Result<B, warp::Error>> + Unpin + Send + Sync + 'static,
+    B: Buf + Send + Sync,
+{
+    let path = data_dir_path();
+    let data_dir = path.to_str().unwrap();
+    let result = overload::cluster::save_sqlite(data, data_dir, cluster, content_len).await;
     match result {
         Ok(r) => Ok(reply::with_status(reply::json(&r), StatusCode::OK)),
         Err(e) => Ok(reply::with_status(

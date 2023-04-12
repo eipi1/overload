@@ -1,7 +1,7 @@
 use crate::cluster::secondary::{
     forward_get_status_request, forward_stop_request_to_primary, forward_test_request,
 };
-use crate::{job_id, pre_check, Response, PATH_FILE_UPLOAD};
+use crate::{job_id, pre_check, Response, PATH_FILE_UPLOAD, PATH_FILE_UPLOAD_SQLITE};
 use bytes::Buf;
 use cluster_executor::{get_status_all, get_status_by_job_id, ErrorCode, JobStatus};
 use cluster_mode::{Cluster, RestClusterNode};
@@ -197,6 +197,48 @@ where
         if let Ok(uri) = primary_uri(&cluster.primaries().await).await {
             let url = Url::parse(uri)
                 .and_then(|url| url.join(PATH_FILE_UPLOAD))
+                .unwrap();
+            debug!(
+                "[handle_file_upload] secondary node, uploading file to {}",
+                &url
+            );
+            let stream = convert_stream(data);
+            let request = hyper::Request::builder()
+                .uri(url.to_string())
+                .method("POST")
+                .header(CONTENT_LENGTH, content_len)
+                .body(Body::from(stream))?;
+            let resp = client.request(request).await?;
+            let bytes = hyper::body::to_bytes(resp.into_body()).await?.reader();
+            let resp: GenericResponse<String> = serde_json::from_reader(bytes)?;
+            Ok(resp)
+        } else {
+            Err(GenericError::internal_500("Unknown error"))
+        }
+    }
+}
+
+pub async fn save_sqlite<S, B>(
+    data: S,
+    data_dir: &str,
+    cluster: Arc<Cluster>,
+    content_len: u64,
+) -> GenericResult<String>
+where
+    S: Stream<Item = Result<B, warp::Error>> + Unpin + Send + Sync + 'static,
+    B: Buf + Send + Sync,
+{
+    if !cluster.is_active().await {
+        Err(inactive_cluster_error())
+    } else if cluster.is_primary().await {
+        debug!("[handle_file_upload] primary node, saving the file");
+        crate::file_uploader::save_sqlite(data, data_dir).await
+    } else {
+        // forward request to primary
+        let client = Client::new();
+        if let Ok(uri) = primary_uri(&cluster.primaries().await).await {
+            let url = Url::parse(uri)
+                .and_then(|url| url.join(PATH_FILE_UPLOAD_SQLITE))
                 .unwrap();
             debug!(
                 "[handle_file_upload] secondary node, uploading file to {}",

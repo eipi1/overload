@@ -17,7 +17,8 @@ mod tests {
     use tokio::time::sleep;
 
     pub static TEST_PATH: &str = "/test";
-    pub const FILE_UPLOAD_PATH: &str = "/test/requests-bin";
+    pub const PATH_FILE_UPLOAD: &str = "/request-file/csv";
+    pub const PATH_FILE_UPLOAD_SQLITE: &str = "/request-file/sqlite";
     pub static METRICS_PATH: &str = "/metrics";
 
     static ONCE: Once = Once::new();
@@ -186,6 +187,7 @@ mod tests {
     #[case("test-with-split-file-data.json")]
     #[case("test-with-split-file-data-2.json")]
     #[case("test-with-split-file-data-3.json")]
+    #[case("test-with-split-file-data-sqlite.json")]
     // #[case("test-with-split-file-data-4.json")]
     #[tokio::test]
     #[ignore]
@@ -288,15 +290,15 @@ mod tests {
         let file = tokio::fs::File::open(resource_dir().join(file_name))
             .await
             .unwrap();
+        let remote_path = if file_name.ends_with(".sqlite") {
+            PATH_FILE_UPLOAD_SQLITE
+        } else {
+            PATH_FILE_UPLOAD
+        };
 
         let client = reqwest::Client::new();
         let res = client
-            .post(
-                Url::from_str(address)
-                    .unwrap()
-                    .join(FILE_UPLOAD_PATH)
-                    .unwrap(),
-            )
+            .post(Url::from_str(address).unwrap().join(remote_path).unwrap())
             .header("content-length", file.metadata().await.unwrap().len())
             // .body(file_to_body(file))
             .body(Body::from(file))

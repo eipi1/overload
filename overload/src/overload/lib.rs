@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 #![allow(clippy::single_match)]
 
+use anyhow::Result as AnyResult;
 use cluster_executor::cleanup_job;
 use lazy_static::lazy_static;
 use log::error;
@@ -11,8 +12,11 @@ use overload_metrics::MetricsFactory;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sqlx::sqlite::SqliteConnectOptions;
+use sqlx::ConnectOptions;
 use std::env;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -31,7 +35,9 @@ pub const DEFAULT_DATA_DIR: &str = "/tmp";
 
 pub const PATH_JOB_STATUS: &str = "/test/status";
 pub const PATH_STOP_JOB: &str = "/test/stop";
-pub const PATH_FILE_UPLOAD: &str = "/test/requests-bin";
+// pub const PATH_FILE_UPLOAD: &str = "/test/requests-bin";
+pub const PATH_FILE_UPLOAD: &str = "/request-file/csv";
+pub const PATH_FILE_UPLOAD_SQLITE: &str = "/request-file/sqlite";
 
 lazy_static! {
     pub static ref METRICS_FACTORY: MetricsFactory = MetricsFactory::default();
@@ -105,6 +111,17 @@ pub(crate) fn pre_check(request: &Request) -> Result<(), ErrorCode> {
 fn request_file_exists(file_name: &str) -> bool {
     let path = PathBuf::from(file_name);
     path.exists()
+}
+
+async fn valid_sqlite(sqlite_file: &str) -> AnyResult<usize> {
+    let mut connection = SqliteConnectOptions::from_str(sqlite_file)?
+        .read_only(true)
+        .connect()
+        .await?;
+    let size: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM http_req")
+        .fetch_one(&mut connection)
+        .await?;
+    Ok(size.0 as usize)
 }
 
 //todo verify for cluster mode. using job id as name for secondary request

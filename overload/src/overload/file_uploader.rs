@@ -5,15 +5,17 @@ use std::fmt;
 use std::fmt::{Debug, Display};
 use std::io::Error as StdIoError;
 use std::io::ErrorKind;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::str::FromStr;
 use std::task::{Context, Poll};
 
+use crate::valid_sqlite;
 use anyhow::Error as AnyError;
-use bytes::Buf;
+use bytes::{Buf, Bytes};
 use csv_async::{AsyncDeserializer, AsyncReaderBuilder};
 use futures_core::ready;
-use futures_util::Stream;
+use futures_util::{Stream, TryStreamExt};
 use http::{Method, Uri};
 use log::{error, trace};
 use overload_http::HttpReq;
@@ -21,7 +23,8 @@ use overload_http::{GenericError, GenericResponse};
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{ConnectOptions, Connection};
-use tokio::io::AsyncRead;
+use tokio::fs::File;
+use tokio::io::{AsyncRead, AsyncWriteExt};
 use tokio_stream::StreamExt;
 use tokio_util::io::StreamReader;
 use uuid::Uuid;
@@ -42,10 +45,7 @@ where
     let file_name = Uuid::new_v4().to_string();
     let result = csv_reader_to_sqlite(reader, format!("{}/{}.sqlite", data_dir, file_name)).await;
     match result {
-        Ok(mut resp) => {
-            resp.data.insert("file".to_string(), file_name);
-            Ok(resp)
-        }
+        Ok(resp) => Ok(file_upload_success_response(file_name, resp)),
         Err(_) => Err(GenericError {
             message: "Unknown error.".to_string(),
             ..Default::default()
@@ -56,7 +56,7 @@ where
 pub async fn csv_reader_to_sqlite<R>(
     mut reader: AsyncDeserializer<R>,
     dest_file: String,
-) -> anyhow::Result<GenericResponse<String>>
+) -> anyhow::Result<usize>
 where
     R: AsyncRead + Unpin + Send + Sync,
 {
@@ -103,12 +103,12 @@ where
             }
         }
     }
-    let mut response = GenericResponse::default();
-    response
-        .data
-        .insert("valid_count".into(), success.to_string());
+    // let mut response = GenericResponse::default();
+    // response
+    //     .data
+    //     .insert("valid_count".into(), success.to_string());
     connection.close();
-    Ok(response)
+    Ok(success)
 }
 
 #[must_use = "streams do nothing unless polled"]
@@ -183,22 +183,90 @@ impl TryInto<HttpReq> for HttpReqCsvHelper {
     }
 }
 
+#[must_use = "streams do nothing unless polled"]
+struct WarpByteStream<S> {
+    inner: S,
+}
+
+impl<S, B> Stream for WarpByteStream<S>
+where
+    S: Stream<Item = Result<B, warp::Error>> + Unpin + Send + Sync,
+    B: Buf + Send + Sync,
+{
+    type Item = Result<Bytes, WarpStdIoError>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        match ready!(Pin::new(&mut self.get_mut().inner).poll_next(cx)) {
+            None => Poll::Ready(None),
+            Some(data) => {
+                let data = data
+                    .map_err(|inner| WarpStdIoError { inner })
+                    .map(|mut b| b.copy_to_bytes(b.remaining()));
+                Poll::Ready(Some(data))
+            }
+        }
+    }
+}
+
+pub async fn save_sqlite<S, B>(
+    http_stream: S,
+    data_dir: &str,
+) -> Result<GenericResponse<String>, GenericError>
+where
+    S: Stream<Item = Result<B, warp::Error>> + Unpin + Send + Sync,
+    B: Buf + Send + Sync,
+{
+    fn to_tokio_async_read(r: impl futures::io::AsyncRead) -> impl tokio::io::AsyncRead {
+        tokio_util::compat::FuturesAsyncReadCompatExt::compat(r)
+    }
+    let file_name = Uuid::new_v4().to_string();
+    let mut data_file_destination = PathBuf::from(data_dir).join(&file_name);
+    data_file_destination.set_extension("sqlite");
+    let mut data_file = File::create(&data_file_destination).await.map_err(|e| {
+        GenericError::internal_500(&format!(
+            "failed to create file: {}, error: {:?}",
+            &data_file_destination.to_str().unwrap(),
+            e
+        ))
+    })?;
+    let http_stream = WarpByteStream { inner: http_stream };
+    let async_read = TryStreamExt::map_err(http_stream, |e| {
+        std::io::Error::new(std::io::ErrorKind::Other, e)
+    })
+    .into_async_read();
+    let mut tokio_async_read = to_tokio_async_read(async_read);
+    tokio::io::copy(&mut tokio_async_read, &mut data_file).await?;
+    let _ = data_file.flush().await;
+    let valid_count = valid_sqlite(data_file_destination.to_str().unwrap()).await?;
+    Ok(file_upload_success_response(file_name, valid_count))
+}
+
+fn file_upload_success_response(file_name: String, valid_count: usize) -> GenericResponse<String> {
+    let mut response = GenericResponse::default();
+    response.data.insert("file".to_string(), file_name);
+    response
+        .data
+        .insert("valid_count".into(), valid_count.to_string());
+    response
+}
+
 #[cfg(test)]
 mod test {
     use crate::file_uploader::csv_reader_to_sqlite;
     use crate::log_error;
     use csv_async::AsyncReaderBuilder;
     use log::error;
+    use std::sync::Once;
 
-    // static ONCE: Once = Once::new();
+    static ONCE: Once = Once::new();
 
-    // pub fn setup() {
-    //     ONCE.call_once(|| {
-    //         let _ = tracing_subscriber::fmt()
-    //             .with_env_filter("trace")
-    //             .try_init();
-    //     });
-    // }
+    pub fn setup() {
+        ONCE.call_once(|| {
+            let _ = tracing_subscriber::fmt()
+                .with_env_filter("trace")
+                .try_init();
+        });
+    }
 
     // #[tokio::test]
     // async fn download_file_from_url() {
@@ -263,7 +331,7 @@ mod test {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_csv_to_sqlite() {
-        // setup();
+        setup();
         let csv_data = r#""url","method","body","headers"
 "http://httpbin.org/anything/11","GET","","{}"
 "http://httpbin.org/anything/13","GET","","{}"
