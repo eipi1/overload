@@ -1,6 +1,6 @@
 #![allow(unused_imports)]
 
-use crate::connection::{HttpConnection, QueuePool};
+use crate::connection::{ConnectionKeepAlive, HttpConnection, QueuePool};
 use crate::request_providers::RequestProvider;
 use crate::{
     data_dir_path, log_error, HttpRequestFuture, HttpRequestState, MessageFromPrimary, Metadata,
@@ -119,9 +119,13 @@ async fn handle_connection_from_primary(
     let init = prepare(&mut request, metadata.primary_host.clone());
     init.await?;
 
-    let (mut queue_pool, tx) = init_connection_pool(&request.target, job_id.clone())
-        .await
-        .ok_or_else(|| anyhow!("Unable to create connection pool"))?;
+    let (mut queue_pool, tx) = init_connection_pool(
+        &request.target,
+        job_id.clone(),
+        request.connection_keep_alive,
+    )
+    .await
+    .ok_or_else(|| anyhow!("Unable to create connection pool"))?;
 
     let mut request_spec = request.req;
 
@@ -244,7 +248,11 @@ lazy_static! {
     pub(crate) static ref CONNECTION_POOLS_USAGE_LISTENER: RwLock<HashMap<String, tokio::sync::oneshot::Receiver<()>>> = RwLock::new(HashMap::new());
 }
 
-async fn init_connection_pool(target: &Target, job_id: String) -> Option<(QueuePool, Sender<()>)> {
+async fn init_connection_pool(
+    target: &Target,
+    job_id: String,
+    keep_alive: ConnectionKeepAlive,
+) -> Option<(QueuePool, Sender<()>)> {
     let host_port = format!("{}:{}", &target.host, &target.port);
 
     // #[cfg(not(feature = "cluster"))]
@@ -293,7 +301,7 @@ async fn init_connection_pool(target: &Target, job_id: String) -> Option<(QueueP
             // if received notification
             get_existing_queue_pool(&job_id).await.unwrap()
         } else {
-            get_new_queue_pool(host_port.clone()).await
+            get_new_queue_pool(host_port.clone(), keep_alive).await
         }
     };
 
@@ -313,9 +321,9 @@ async fn init_connection_pool(target: &Target, job_id: String) -> Option<(QueueP
     Some((queue_pool, tx))
 }
 
-async fn get_new_queue_pool(host_port: String) -> QueuePool {
+async fn get_new_queue_pool(host_port: String, keep_alive: ConnectionKeepAlive) -> QueuePool {
     debug!("Creating new pool for: {}", &host_port);
-    QueuePool::new(host_port)
+    QueuePool::new(host_port, keep_alive)
 }
 
 // #[cfg(feature = "cluster")]
@@ -764,7 +772,7 @@ mod test {
         send_metadata_with_primary, send_request_to_secondary, RateMessage, DEFAULT_REMOC_PORT,
     };
     use log::info;
-    use overload_http::{HttpReq, RequestList, RequestSpecEnum};
+    use overload_http::{ConnectionKeepAlive, HttpReq, RequestList, RequestSpecEnum};
     use overload_metrics::MetricsFactory;
     use regex::Regex;
     use response_assert::ResponseAssertion;
@@ -956,10 +964,9 @@ mod test {
     }
 
     fn pool(url: &Url) -> QueuePool {
-        QueuePool::new(format!(
-            "{}:{}",
-            url.host_str().unwrap(),
-            url.port().unwrap()
-        ))
+        QueuePool::new(
+            format!("{}:{}", url.host_str().unwrap(), url.port().unwrap()),
+            ConnectionKeepAlive::default(),
+        )
     }
 }

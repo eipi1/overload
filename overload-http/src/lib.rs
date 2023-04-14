@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use std::error::Error as StdError;
 use std::fmt::{Display, Formatter};
 use std::io::Error as StdIoError;
+use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::{env, fmt};
@@ -112,6 +113,22 @@ impl<'a> sqlx::FromRow<'a, SqliteRow> for HttpReq {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionKeepAlive {
+    pub ttl: u32,
+    pub max_request_per_connection: NonZeroU32,
+}
+
+impl Default for ConnectionKeepAlive {
+    fn default() -> Self {
+        Self {
+            ttl: u32::MAX,
+            max_request_per_connection: NonZeroU32::new(u32::MAX).unwrap(),
+        }
+    }
+}
+
 /// Describe the request
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -122,6 +139,8 @@ pub struct Request {
     pub req: RequestSpecEnum,
     pub qps: RateSpecEnum,
     pub concurrent_connection: Option<ConcurrentConnectionRateSpec>,
+    #[serde(default)]
+    pub connection_keep_alive: ConnectionKeepAlive,
     #[serde(default = "default_histogram_bucket")]
     pub histogram_buckets: SmallVec<[f64; 6]>,
     pub response_assertion: Option<ResponseAssertion>,
