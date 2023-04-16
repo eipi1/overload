@@ -1,0 +1,97 @@
+{
+  "request": {
+    "duration": 10,
+    "name": "test-connection-keep-alive-ttl.json",
+    "qps": {
+      "ConstantRate": {
+        "countPerSec": 3
+      }
+    },
+    "req": {
+      "RandomDataRequest": {
+        "url": "/anything",
+        "method": "POST",
+        "bodySchema": {
+          "title": "Person",
+          "type": "object",
+          "properties": {
+            "firstName": {
+              "type": "string",
+              "description": "The person's first name."
+            },
+            "lastName": {
+              "type": "string",
+              "description": "The person's last name."
+            },
+            "age": {
+              "description": "Age in years which must be equal to or greater than zero.",
+              "type": "integer",
+              "minimum": 10,
+              "maximum": 20
+            }
+          }
+        },
+        "headers": {
+          "Connection":"keep-alive"
+        }
+      }
+    },
+    "target": {
+      "host": "127.0.0.1",
+      "port": 2080,
+      "protocol": "HTTP"
+    },
+    "concurrentConnection": {
+      "ConstantRate": {
+        "countPerSec": 3
+      }
+    },
+    "responseAssertion": {
+      "luaAssertion": [
+        "function (method, url, reqBody, respBody)",
+        "result ={}",
+        "print('inside lua')",
+        "if method~='POST' then",
+        "local err={}",
+        "err.id=1",
+        "err.success=false",
+        "err.error='Invalid method'",
+        "table.insert(result,err)",
+        "end",
+        "jsonReq=json.decode(reqBody)",
+        "jsonResp=json.decode(respBody)",
+        "if jsonResp.json.firstName == nil then",
+        "local err={}",
+        "err.id=2",
+        "err.success=false",
+        "err.error='firstName not found'",
+        "table.insert(result,err)",
+        "end",
+        "if jsonResp.json.age == nil then",
+        "local err={}",
+        "err.id=3",
+        "err.success=false",
+        "err.error='age not found'",
+        "table.insert(result,err)",
+        "elseif jsonResp.json.age > 20 or jsonResp.json.age < 10 then",
+        "local err={}",
+        "err.id=4",
+        "err.success=false",
+        "err.error='age out of range: '..jsonResp.json.age",
+        "table.insert(result,err)",
+        "end",
+        "return result",
+        "end"
+      ]
+    },
+    "connectionKeepAlive": {
+      "ttl": 5000,
+      "maxRequestPerConnection": 1000
+    }
+  },
+  "expectation": {
+    "qps": [3,3,3,3,3,3,3,3,3,3],
+    "connectionSuccess": [3,0,0,0,0,0,3,0,0,0],
+    "connectionDropped": [0,0,0,0,0,0,3,0,0,0]
+  }
+}

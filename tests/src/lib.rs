@@ -89,6 +89,11 @@ mod tests {
     #[case("test-generator-with-assertion.json")]
     #[case("test-array-generator-with-assertion.json")]
     #[case("test-generator-url-param-with-assertion.json")]
+    #[case("test-connection-keep-alive-default.json")]
+    #[case("test-connection-keep-alive.json")]
+    #[case("test-connection-keep-alive-ttl.json")]
+    #[case("test-connection-keep-alive-ttl-2.json")]
+    #[case("test-connection-keep-alive-max-req.json")]
     #[tokio::test]
     #[ignore]
     async fn test_scenarios_assertion(#[case] path: &str) {
@@ -100,11 +105,15 @@ mod tests {
         let duration = test_duration(&test_spec) as usize;
         let qps_expectation = qps_expectation(&test_spec);
         let failure_expectation = assert_failure_expectation(&test_spec);
+        let conn_success_expectation = connection_success_expectation(&test_spec);
+        let conn_dropped_expectation = connection_dropped_expectation(&test_spec);
 
         sleep(Duration::from_secs(1)).await;
         for i in 1..duration - 1 {
             assert_request_count(i, &job_id, &qps_expectation).await;
             assert_assertion_failure_count(i, &job_id, &failure_expectation).await;
+            assert_connection_success_count(i, &job_id, &conn_success_expectation).await;
+            assert_connection_dropped_count(i, &job_id, &conn_dropped_expectation).await;
             sleep(Duration::from_secs(1)).await;
         }
     }
@@ -322,6 +331,38 @@ mod tests {
         );
     }
 
+    #[allow(dead_code)]
+    async fn assert_connection_success_count(i: usize, job_id: &str, expectation: &[u64]) {
+        if expectation.is_empty() {
+            return;
+        }
+        let metrics = get_all_metrics().await;
+        let metrics = filter_metrics(metrics, "connection_pool_new_connection_success");
+        let metrics = filter_metrics(metrics, job_id);
+        println!("{}", &metrics);
+        assert_metrics_is_in_range(
+            &metrics,
+            (cumulative_sum::<u64>(expectation, i, 0))
+                ..(cumulative_sum::<u64>(expectation, i + 2, 0) + 1),
+        );
+    }
+
+    #[allow(dead_code)]
+    async fn assert_connection_dropped_count(i: usize, job_id: &str, expectation: &[u64]) {
+        if expectation.is_empty() {
+            return;
+        }
+        let metrics = get_all_metrics().await;
+        let metrics = filter_metrics(metrics, "connection_pool_connection_dropped");
+        let metrics = filter_metrics(metrics, job_id);
+        println!("{}", &metrics);
+        assert_metrics_is_in_range(
+            &metrics,
+            (cumulative_sum::<u64>(expectation, i, 0))
+                ..(cumulative_sum::<u64>(expectation, i + 2, 0) + 1),
+        );
+    }
+
     async fn assert_assertion_failure_count(
         i: usize,
         job_id: &str,
@@ -408,6 +449,32 @@ mod tests {
             .and_then(|v| v.get("qps"))
             .and_then(|v| v.as_array())
             .unwrap()
+            .iter()
+            .map(|v| v.as_u64().unwrap())
+            .collect::<Vec<_>>()
+    }
+
+    #[allow(dead_code)]
+    fn connection_success_expectation(test_spec: &Value) -> Vec<u64> {
+        let default = vec![];
+        test_spec
+            .get("expectation")
+            .and_then(|v| v.get("connectionSuccess"))
+            .and_then(|v| v.as_array())
+            .unwrap_or(&default)
+            .iter()
+            .map(|v| v.as_u64().unwrap())
+            .collect::<Vec<_>>()
+    }
+
+    #[allow(dead_code)]
+    fn connection_dropped_expectation(test_spec: &Value) -> Vec<u64> {
+        let default = vec![];
+        test_spec
+            .get("expectation")
+            .and_then(|v| v.get("connectionDropped"))
+            .and_then(|v| v.as_array())
+            .unwrap_or(&default)
             .iter()
             .map(|v| v.as_u64().unwrap())
             .collect::<Vec<_>>()

@@ -7,11 +7,13 @@ use overload_metrics::Metrics;
 use std::collections::VecDeque;
 use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::net::TcpStream;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 use tower::ServiceExt;
+
+pub use overload_http::ConnectionKeepAlive;
 
 type SharedMutableVec = Arc<RwLock<Vec<HttpConnection>>>;
 type InteriorMutable = SharedMutableVec;
@@ -27,14 +29,15 @@ pub(crate) struct QueuePool {
     _recyclable_connection: AtomicU32,
     host_port: String,
     // An elastic pools adds connections when required.
-    // the pool starts with max_connection =0 and never changes.
+    // the pool starts with max_connection=0 and never changes.
     // once it changes max_connection, it'll become non-elastic
     elastic: bool,
+    keep_alive: ConnectionKeepAlive,
     pub(crate) last_use: Instant,
 }
 
 impl QueuePool {
-    pub fn new(host_port: String) -> Self {
+    pub fn new(host_port: String, keep_alive: ConnectionKeepAlive) -> Self {
         QueuePool {
             max_connection: 0,
             connections: VecDeque::new(),
@@ -46,6 +49,7 @@ impl QueuePool {
             _recyclable_connection: AtomicU32::new(0),
             host_port,
             elastic: true,
+            keep_alive,
             last_use: Instant::now(),
         }
     }
@@ -83,6 +87,7 @@ impl QueuePool {
             recycled,
             host_port,
             diff,
+            self.keep_alive,
             metrics.clone(),
         );
         tokio::spawn(resizer);
@@ -136,9 +141,16 @@ impl QueuePool {
         let conn_to_get = std::cmp::min(connection_request as usize, available);
         let mut vec = Vec::with_capacity(conn_to_get);
         let mut futures = FuturesUnordered::new();
+
+        let mut dropped: u64 = 0;
         for _ in 0..connection_request {
             if let Some(con) = self.connections.pop_front() {
-                futures.push(QueuePool::check_ready(con))
+                if con.should_drop {
+                    dropped += 1;
+                    drop(con); //for readability
+                } else {
+                    futures.push(QueuePool::check_ready(con))
+                }
             } else {
                 break;
             }
@@ -151,10 +163,10 @@ impl QueuePool {
                 broken += 1;
             }
         }
-        // refill broken connections
-        self.add_new_connection_mut(broken as i64, metrics);
+        // refill broken & dropped connections
+        self.add_new_connection_mut((broken + dropped) as i64, metrics);
         metrics.pool_connection_broken(broken);
-        metrics.pool_connection_dropped(broken);
+        metrics.pool_connection_dropped(broken + dropped);
         let len = vec.len();
         self.busy_connections += len;
         let len = len as f64;
@@ -166,7 +178,13 @@ impl QueuePool {
     fn add_new_connection_mut(&mut self, count: i64, metrics: &Arc<Metrics>) {
         let new_connections = self.new_connections.clone();
         let host_port = self.host_port.clone();
-        let conn_gen = Self::add_new_connection(new_connections, host_port, count, metrics.clone());
+        let conn_gen = Self::add_new_connection(
+            new_connections,
+            host_port,
+            count,
+            self.keep_alive,
+            metrics.clone(),
+        );
         tokio::spawn(conn_gen);
     }
 
@@ -181,6 +199,7 @@ impl QueuePool {
         recycle_connections: SharedMutableVec,
         host_port: String,
         diff: i64,
+        keep_alive: ConnectionKeepAlive,
         metrics: Arc<Metrics>,
     ) {
         debug!("resizing pool by: {}", &diff);
@@ -199,7 +218,7 @@ impl QueuePool {
         } else if diff > 0 {
             // need to add new connections
             debug!("resizing, requesting {} more connections", diff);
-            Self::add_new_connection(new_connections, host_port, diff, metrics).await;
+            Self::add_new_connection(new_connections, host_port, diff, keep_alive, metrics).await;
         } else {
         }
     }
@@ -208,16 +227,17 @@ impl QueuePool {
         new_connections: SharedMutableVec,
         host_port: String,
         count: i64,
+        keep_alive: ConnectionKeepAlive,
         metrics: Arc<Metrics>,
     ) {
         debug!("Adding {} new connections", count);
         metrics.pool_connection_attempt(count as u64);
         let mut futures = FuturesUnordered::new();
         for _ in 0..count {
-            let connection_future = open_connection(&host_port);
+            let connection_future = open_connection(&host_port, keep_alive);
             futures.push(connection_future);
         }
-        let mut conn = vec![];
+        let mut conn = Vec::with_capacity(count as usize);
         while let Some(connection) = futures.next().await {
             if let Some(connection) = connection {
                 conn.push(connection)
@@ -262,13 +282,22 @@ impl QueuePool {
     #[inline]
     pub(crate) async fn return_connection(
         return_pool: &SharedMutableVec,
-        connection: HttpConnection,
+        mut connection: HttpConnection,
         metrics: &Arc<Metrics>,
     ) {
+        trace!("[return_connection] - returning connection");
         //no need to check connection ready status here, checking when giving out connections
+        if connection.expire_at < since_epoch() || connection.remaining_reuse <= 1 {
+            debug!(
+                "[return_connection] - connection should drop - expire_at:{}, remaining_reuse: {}",
+                connection.expire_at, connection.remaining_reuse
+            );
+            connection.should_drop = true;
+        }
+        connection.remaining_reuse -= 1;
         metrics.pool_connection_busy(-1_f64);
         metrics.pool_connection_idle(1_f64);
-        return_pool.write().await.push(connection)
+        return_pool.write().await.push(connection);
     }
     /*
     pub(crate) async fn return_connection_vec(
@@ -311,11 +340,16 @@ impl QueuePool {
 pub(crate) struct HttpConnection {
     pub(crate) connection: Option<Connection<TcpStream, Body>>,
     pub(crate) request_handle: SendRequest<Body>,
-    broken: bool,
+    should_drop: bool,
+    expire_at: u64,
+    remaining_reuse: i32,
     join_handle: JoinHandle<()>,
 }
 
-async fn open_connection(host_port: &str) -> Option<HttpConnection> {
+async fn open_connection(
+    host_port: &str,
+    keep_alive: ConnectionKeepAlive,
+) -> Option<HttpConnection> {
     debug!("Opening connection to: {}", host_port);
     let tcp_stream = TcpStream::connect(host_port).await;
     match tcp_stream {
@@ -332,7 +366,13 @@ async fn open_connection(host_port: &str) -> Option<HttpConnection> {
                     let connection = HttpConnection {
                         request_handle: result.0,
                         connection: None,
-                        broken: false,
+                        should_drop: false,
+                        expire_at: get_expiry(keep_alive.ttl),
+                        remaining_reuse: keep_alive
+                            .max_request_per_connection
+                            .get()
+                            .try_into()
+                            .unwrap_or(i32::MAX),
                         join_handle,
                     };
                     // no need to check connection ready status here
@@ -358,6 +398,17 @@ async fn open_connection(host_port: &str) -> Option<HttpConnection> {
             None
         }
     }
+}
+
+fn since_epoch() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
+}
+
+fn get_expiry(ttl: u32) -> u64 {
+    since_epoch().checked_add(ttl as u64).unwrap_or(u64::MAX)
 }
 
 /*
