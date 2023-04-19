@@ -198,8 +198,5 @@ version = "0.1"
 [dev-dependencies.test-case]
 version = "2.2"
 
-[dev-dependencies.curl]
-version = "0.4"
-
 [features]
 cluster = ["rust-cloud-discovery", "cloud-discovery-kubernetes", "cluster-mode"]

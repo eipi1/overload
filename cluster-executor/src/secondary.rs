@@ -586,9 +586,10 @@ async fn send_single_requests(
     lua_executor_sender: Option<LuaExecSender>,
 ) -> HttpConnection {
     let body = if let Some(body) = req.body.clone() {
-        Bytes::from(body)
+        trace!("[send_single_requests] - has body: {}", &body);
+        Bytes::from(body).into()
     } else {
-        Bytes::new()
+        Body::empty()
     };
     let request_uri = Uri::try_from(req.url.clone()).unwrap();
     //todo remove unwrap
@@ -599,7 +600,7 @@ async fn send_single_requests(
     for (k, v) in req.headers.iter() {
         try_add_header(headers, k, v);
     }
-    let request = request.body(body.into()).unwrap();
+    let request = request.body(body).unwrap();
     trace!("sending request: {:?}", &request.uri());
 
     let request = connection.request_handle.send_request(request);

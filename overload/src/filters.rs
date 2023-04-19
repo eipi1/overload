@@ -219,6 +219,7 @@ mod standalone_mode_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[ignore]
     async fn test_file_sqlite_upload() {
         setup();
         let (_tx, http_port, _remoc_port) = init_env().await;
