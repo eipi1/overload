@@ -103,10 +103,6 @@ where
             }
         }
     }
-    // let mut response = GenericResponse::default();
-    // response
-    //     .data
-    //     .insert("valid_count".into(), success.to_string());
     connection.close();
     Ok(success)
 }

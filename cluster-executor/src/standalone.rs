@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use log::debug;
+use log::{debug, info};
 use remoc::rch::base::Sender;
 use tokio_stream::StreamExt;
 
@@ -47,7 +47,20 @@ pub async fn handle_request(request: Request) {
             .insert(job_id.clone(), JobStatus::InProgress);
     }
     let sender = senders.get_mut("localhost").unwrap();
+    let mut counter = 0u8;
     while let Some((qps, connection_count)) = stream.next().await {
+        counter += 1;
+        if counter % 5 == 0 {
+            // check for stop every 5 seconds
+            if matches!(
+                JOB_STATUS.read().await.get(&job_id),
+                Some(&JobStatus::Stopped)
+            ) {
+                info!("[handle_request] - stopping job {}", &job_id);
+                break;
+            }
+            counter = 0;
+        }
         send_rate_message_to_executor(sender, qps, connection_count).await;
     }
     send_end_msg(sender, false).await;
