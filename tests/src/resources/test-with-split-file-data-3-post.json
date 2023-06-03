@@ -1,0 +1,38 @@
+{
+  "dataFileName": "split-file-data-3-post.csv",
+  "request": {
+    "duration": 10,
+    "name": "test-with-split-file-data-3-post",
+    "qps": {
+      "ConstantRate": {
+        "countPerSec": 3
+      }
+    },
+    "req": {
+      "SplitRequestFile": {
+        "file_name": "4e1d1b32-0f1e-4b31-92dd-66f51c5acf9a"
+      }
+    },
+    "target": {
+      "host": "127.0.0.1",
+      "port": 2080,
+      "protocol": "HTTP"
+    },
+    "concurrentConnection": {
+      "ConstantRate": {
+        "countPerSec": 3
+      }
+    }
+  },
+  "expectation": {
+    "qps": [3,3,3,3,3,3,3,3,3,3],
+    "mock": {
+      "0": 5,
+      "1": 5,
+      "2": 5,
+      "3": 5,
+      "4": 5,
+      "5": 5
+    }
+  }
+}

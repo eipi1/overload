@@ -115,7 +115,6 @@ fn request_file_exists(file_name: &str) -> bool {
 
 async fn valid_sqlite(sqlite_file: &str) -> AnyResult<usize> {
     let mut connection = SqliteConnectOptions::from_str(sqlite_file)?
-        .read_only(true)
         .connect()
         .await?;
     let size: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM http_req")
