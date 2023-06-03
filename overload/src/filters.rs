@@ -15,6 +15,8 @@ use warp::{reply, Filter};
 pub fn get_routes() -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     let prometheus_metric = filters_common::prometheus_metric();
     let upload_binary_file = upload_binary_file();
+    let upload_csv_file = upload_csv_file();
+    let upload_sqlite_file = upload_sqlite_file();
     let stop_req = stop_req();
     let history = status();
     let overload_req = overload_req();
@@ -25,6 +27,8 @@ pub fn get_routes() -> impl Filter<Extract = impl warp::Reply, Error = warp::Rej
         .or(stop_req)
         .or(history)
         .or(upload_binary_file)
+        .or(upload_csv_file)
+        .or(upload_sqlite_file)
 }
 
 pub fn overload_req() -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
@@ -39,7 +43,7 @@ pub fn overload_multi_req(
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     warp::post()
         .and(warp::path("tests").and(warp::path::end()))
-        .and(warp::body::content_length_limit(1024 * 1024))
+        .and(warp::body::content_length_limit(1024 * 1024 * 1024))
         .and(warp::body::json())
         .and_then(|request: MultiRequest| async move { execute_multiple(request).await })
 }
@@ -54,7 +58,33 @@ pub fn upload_binary_file(
         )
         .and(warp::body::content_length_limit(1024 * 1024 * 32))
         .and(warp::body::stream())
-        .and_then(upload_binary_file_handler)
+        .and_then(upload_csv_file_handler)
+}
+
+pub fn upload_csv_file() -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone
+{
+    warp::post()
+        .and(
+            warp::path("request-file")
+                .and(warp::path("csv"))
+                .and(warp::path::end()),
+        )
+        .and(warp::body::content_length_limit(1024 * 1024 * 32))
+        .and(warp::body::stream())
+        .and_then(upload_csv_file_handler)
+}
+
+pub fn upload_sqlite_file(
+) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+    warp::post()
+        .and(
+            warp::path("request-file")
+                .and(warp::path("sqlite"))
+                .and(warp::path::end()),
+        )
+        .and(warp::body::content_length_limit(1024 * 1024 * 32))
+        .and(warp::body::stream())
+        .and_then(upload_sqlite_file_handler)
 }
 
 pub fn stop_req() -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
@@ -83,8 +113,7 @@ pub fn status() -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejecti
 }
 
 /// should use shared storage, no need to forward upload request
-// #[allow(clippy::clippy::explicit_write)]
-async fn upload_binary_file_handler<S, B>(data: S) -> Result<impl warp::Reply, Infallible>
+async fn upload_csv_file_handler<S, B>(data: S) -> Result<impl warp::Reply, Infallible>
 where
     S: Stream<Item = Result<B, warp::Error>> + Unpin + Send + Sync,
     B: Buf + Send + Sync,
@@ -92,6 +121,24 @@ where
     let path = data_dir_path();
     let data_dir = path.to_str().unwrap();
     let result = overload::file_uploader::csv_stream_to_sqlite(data, data_dir).await;
+    match result {
+        Ok(r) => Ok(reply::with_status(reply::json(&r), StatusCode::OK)),
+        Err(e) => Ok(reply::with_status(
+            reply::json(&e),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        )),
+    }
+}
+
+/// should use shared storage, no need to forward upload request
+async fn upload_sqlite_file_handler<S, B>(data: S) -> Result<impl warp::Reply, Infallible>
+where
+    S: Stream<Item = Result<B, warp::Error>> + Unpin + Send + Sync,
+    B: Buf + Send + Sync,
+{
+    let path = data_dir_path();
+    let data_dir = path.to_str().unwrap();
+    let result = overload::file_uploader::save_sqlite(data, data_dir).await;
     match result {
         Ok(r) => Ok(reply::with_status(reply::json(&r), StatusCode::OK)),
         Err(e) => Ok(reply::with_status(
@@ -140,6 +187,7 @@ mod standalone_mode_tests {
     use regex::Regex;
     use serde_json::json;
     use std::time::Duration;
+    use tokio::io::AsyncReadExt;
     use tokio::sync::oneshot::Sender;
 
     async fn init_env() -> (Sender<()>, Port, Port) {
@@ -168,6 +216,31 @@ mod standalone_mode_tests {
             &METRICS_FACTORY,
         ));
         (tx, http_port, remoc_port)
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore]
+    async fn test_file_sqlite_upload() {
+        setup();
+        let (_tx, http_port, _remoc_port) = init_env().await;
+        let mut file = tokio::fs::File::open("test-requests.sqlite").await.unwrap();
+        let mut data = vec![];
+        file.read_to_end(&mut data).await.unwrap();
+        let client = hyper::Client::new();
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!(
+                "http://127.0.0.1:{}/{}",
+                http_port, "request-file/sqlite"
+            ))
+            .body(Body::from(data))
+            .expect("request builder");
+        let response = client.request(req).await.unwrap();
+        println!("upload request status: {}", response.status());
+        println!(
+            "upload request response body: {:?}",
+            hyper::body::to_bytes(response).await.unwrap()
+        );
     }
 
     /// Because tests has dependency on environment variable, (see [`cluster_executor::remoc_port()`])

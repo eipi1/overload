@@ -276,6 +276,9 @@ macro_rules! from_error {
     ($t:ty) => {
         impl From<$t> for GenericError {
             fn from(e: $t) -> Self {
+                use log::error;
+                use std::backtrace::Backtrace;
+                error!("error: {}, {}", e.to_string(), Backtrace::force_capture());
                 GenericError {
                     error_code: 500,
                     message: e.to_string(),

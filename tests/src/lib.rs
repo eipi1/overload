@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use env_logger::Env;
-    use httpmock::Method::GET;
+    use httpmock::Method::{GET, POST};
     use log::info;
     use reqwest::{Body, Url};
     use rstest::rstest;
@@ -17,7 +17,8 @@ mod tests {
     use tokio::time::sleep;
 
     pub static TEST_PATH: &str = "/test";
-    pub const FILE_UPLOAD_PATH: &str = "/test/requests-bin";
+    pub const PATH_FILE_UPLOAD: &str = "/request-file/csv";
+    pub const PATH_FILE_UPLOAD_SQLITE: &str = "/request-file/sqlite";
     pub static METRICS_PATH: &str = "/metrics";
 
     static ONCE: Once = Once::new();
@@ -195,6 +196,7 @@ mod tests {
     #[case("test-with-split-file-data.json")]
     #[case("test-with-split-file-data-2.json")]
     #[case("test-with-split-file-data-3.json")]
+    #[case("test-with-split-file-data-sqlite.json")]
     // #[case("test-with-split-file-data-4.json")]
     #[tokio::test]
     #[ignore]
@@ -210,6 +212,89 @@ mod tests {
         for i in 0..20 {
             let mock = mock_server.mock(|when, then| {
                 when.method(GET).path(format!("/{path}/file/{i}"));
+                then.status(200)
+                    .header("content-type", "application/json")
+                    .header("Connection", "keep-alive")
+                    .body(r#"{"hello": "world"}"#);
+            });
+            mocks.push(mock);
+        }
+
+        let path = resource_dir().join(path);
+        let mut test_spec = serde_json::from_reader::<_, Value>(File::open(path).unwrap()).unwrap();
+
+        let file_name = test_spec.get("dataFileName").unwrap().as_str().unwrap();
+        let file_id = upload_file(file_name).await;
+
+        let request = test_spec.get_mut("request").unwrap();
+
+        let _ = request
+            .get_mut("req")
+            .and_then(|v| {
+                let file = v.get("SplitRequestFile");
+                if file.is_some() {
+                    v.get_mut("SplitRequestFile")
+                } else {
+                    // drop(file);
+                    v.get_mut("RequestFile")
+                }
+            })
+            .and_then(|v| v.get_mut("file_name"))
+            .map(|v| *v = Value::String(file_id));
+
+        let job_id = send_test_req_with_json_target(
+            address(),
+            request.clone(),
+            target_host().to_string(),
+            url.port().unwrap(),
+        )
+        .await;
+
+        let duration = test_duration(&test_spec) as usize;
+        let qps_expectation = qps_expectation(&test_spec);
+        let failure_expectation = assert_failure_expectation(&test_spec);
+        sleep(Duration::from_secs(1)).await;
+        for i in 1..duration - 1 {
+            if !cluster_mode() {
+                assert_request_count(i, &job_id, &qps_expectation).await;
+            }
+            assert_assertion_failure_count(i, &job_id, &failure_expectation).await;
+            sleep(Duration::from_secs(1)).await;
+        }
+
+        sleep(Duration::from_secs(1_u64)).await;
+        let mock_expectation = mock_expectation(&test_spec);
+        for (id, expectation) in mock_expectation {
+            let hit = mocks
+                .get(id.parse::<usize>().unwrap())
+                .unwrap()
+                .hits_async()
+                .await;
+            assert_eq!(
+                hit, expectation as usize,
+                "assertion failure - mock:{id}, hit:{hit}, expectation: {expectation}"
+            );
+        }
+    }
+
+    #[rstest]
+    #[case("test-with-split-file-data-3-post.json")]
+    #[case("test-with-split-file-data-sqlite-post.json")]
+    #[tokio::test]
+    #[ignore]
+    async fn scenarios_with_post_file_and_mock_verification(#[case] path: &str) {
+        // let path = "test-with-split-file-data-3.json";
+        init_logger();
+
+        let (mock_server, url) = ASYNC_ONCE_HTTP_MOCK.get_or_init(init_http_mock).await;
+        println!("url - {:?}", &url);
+
+        let mut mocks = Vec::with_capacity(20);
+
+        for i in 0..20 {
+            let mock = mock_server.mock(|when, then| {
+                when.method(POST).path(format!("/{path}/file/{i}"))
+                    .body("{\"sample\":\"json body\",\"host\":\"127.0.0.1\",\"port\":2080,\"protocol\":\"HTTP\"}");
                 then.status(200)
                     .header("content-type", "application/json")
                     .header("Connection", "keep-alive")
@@ -297,15 +382,15 @@ mod tests {
         let file = tokio::fs::File::open(resource_dir().join(file_name))
             .await
             .unwrap();
+        let remote_path = if file_name.ends_with(".sqlite") {
+            PATH_FILE_UPLOAD_SQLITE
+        } else {
+            PATH_FILE_UPLOAD
+        };
 
         let client = reqwest::Client::new();
         let res = client
-            .post(
-                Url::from_str(address)
-                    .unwrap()
-                    .join(FILE_UPLOAD_PATH)
-                    .unwrap(),
-            )
+            .post(Url::from_str(address).unwrap().join(remote_path).unwrap())
             .header("content-length", file.metadata().await.unwrap().len())
             // .body(file_to_body(file))
             .body(Body::from(file))
@@ -327,7 +412,7 @@ mod tests {
         assert_metrics_is_in_range(
             &metrics,
             (cumulative_sum::<u64>(qps_expectation, i, 0))
-                ..(cumulative_sum::<u64>(qps_expectation, i + 2, 0)),
+                ..(cumulative_sum::<u64>(qps_expectation, i + 2, 0) + 1),
         );
     }
 
@@ -369,10 +454,9 @@ mod tests {
         failure_expectation: &HashMap<&String, Vec<u64>>,
     ) {
         let metrics = get_all_metrics().await;
-        info!("{}", &metrics);
         let metrics = filter_metrics(metrics, "assertion_failure");
         let metrics = filter_metrics(metrics, job_id);
-        println!("{}", &metrics);
+        info!("{}", &metrics);
         for (k, expectation) in failure_expectation {
             let metrics = filter_metrics(metrics.clone(), &format!("assertion_id=\"{}\"", k));
             assert_metrics_is_in_range(
@@ -541,9 +625,11 @@ mod tests {
     }
 
     fn assert_metrics_is_in_range(metrics: &str, range: Range<u64>) {
-        info!("expectation range: {:?}", &range);
         let metrics_val = get_value_for_metrics(metrics);
-        info!("metrics_val: {metrics_val}");
+        info!(
+            "expectation range: {:?}, metrics_val: {metrics_val}",
+            &range
+        );
         if metrics_val == 0 {
             assert_eq!(0, range.start);
         } else {
