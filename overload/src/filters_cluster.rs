@@ -75,7 +75,7 @@ pub fn overload_req(
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     warp::post()
         .and(warp::path("test").and(warp::path::end()))
-        .and(warp::body::content_length_limit(1024 * 1024))
+        .and(warp::body::content_length_limit(1024 * 1024 * 2))
         .and(warp::body::json())
         .and_then(move |request: Request| {
             let tmp = cluster.clone();
@@ -88,7 +88,7 @@ pub fn overload_multi_req(
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     warp::post()
         .and(warp::path("tests").and(warp::path::end()))
-        .and(warp::body::content_length_limit(1024 * 1024 * 1024))
+        .and(warp::body::content_length_limit(1024 * 1024 * 5))
         .and(warp::body::json())
         .and_then(move |request: MultiRequest| {
             let tmp = cluster.clone();
@@ -105,6 +105,7 @@ pub fn upload_binary_file(
                 .and(warp::path("requests-bin"))
                 .and(warp::path::end()),
         )
+        .and(warp::body::content_length_limit(1024 * 1024 * 1024))
         .and(warp::header::<u64>("content-length"))
         .and(warp::body::stream())
         .and_then(move |content_len, stream| {
@@ -122,7 +123,7 @@ pub fn upload_csv_file(
                 .and(warp::path("csv"))
                 .and(warp::path::end()),
         )
-        .and(warp::body::content_length_limit(1024 * 1024 * 32))
+        .and(warp::body::content_length_limit(1024 * 1024 * 1024))
         .and(warp::header::<u64>("content-length"))
         .and(warp::body::stream())
         .and_then(move |content_len, stream| {
@@ -140,7 +141,7 @@ pub fn upload_sqlite_file(
                 .and(warp::path("sqlite"))
                 .and(warp::path::end()),
         )
-        .and(warp::body::content_length_limit(1024 * 1024 * 32))
+        .and(warp::body::content_length_limit(1024 * 1024 * 1024))
         .and(warp::header::<u64>("content-length"))
         .and(warp::body::stream())
         .and_then(move |content_len, stream| {
