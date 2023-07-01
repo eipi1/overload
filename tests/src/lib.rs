@@ -89,6 +89,7 @@ mod tests {
     #[case("test-assertion-fail.json")]
     #[case("test-generator-with-assertion.json")]
     #[case("test-array-generator-with-assertion.json")]
+    #[case("test-generator-const-obj-with-assertion.json")]
     #[case("test-generator-url-param-with-assertion.json")]
     #[case("test-connection-keep-alive-default.json")]
     #[case("test-connection-keep-alive.json")]
@@ -458,6 +459,10 @@ mod tests {
         let metrics = filter_metrics(metrics, job_id);
         info!("{}", &metrics);
         for (k, expectation) in failure_expectation {
+            info!(
+                "asserting assertions - key:{k}, expectation: {:?}",
+                expectation
+            );
             let metrics = filter_metrics(metrics.clone(), &format!("assertion_id=\"{}\"", k));
             assert_metrics_is_in_range(
                 &metrics,

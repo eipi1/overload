@@ -10,15 +10,15 @@ Generate request with random data based on constraints specified using JSON Sche
 | bodySchema     | No       | Request body spec to be used for random data generation                                                                                           | JSON Schema         |
 | uriParamSchema | No       | Url param spec to be used for random data generation                                                                                              | JSON Schema         |
 
-### Supported JSON Schema spec
-| type    | supported |
-|---------|-----------|
-| string  | ✅         |
-| integer | ✅         |
-| object  | ✅         |
-| array   | ✅         |
-| boolean | ❎         |
-| null    | ❎         |
+### Type & Constraint Support
+| type    | supported | Length | min/max | constant     | pattern |
+|---------|-----------|--------|---------|--------------|---------|
+| string  | ✅         | ✅      | ❎       | ✅            | ✅       |
+| integer | ✅         | ❎      | ✅       | ✅            | ❎       |
+| object  | ✅         | ❎      | ❎       | ✅ (snapshot) | ❎       |
+| array   | ✅         | ❎      | ❎       | ❎            | ❎       |
+| boolean | ❎         | ❎      | ❎       | ❎            | ❎       |
+| null    | ❎         | ❎      | ❎       | ❎            | ❎       |
 
 ### Supported constraints
 | Constraints | Supported | Note                                                                                                                                                       |
@@ -86,6 +86,17 @@ Generate request with random data based on constraints specified using JSON Sche
             "items": {
               "type": "string",
               "pattern": "^a[0-9]{4}z$"
+            }
+          },
+          "constObject": {
+            "type": "object",
+            "constant": {
+              "comment": "everything in this object will be treated as constant",
+              "key1": "val1",
+              "properties": {
+                "comment": "not a schema properties"
+              },
+              "keyInt": 1234
             }
           }
         }
