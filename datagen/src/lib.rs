@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::convert::TryFrom;
 
 const PATTER_MAX_REPEAT: u32 = 10;
+const TYPE_DATA: &str = "type";
 
 const KEY_FOR_KEYLESS_SCHEMAS: &str = "__";
 
@@ -47,6 +48,7 @@ pub enum Constraints {
     Maximum(i64),
     ConstantInt(i64),
     ConstantStr(String),
+    ConstantValue(Value),
     #[serde(serialize_with = "pattern_serializer")]
     Pattern(String, #[serde(skip_deserializing)] Option<Hir>),
 }
@@ -87,6 +89,13 @@ impl Constraints {
             _ => None,
         }
     }
+
+    fn as_serde_value(&self) -> Option<&Value> {
+        match *self {
+            Constraints::ConstantValue(ref x) => Some(x),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -97,6 +106,7 @@ pub enum DataSchema {
     String(String, HashMap<Keywords, Constraints>),
     Integer(String, HashMap<Keywords, Constraints>),
     Object(Option<String>, Vec<DataSchema>),
+    ConstantObject(Option<String>, HashMap<Keywords, Constraints>),
     Array(
         Option<String>,
         Vec<DataSchema>,
@@ -158,27 +168,33 @@ fn convert_data_schema_to_map(schemas: Vec<DataSchema>) -> HashMap<String, Value
             DataSchema::String(name, constraints) => {
                 let mut v = serde_json::to_value(constraints).unwrap();
                 v.as_object_mut().and_then(|map| {
-                    map.insert("type".to_string(), serde_json::to_value("string").unwrap())
+                    map.insert(
+                        TYPE_DATA.to_string(),
+                        serde_json::to_value("string").unwrap(),
+                    )
                 });
                 properties.insert(name, v);
             }
             DataSchema::Integer(name, constraints) => {
                 let mut v = serde_json::to_value(constraints).unwrap();
                 v.as_object_mut().and_then(|map| {
-                    map.insert("type".to_string(), serde_json::to_value("integer").unwrap())
+                    map.insert(
+                        TYPE_DATA.to_string(),
+                        serde_json::to_value("integer").unwrap(),
+                    )
                 });
                 properties.insert(name, v);
             }
             DataSchema::Object(name, schema) => {
                 let serialized_obj = convert_data_schema_to_map(schema);
                 let mut map = HashMap::new();
-                map.insert("type", json!("object"));
+                map.insert(TYPE_DATA, json!("object"));
                 map.insert("properties", serde_json::to_value(serialized_obj).unwrap());
                 properties.insert(name.unwrap(), serde_json::to_value(map).unwrap());
             }
             DataSchema::Array(name, schema, mut constraints) => {
                 let mut map = HashMap::new();
-                map.insert("type", json!("array"));
+                map.insert(TYPE_DATA, json!("array"));
                 let mut items = convert_data_schema_to_map(schema);
                 // map.insert("items", serde_json::to_value(items).unwrap());
                 map.insert(
@@ -189,6 +205,16 @@ fn convert_data_schema_to_map(schemas: Vec<DataSchema>) -> HashMap<String, Value
                     map.insert(keyword.as_str(), serde_json::to_value(constraint).unwrap());
                 }
                 properties.insert(name.unwrap(), serde_json::to_value(map).unwrap());
+            }
+            DataSchema::ConstantObject(k, constraints) => {
+                let mut v = serde_json::to_value(constraints).unwrap();
+                v.as_object_mut().and_then(|map| {
+                    map.insert(
+                        TYPE_DATA.to_string(),
+                        serde_json::to_value("object").unwrap(),
+                    )
+                });
+                properties.insert(k.unwrap(), v);
             }
         }
     }
@@ -218,20 +244,36 @@ fn parse_properties(properties: &Map<String, Value>) -> AnyResult<Vec<DataSchema
     let mut data = vec![];
     for (k, v) in properties.iter() {
         let type_ = v
-            .get("type")
+            .get(TYPE_DATA)
             .and_then(Value::as_str)
             .ok_or_else(|| format!("type not found for {}", k))
             .map_err(AnyError::msg)?;
         match type_ {
-            "object" => data.push(DataSchema::Object(
-                Option::Some(k.clone()),
-                parse_properties(
-                    v.get("properties")
-                        .and_then(Value::as_object)
-                        .ok_or_else(|| format!("object properties not found for : {}", k))
-                        .map_err(AnyError::msg)?,
-                )?,
-            )),
+            "object" => {
+                if v.get("properties").is_some() {
+                    data.push(DataSchema::Object(
+                        Option::Some(k.clone()),
+                        parse_properties(
+                            v.get("properties")
+                                .and_then(Value::as_object)
+                                .ok_or_else(|| format!("object properties not found for : {}", k))
+                                .map_err(AnyError::msg)?,
+                        )?,
+                    ))
+                } else if v.get(Keywords::Constant.as_str()).is_some() {
+                    data.push(DataSchema::ConstantObject(
+                        Some(k.clone()),
+                        HashMap::from([(
+                            Keywords::Constant,
+                            Constraints::ConstantValue(
+                                v.get(Keywords::Constant.as_str()).unwrap().clone(),
+                            ),
+                        )]),
+                    ))
+                } else {
+                    return Err(AnyError::msg("object should have properties or constant"));
+                }
+            }
             "string" => data.push(DataSchema::String(k.clone(), get_constraints(v)?)),
             "integer" => data.push(DataSchema::Integer(k.clone(), get_constraints(v)?)),
             "array" => data.push(DataSchema::Array(
@@ -331,8 +373,10 @@ fn parse_constraints(
             "constant" => {
                 let constraint = if let Some(val) = v.as_i64() {
                     Constraints::ConstantInt(val)
-                } else {
+                } else if v.is_string() {
                     Constraints::ConstantStr(String::from(v.as_str()?))
+                } else {
+                    Constraints::ConstantValue(v.clone())
                 };
                 constraints.insert(Keywords::Constant, constraint);
             }
@@ -393,6 +437,15 @@ fn generate_object_data(data: &[DataSchema]) -> Map<String, Value> {
                 map.insert(
                     k.as_ref().unwrap().clone(),
                     Value::Array(generate_array_data(schema, constraints)),
+                );
+            }
+            DataSchema::ConstantObject(k, c) => {
+                map.insert(
+                    k.as_ref().unwrap().clone(),
+                    c.get(&Keywords::Constant)
+                        .and_then(|c| c.as_serde_value())
+                        .cloned()
+                        .unwrap_or(json!({})),
                 );
             }
         }
@@ -489,7 +542,7 @@ mod test {
     use crate::{data_schema_from_value, generate_data, Constraints, DataSchema, Keywords};
     use log::info;
     use regex::Regex;
-    use serde_json::Value;
+    use serde_json::{json, Value};
     use std::str::FromStr;
     use std::sync::Once;
 
@@ -501,6 +554,113 @@ mod test {
                 env_logger::Env::default().filter_or(env_logger::DEFAULT_FILTER_ENV, "trace"),
             );
         });
+    }
+
+    fn validate_json_path(path: &str, json: &Value, expected: Option<&Value>) {
+        let mut selector = jsonpath_lib::selector(json);
+        let result = selector(path);
+        assert!(result.is_ok());
+        if let Some(expected) = expected {
+            assert_json_diff::assert_json_eq!(result.unwrap().first().unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn json_schema_to_data_schema_and_back() {
+        let schemas = vec![
+            const_obj_data_gen_schema as fn() -> &'static str,
+            const_obj_data_gen_with_other_obj_property_schema,
+            array_sample_json_3,
+            array_sample_json_2,
+            array_sample_json_1,
+        ];
+        for schema in schemas {
+            let json_schema = schema();
+            let original_json_schema: Value = serde_json::from_str(json_schema).unwrap();
+            let data_schema = data_schema_from_value(&original_json_schema).unwrap();
+            let converted_json_schema = serde_json::to_value(data_schema).unwrap();
+            assert_json_diff::assert_json_eq!(converted_json_schema, original_json_schema);
+        }
+    }
+
+    #[test]
+    fn const_obj_data_gen() {
+        let json_schema = const_obj_data_gen_schema();
+        let json_schema: Value = serde_json::from_str(json_schema).unwrap();
+        let data_schema = data_schema_from_value(&json_schema).unwrap();
+        let data = generate_data(&data_schema);
+        validate_json_path(
+            "$.constObject.properties.comment",
+            &data,
+            Some(&json!("this will be parsed as json instead of schema")),
+        );
+    }
+
+    #[test]
+    fn const_obj_data_gen_with_other_obj_property() {
+        let json_schema = const_obj_data_gen_with_other_obj_property_schema();
+        let json_schema: Value = serde_json::from_str(json_schema).unwrap();
+        let data_schema = data_schema_from_value(&json_schema).unwrap();
+        let data = generate_data(&data_schema);
+        validate_json_path("$.key1", &data, Some(&json!("value1")));
+        validate_json_path("$.nested.objKey1", &data, None);
+        validate_json_path("$.constObject.keyInt", &data, Some(&json!(1234)));
+    }
+
+    fn const_obj_data_gen_with_other_obj_property_schema() -> &'static str {
+        r#"
+        {
+          "properties": {
+            "key1": {
+              "type": "string",
+              "constant": "value1"
+            },
+            "nested": {
+              "type": "object",
+              "properties": {
+                "objKey1": {
+                  "type": "integer",
+                  "minimum": 10,
+                  "maximum": 1000
+                },
+                "objKey2": {
+                  "type": "string",
+                  "pattern": "^a[0-9]{4}z$"
+                }
+              }
+            },
+            "constObject": {
+              "type": "object",
+              "constant": {
+                "key1": "val1",
+                "properties": {
+                  "comment": "this will be parsed as json instead of schema"
+                },
+                "keyInt": 1234
+              }
+            }
+          }
+        }
+        "#
+    }
+
+    fn const_obj_data_gen_schema() -> &'static str {
+        r#"
+        {
+          "properties": {
+            "constObject": {
+              "type": "object",
+              "constant": {
+                "key1": "val1",
+                "properties": {
+                  "comment": "this will be parsed as json instead of schema"
+                },
+                "keyInt": 1234
+              }
+            }
+          }
+        }
+        "#
     }
 
     #[test]

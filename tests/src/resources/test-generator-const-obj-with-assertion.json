@@ -1,0 +1,120 @@
+{
+  "request": {
+    "duration": 10,
+    "name": "test-generator-with-assertion",
+    "qps": {
+      "ConstantRate": {
+        "countPerSec": 3
+      }
+    },
+    "req": {
+      "RandomDataRequest": {
+        "url": "/anything",
+        "method": "POST",
+        "bodySchema": {
+          "title": "Person",
+          "type": "object",
+          "properties": {
+            "lastName": {
+              "type": "string",
+              "description": "The person's last name."
+            },
+            "age": {
+              "description": "Age in years which must be equal to or greater than zero.",
+              "type": "integer",
+              "minimum": 10,
+              "maximum": 20
+            },
+            "nestedConst": {
+              "type": "object",
+              "constant": {
+                "geolocation": {
+                  "type": "Point",
+                  "coordinates": [
+                    -113,
+                    54.21667
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "target": {
+      "host": "127.0.0.1",
+      "port": 2080,
+      "protocol": "HTTP"
+    },
+    "concurrentConnection": {
+      "ConstantRate": {
+        "countPerSec": 3
+      }
+    },
+    "responseAssertion": {
+      "luaAssertion": [
+        "function(method, url, reqBody, respBody)",
+        "result = {}",
+        "print('inside lua - body: ' .. reqBody)",
+        "if method ~= 'POST' then",
+        "local err = {}",
+        "err.id = 1",
+        "err.success = false",
+        "err.error = 'Invalid method'",
+        "table.insert(result, err)",
+        "end",
+        "jsonReq = json.decode(reqBody)",
+        "jsonResp = json.decode(respBody)",
+        "if jsonResp.json.firstName == nil then",
+        "local err = {}",
+        "err.id = 2",
+        "err.success = false",
+        "err.error = 'firstName not found'",
+        "table.insert(result, err)",
+        "end",
+        "if jsonResp.json.age == nil then",
+        "local err = {}",
+        "err.id = 3",
+        "err.success = false",
+        "err.error = 'age not found'",
+        "table.insert(result, err)",
+        "elseif jsonResp.json.age > 20 or jsonResp.json.age < 10 then",
+        "local err = {}",
+        "err.id = 4",
+        "err.success = false",
+        "err.error = 'age out of range: ' .. jsonResp.json.age",
+        "table.insert(result, err)",
+        "end",
+        "for k,v in pairs(jsonResp.json) do",
+        "    print(k)",
+        "    print(v)",
+        "end",
+        "if jsonResp.json.nestedConst.geolocation.type ~= 'Point' then",
+        "local err = {}",
+        "err.id = 5",
+        "err.success = false",
+        "err.error = 'const object not generated properly: '..reqBody",
+        "table.insert(result, err)",
+        "end",
+        "return result",
+        "end"
+      ]
+    }
+  },
+  "expectation": {
+    "qps": [
+      3, 3, 3, 3, 3, 3, 3, 3, 3, 3
+    ],
+    "assertionFailure": {
+      "2": [
+        3, 3, 3, 3, 3, 3, 3, 3, 3, 3
+      ],
+      "4": [
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+      ],
+      "2147483647": [
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+      ]
+    }
+  }
+}
