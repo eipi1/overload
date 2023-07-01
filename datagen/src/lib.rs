@@ -569,6 +569,7 @@ mod test {
     fn json_schema_to_data_schema_and_back() {
         let schemas = vec![
             const_obj_data_gen_schema as fn() -> &'static str,
+            const_obj_data_gen_with_other_obj_property_schema,
             array_sample_json_3,
             array_sample_json_2,
             array_sample_json_1,
