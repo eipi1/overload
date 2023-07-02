@@ -10,26 +10,31 @@ Generate request with random data based on constraints specified using JSON Sche
 | bodySchema     | No       | Request body spec to be used for random data generation                                                                                           | JSON Schema         |
 | uriParamSchema | No       | Url param spec to be used for random data generation                                                                                              | JSON Schema         |
 
-### Type & Constraint Support
-| type    | supported | Length | min/max | constant     | pattern |
-|---------|-----------|--------|---------|--------------|---------|
-| string  | ✅         | ✅      | ❎       | ✅            | ✅       |
-| integer | ✅         | ❎      | ✅       | ✅            | ❎       |
-| object  | ✅         | ❎      | ❎       | ✅ (snapshot) | ❎       |
-| array   | ✅         | ❎      | ❎       | ❎            | ❎       |
-| boolean | ❎         | ❎      | ❎       | ❎            | ❎       |
-| null    | ❎         | ❎      | ❎       | ❎            | ❎       |
-
 ### Supported constraints
-| Constraints | Supported | Note                                                                                                                                                       |
-|-------------|-----------|------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| minLength   | ✅         |                                                                                                                                                            |
-| maxLength   | ✅         |                                                                                                                                                            |
-| minimum     | ✅         |                                                                                                                                                            |
-| maximum     | ✅         |                                                                                                                                                            |
-| constant    | ✅         |                                                                                                                                                            |
-| pattern     | ✅         | Unicode pattern. Careful with character groups, e.g. `\d` represents digits from english, arabic and other languages. Maximum repeat(`*`,`+`) length is 10 |
-| format      | ❎         |                                                                                                                                                            |
+| Constraints | Supported | Note |
+|-------------|-----------|------|
+| minLength   | ✅         |      |
+| maxLength   | ✅         |      |
+| minimum     | ✅         |      |
+| maximum     | ✅         |      |
+| constant    | ✅         |      |
+| pattern     | ✅         |      |
+| format      | ❎         |      |
+#### Notes
+* Pattern
+  * Unicode pattern. Careful with character groups, e.g. `\d` represents digits from english, arabic and other languages.
+  * Maximum repeat(`*`,`+`) length is 10.
+  * For integer, non-numeric pattern (eg. `^a[0-9]{4}z$`) will produce 0
+
+### Type & Constraint Support
+| type    | supported | Length | min/max | constant     | pattern      |
+|---------|-----------|--------|---------|--------------|--------------|
+| string  | ✅         | ✅      | ❎       | ✅            | ✅            |
+| integer | ✅         | ❎      | ✅       | ✅            | ✅ (snapshot) |
+| object  | ✅         | ❎      | ❎       | ✅ (snapshot) | ❎            |
+| array   | ✅         | ❎      | ❎       | ❎            | ❎            |
+| boolean | ❎         | ❎      | ❎       | ❎            | ❎            |
+| null    | ❎         | ❎      | ❎       | ❎            | ❎            |
 
 ```rust
 # extern crate overload_http;
@@ -59,6 +64,11 @@ Generate request with random data based on constraints specified using JSON Sche
             "type": "integer",
             "minimum": 10,
             "maximum": 20
+          },
+          "intPattern": {
+            "description": "It will produce numbers in range 10000-19999.",
+            "type": "integer",
+            "pattern": "^1[0-9]{4}$"
           },
           "objArrayKeys": {
             "type": "array",
