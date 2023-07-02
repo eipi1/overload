@@ -1,6 +1,6 @@
 use crate::DataSchema::Empty;
 use anyhow::{anyhow, Error as AnyError, Result as AnyResult};
-use log::{error, trace};
+use log::{error, trace, warn};
 use rand::thread_rng;
 use regex_generate::generate_from_hir;
 use regex_syntax::hir::Hir;
@@ -481,6 +481,34 @@ fn generate_integer_data(constraints: &HashMap<Keywords, Constraints>) -> i64 {
     if let Some(constraint) = constraints.get(&Keywords::Constant) {
         return constraint.as_i64().unwrap_or(i64::MIN);
     }
+    if let Some(constraint) = constraints.get(&Keywords::Pattern) {
+        if let Some((pattern, hir)) = constraint.as_pattern() {
+            let mut rng = thread_rng();
+            let mut buffer: Vec<u8> = vec![];
+            let rand_int = match hir.as_ref() {
+                Some(hir) => generate_from_hir(&mut buffer, hir, &mut rng, PATTER_MAX_REPEAT)
+                    .ok()
+                    .and_then(|_| String::from_utf8(buffer).ok())
+                    .unwrap_or(format!("Couldn't generate string for: {}", pattern)),
+                None => {
+                    log::warn!("Hir not pre-generated for pattern constraint");
+                    Parser::new()
+                        .parse(pattern)
+                        .ok()
+                        .and_then(|ir| {
+                            generate_from_hir(&mut buffer, &ir, &mut rng, PATTER_MAX_REPEAT).ok()
+                        })
+                        .and_then(|_| String::from_utf8(buffer).ok())
+                        .unwrap_or(format!("Couldn't generate string for: {}", pattern))
+                }
+            };
+            return rand_int.as_str().parse::<i64>().unwrap_or_else(|_| {
+                warn!("invalid pattern {} for integer", pattern);
+                0
+            });
+        }
+        return constraint.as_i64().unwrap_or(i64::MIN);
+    }
     let min = constraints
         .get(&Keywords::Minimum)
         .and_then(|constraint| constraint.as_i64())
@@ -556,13 +584,19 @@ mod test {
         });
     }
 
-    fn validate_json_path(path: &str, json: &Value, expected: Option<&Value>) {
+    fn validate_json_path<'a>(
+        path: &str,
+        json: &'a Value,
+        expected: Option<&Value>,
+    ) -> Vec<&'a Value> {
         let mut selector = jsonpath_lib::selector(json);
         let result = selector(path);
         assert!(result.is_ok());
+        let result = result.unwrap();
         if let Some(expected) = expected {
-            assert_json_diff::assert_json_eq!(result.unwrap().first().unwrap(), expected);
+            assert_json_diff::assert_json_eq!(result.first().unwrap(), expected);
         }
+        result
     }
 
     #[test]
@@ -570,6 +604,7 @@ mod test {
         let schemas = vec![
             const_obj_data_gen_schema as fn() -> &'static str,
             const_obj_data_gen_with_other_obj_property_schema,
+            integer_pattern_data_gen_schema,
             array_sample_json_3,
             array_sample_json_2,
             array_sample_json_1,
@@ -581,6 +616,43 @@ mod test {
             let converted_json_schema = serde_json::to_value(data_schema).unwrap();
             assert_json_diff::assert_json_eq!(converted_json_schema, original_json_schema);
         }
+    }
+
+    #[test]
+    fn integer_pattern_data_gen() {
+        let json_schema = integer_pattern_data_gen_schema();
+        let json_schema: Value = serde_json::from_str(json_schema).unwrap();
+        let data_schema = data_schema_from_value(&json_schema).unwrap();
+        let data = generate_data(&data_schema);
+        let val = validate_json_path("$.nested.objKey1", &data, None);
+        info!("[integer_pattern_data_gen] - val: {:?}", val);
+        assert_ne!(val.first().unwrap().as_i64().unwrap(), 0)
+    }
+
+    fn integer_pattern_data_gen_schema() -> &'static str {
+        r#"
+        {
+          "properties": {
+            "key1": {
+              "type": "string",
+              "constant": "value1"
+            },
+            "nested": {
+              "type": "object",
+              "properties": {
+                "objKey1": {
+                  "type": "integer",
+                  "pattern": "^1[0-9]{4}$"
+                },
+                "objKey2": {
+                  "type": "string",
+                  "pattern": "^a[0-9]{4}z$"
+                }
+              }
+            }
+          }
+        }
+        "#
     }
 
     #[test]
