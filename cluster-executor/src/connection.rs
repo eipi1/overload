@@ -5,9 +5,11 @@ use hyper::{Body, Error};
 use log::{debug, trace, warn};
 use overload_metrics::Metrics;
 use std::collections::VecDeque;
-use std::sync::atomic::AtomicU32;
+use std::env;
+use std::str::FromStr;
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::net::TcpStream;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
@@ -17,6 +19,16 @@ pub use overload_http::ConnectionKeepAlive;
 
 type SharedMutableVec = Arc<RwLock<Vec<HttpConnection>>>;
 type InteriorMutable = SharedMutableVec;
+
+const ENV_NAME_POOL_CONNECTION_TIMEOUT: &str = "POOL_CONNECTION_TIMEOUT";
+const DEFAULT_POOL_CONNECTION_TIMEOUT: u64 = 1000;
+
+pub fn pool_connection_timeout() -> u64 {
+    env::var(ENV_NAME_POOL_CONNECTION_TIMEOUT)
+        .map_err(|_| ())
+        .and_then(|val| u64::from_str(&val).map_err(|_| ()))
+        .unwrap_or(DEFAULT_POOL_CONNECTION_TIMEOUT)
+}
 
 pub(crate) struct QueuePool {
     pub(crate) max_connection: i64,
@@ -34,6 +46,7 @@ pub(crate) struct QueuePool {
     elastic: bool,
     keep_alive: ConnectionKeepAlive,
     pub(crate) last_use: Instant,
+    failed_connection: Arc<AtomicUsize>,
 }
 
 impl QueuePool {
@@ -51,6 +64,7 @@ impl QueuePool {
             elastic: true,
             keep_alive,
             last_use: Instant::now(),
+            failed_connection: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -89,6 +103,7 @@ impl QueuePool {
             diff,
             self.keep_alive,
             metrics.clone(),
+            self.failed_connection.clone(),
         );
         tokio::spawn(resizer);
     }
@@ -114,7 +129,7 @@ impl QueuePool {
                 let diff = diff.abs();
                 debug!("elastic pool, requesting {} more connections", diff);
                 // need more connections
-                self.add_new_connection_mut(diff, metrics);
+                self.add_new_connection_mut(diff, metrics, self.failed_connection.clone());
             }
         } else {
             //re-enforce the pool size
@@ -164,7 +179,11 @@ impl QueuePool {
             }
         }
         // refill broken & dropped connections
-        self.add_new_connection_mut((broken + dropped) as i64, metrics);
+        self.add_new_connection_mut(
+            (broken + dropped + self.failed_connection.swap(0, Ordering::Relaxed) as u64) as i64,
+            metrics,
+            self.failed_connection.clone(),
+        );
         metrics.pool_connection_broken(broken);
         metrics.pool_connection_dropped(broken + dropped);
         let len = vec.len();
@@ -175,7 +194,16 @@ impl QueuePool {
         vec
     }
 
-    fn add_new_connection_mut(&mut self, count: i64, metrics: &Arc<Metrics>) {
+    fn add_new_connection_mut(
+        &mut self,
+        count: i64,
+        metrics: &Arc<Metrics>,
+        failed_connection: Arc<AtomicUsize>,
+    ) {
+        debug!("[add_new_connection_mut] - adding {count} new connections");
+        if count == 0 {
+            return;
+        }
         let new_connections = self.new_connections.clone();
         let host_port = self.host_port.clone();
         let conn_gen = Self::add_new_connection(
@@ -184,6 +212,7 @@ impl QueuePool {
             count,
             self.keep_alive,
             metrics.clone(),
+            failed_connection,
         );
         tokio::spawn(conn_gen);
     }
@@ -201,6 +230,7 @@ impl QueuePool {
         diff: i64,
         keep_alive: ConnectionKeepAlive,
         metrics: Arc<Metrics>,
+        failed_connection: Arc<AtomicUsize>,
     ) {
         debug!("resizing pool by: {}", &diff);
         if diff < 0 {
@@ -218,7 +248,15 @@ impl QueuePool {
         } else if diff > 0 {
             // need to add new connections
             debug!("resizing, requesting {} more connections", diff);
-            Self::add_new_connection(new_connections, host_port, diff, keep_alive, metrics).await;
+            Self::add_new_connection(
+                new_connections,
+                host_port,
+                diff,
+                keep_alive,
+                metrics,
+                failed_connection,
+            )
+            .await;
         } else {
         }
     }
@@ -229,6 +267,7 @@ impl QueuePool {
         count: i64,
         keep_alive: ConnectionKeepAlive,
         metrics: Arc<Metrics>,
+        failed_connection: Arc<AtomicUsize>,
     ) {
         debug!("Adding {} new connections", count);
         metrics.pool_connection_attempt(count as u64);
@@ -238,13 +277,22 @@ impl QueuePool {
             futures.push(connection_future);
         }
         let mut conn = Vec::with_capacity(count as usize);
-        while let Some(connection) = futures.next().await {
+        while let Ok(Some(connection)) = tokio::time::timeout(
+            Duration::from_millis(pool_connection_timeout()),
+            futures.next(),
+        )
+        .await
+        {
             if let Some(connection) = connection {
                 conn.push(connection)
             }
         }
+        drop(futures);
         let len = conn.len();
+        let failed = count as usize - len;
+        failed_connection.fetch_add(failed, Ordering::Relaxed);
         debug!("Added {} new connections", len);
+        debug!("failed to add {} connections", failed);
         metrics.pool_connection_success(len as u64);
         metrics.pool_connection_idle(len as f64);
         new_connections.write().await.append(&mut conn);

@@ -52,6 +52,16 @@ pub const ENV_NAME_BUNDLE_SIZE: &str = "REQUEST_BUNDLE_SIZE";
 pub static REQUEST_BUNDLE_SIZE: OnceCell<u16> = OnceCell::new();
 pub static DEFAULT_REQUEST_BUNDLE_SIZE: u16 = 50;
 
+const ENV_NAME_WAIT_ON_NO_CONNECTION: &str = "WAIT_ON_NO_CONNECTION";
+const DEFAULT_WAIT_ON_NO_CONNECTION: u64 = 100;
+
+pub fn wait_on_no_connection() -> u64 {
+    env::var(ENV_NAME_WAIT_ON_NO_CONNECTION)
+        .map_err(|_| ())
+        .and_then(|val| u64::from_str(&val).map_err(|_| ()))
+        .unwrap_or(DEFAULT_WAIT_ON_NO_CONNECTION)
+}
+
 pub fn request_bundle_size() -> u16 {
     *REQUEST_BUNDLE_SIZE.get_or_init(|| {
         env::var(ENV_NAME_BUNDLE_SIZE)
@@ -492,7 +502,7 @@ async fn send_multiple_requests(
         if available_connection < requested_connection as usize {
             if available_connection < 1 {
                 //adjust sleep time
-                sleep(Duration::from_millis(10)).await; //retry every 10 ms
+                sleep(Duration::from_millis(wait_on_no_connection())).await; //retry every 10 ms
                 sleep_time =
                     (interval_between_requests(total_remaining_qps) * bundle_size as f32).floor();
                 continue;
