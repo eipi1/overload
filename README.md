@@ -85,7 +85,7 @@ spec:
 
 ### Start Test
 The following request will send two `GET` request per second(`"countPerSec": 2`) to `httpbin.org/get` for 120
-seconds(`"duration": 60`).
+seconds(`"duration": 120`). More example can be found in [test cases](https://github.com/eipi1/overload/tree/main/tests/src/resources)
 ```shell
 curl --location --request POST '{overload-host}:3030/test' \
 --header 'Content-Type: application/json' \
@@ -100,7 +100,7 @@ Sample JSON request body -
   "name": "demo-test",
   "qps": {
     "ConstantRate": {
-      "countPerSec": 1
+      "countPerSec": 2
     }
   },
   "req": {
