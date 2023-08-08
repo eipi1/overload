@@ -20,30 +20,70 @@ Sample JSON request body -
 # use overload_http::Request;
 # let req = r###"
 {
-  "duration": 120,
-  "name": "demo-test",
+  "duration": 800,
+  "name": "test-overload",
+  "histogram_buckets": [
+    1,
+    2,
+    5,
+    7,
+    10,
+    15
+  ],
   "qps": {
-    "ConstantRate": {
-      "countPerSec": 1
+    "Linear": {
+      "a": 1,
+      "b": 1,
+      "max": 100
     }
   },
   "req": {
     "RequestList": {
       "data": [
         {
-          "body": null,
           "method": "GET",
-          "url": "/get"
+          "url": "/serde",
+          "headers": {
+            "Host": "127.0.0.1:2000",
+            "Connection": "keep-alive"
+          }
         }
       ]
     }
   },
   "target": {
-    "host": "httpbin.org",
-    "port": 80,
+    "host": "172.17.0.1",
+    "port": 2000,
     "protocol": "HTTP"
   },
-  "histogramBuckets": [35,40,45,48,50, 52]
+  "concurrentConnection": {
+    "Linear": {
+      "a": 1,
+      "b": 1,
+      "max": 100
+    }
+  },
+  "responseAssertion": {
+    "luaAssertion": [
+      "function(method, url, requestBody, responseBody)",
+      "    -- initialize assertion result",
+      "    result = {}",
+      "    -- verify valid json response",
+      "    jsonResp=json.decode(responseBody);",
+      "    if jsonResp == nil then",
+      "        -- create new assertion result",
+      "        local err = {}",
+      "        -- used for metrics, should avoid duplicate values in the same assertion",
+      "        err.id = 1",
+      "        err.success = false",
+      "        err.error = 'Failed to parse to json'",
+      "        -- add to result",
+      "        table.insert(result, err)",
+      "    end",
+      "    return result",
+      "end"
+    ]
+  }
 }
 # "###;
 # let result = serde_json::from_str::<Request>(req);
