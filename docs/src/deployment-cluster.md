@@ -6,7 +6,7 @@ Cluster mode allows the application run in primary/secondary mode. Currently, on
 Running on Kubernetes requires minimum four pods and [cluster images](https://github.com/eipi1/overload/pkgs/container/overload).
 Cluster images are tagged as *cluster-{version}*.
 
-Addition to that the application requires RBAC authorization to "get", "list" [endpoints](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.22/#endpoints-v1-core).
+Addition to that the application requires RBAC authorization to "get", "list" [endpoints](https://kubernetes.io/docs/reference/kubernetes-api/service-resources/endpoints-v1/).
 
 Sample deployment configuration -
 ```yaml
@@ -16,9 +16,8 @@ metadata:
   labels:
     app: overload
   name: overload
-  namespace: default
 spec:
-  replicas: 1
+  replicas: 4
   selector:
     matchLabels:
       app: overload
@@ -26,6 +25,9 @@ spec:
     metadata:
       labels:
         app: overload
+      annotations:
+        prometheus.io/port: '3030'
+        prometheus.io/scrape: 'true'
     spec:
       containers:
         - image: ghcr.io/eipi1/overload:cluster-latest-snapshot
@@ -40,7 +42,9 @@ spec:
             - name: K8S_ENDPOINT_NAME
               value: "overload"
             - name: K8S_NAMESPACE_NAME
-              value: "default"
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
             - name: RUST_LOG
               value: info
           resources:
@@ -68,4 +72,28 @@ spec:
       port: 3031
       targetPort: 3031
       name: tcp-remoc #default, pass to env CLUSTER_COM_PORT_NAME if changed
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: overload-endpoints-reader
+rules:
+  - apiGroups: [""]
+    resources: ["endpoints"]
+    verbs: ["get", "list"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: overload-endpoints-reader
+subjects:
+  - kind: Group
+    name: system:serviceaccounts
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: overload-endpoints-reader
+  apiGroup: rbac.authorization.k8s.io
 ```

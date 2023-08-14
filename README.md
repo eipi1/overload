@@ -36,7 +36,7 @@ metadata:
   name: overload
   namespace: default
 spec:
-  replicas: 1
+  replicas: 4
   selector:
     matchLabels:
       app: overload
@@ -63,6 +63,7 @@ spec:
               value: "default"
             - name: RUST_LOG
               value: info
+
 ---
 apiVersion: v1
 kind: Service
@@ -81,6 +82,30 @@ spec:
       port: 3031
       targetPort: 3031
       name: tcp-remoc
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: overload-endpoints-reader
+rules:
+  - apiGroups: [""]
+    resources: ["endpoints"]
+    verbs: ["get", "list"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: overload-endpoints-reader
+subjects:
+  - kind: Group
+    name: system:serviceaccounts
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: overload-endpoints-reader
+  apiGroup: rbac.authorization.k8s.io
 ```
 
 ### Start Test
