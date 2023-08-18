@@ -10,6 +10,8 @@ edition = "2021"
 
 [output.html]
 additional-css = ["theme/custom.css"]
+git-repository-url = "https://github.com/eipi1/overload"
+git-repository-icon = "fa-github"
 
 [output.html.playground]
 copyable = false          # include the copy button for copying code snippets
