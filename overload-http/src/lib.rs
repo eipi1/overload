@@ -59,7 +59,7 @@ pub struct Target {
 pub enum RequestSpecEnum {
     RequestList(RequestList),
     RequestFile(RequestFile),
-    SplitRequestFile(SplitRequestFile),
+    SplitRequestFile(SplitRequestFile<HttpReq>),
     RandomDataRequest(RandomDataRequest),
 }
 

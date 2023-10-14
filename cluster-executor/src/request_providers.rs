@@ -11,6 +11,7 @@ use std::str::FromStr;
 
 #[async_trait]
 pub trait RequestProvider {
+    type Item;
     /// Ask for `n` requests, be it chosen randomly or in any other way, entirely depends on implementations.
     /// For randomized picking, it's not guaranteed to return exactly n requests, for example -
     /// when randomizer return duplicate request id(e.g. sqlite ROWID)
@@ -18,7 +19,7 @@ pub trait RequestProvider {
     /// #Panics
     /// Implementations should panic if n=0, to notify invoker it's an unnecessary call and
     /// should be handled properly
-    async fn get_n(&mut self, n: usize) -> AnyResult<Vec<HttpReq>>;
+    async fn get_n(&mut self, n: usize) -> AnyResult<Vec<Self::Item>>;
 
     // /// Generate `n` requests and put into provided vec.
     // /// Returns number of requests generated successfully
@@ -34,6 +35,7 @@ pub trait RequestProvider {
 
 #[async_trait]
 impl RequestProvider for RequestList {
+    type Item = HttpReq;
     async fn get_n(&mut self, n: usize) -> AnyResult<Vec<HttpReq>> {
         if n == 0 {
             panic!("RequestList: shouldn't request data of 0 size");
@@ -63,6 +65,8 @@ impl RequestProvider for RequestList {
 
 #[async_trait]
 impl RequestProvider for RequestFile {
+    type Item = HttpReq;
+
     async fn get_n(&mut self, n: usize) -> AnyResult<Vec<HttpReq>> {
         if n == 0 {
             panic!("RequestFile: shouldn't request data of 0 size");
@@ -110,8 +114,12 @@ impl RequestProvider for RequestFile {
 }
 
 #[async_trait]
-impl RequestProvider for SplitRequestFile {
-    async fn get_n(&mut self, n: usize) -> AnyResult<Vec<HttpReq>> {
+impl<T> RequestProvider for SplitRequestFile<T>
+where
+    T: Send + Unpin + for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>,
+{
+    type Item = T;
+    async fn get_n(&mut self, n: usize) -> AnyResult<Vec<Self::Item>> {
         if n == 0 {
             panic!("SplitRequestFile: shouldn't request data of 0 size");
         }
@@ -160,7 +168,7 @@ impl RequestProvider for SplitRequestFile {
                 self.range_end_inclusive + 1,
                 self.next_read_cursor + data_need,
             );
-            let data: Vec<HttpReq> = sqlx::query_as(
+            let data: Vec<T> = sqlx::query_as(
                 format!(
                     "SELECT ROWID, * FROM http_req WHERE ROWID >= {} and ROWID < {}",
                     start, end
@@ -192,6 +200,8 @@ impl RequestProvider for SplitRequestFile {
 
 #[async_trait]
 impl RequestProvider for RandomDataRequest {
+    type Item = HttpReq;
+
     async fn get_n(&mut self, n: usize) -> AnyResult<Vec<HttpReq>> {
         if !self.init {
             self.init = true;

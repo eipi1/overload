@@ -257,7 +257,6 @@ impl QueuePool {
                 failed_connection,
             )
             .await;
-        } else {
         }
     }
 

@@ -9,6 +9,7 @@ use smol_str::SmolStr;
 use sqlx::SqliteConnection;
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
+use std::marker::PhantomData;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RequestList {
@@ -61,7 +62,7 @@ impl Clone for RequestFile {
 
 /// Test request with file data
 #[derive(Debug, Serialize, Deserialize)]
-pub struct SplitRequestFile {
+pub struct SplitRequestFile<T> {
     #[serde(deserialize_with = "file_name_deserializer")]
     pub file_name: String,
     #[serde(skip)]
@@ -75,10 +76,14 @@ pub struct SplitRequestFile {
     pub range_end_inclusive: usize,
     #[serde(default = "default_split_range")]
     pub next_read_cursor: usize,
+    _phantom: PhantomData<T>,
 }
 
-impl SplitRequestFile {
-    pub fn clone_with_new_range(&self, range: (usize, usize)) -> SplitRequestFile {
+impl<T> SplitRequestFile<T>
+where
+    T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>,
+{
+    pub fn clone_with_new_range(&self, range: (usize, usize)) -> SplitRequestFile<T> {
         Self {
             file_name: self.file_name.clone(),
             inner: None,
@@ -86,11 +91,12 @@ impl SplitRequestFile {
             range_start_inclusive: range.0,
             range_end_inclusive: range.1,
             next_read_cursor: range.0,
+            _phantom: PhantomData,
         }
     }
 }
 
-impl Clone for SplitRequestFile {
+impl<T> Clone for SplitRequestFile<T> {
     fn clone(&self) -> Self {
         Self {
             file_name: self.file_name.clone(),
@@ -99,6 +105,7 @@ impl Clone for SplitRequestFile {
             range_start_inclusive: self.range_start_inclusive,
             range_end_inclusive: self.range_end_inclusive,
             next_read_cursor: self.next_read_cursor,
+            _phantom: PhantomData,
         }
     }
 }
@@ -120,7 +127,7 @@ impl PartialEq<Self> for UrlParam {
 
 impl PartialOrd<Self> for UrlParam {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.start.partial_cmp(&other.start)
+        Some(self.cmp(other))
     }
 }
 

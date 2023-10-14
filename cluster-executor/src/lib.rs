@@ -114,7 +114,7 @@ pub(crate) enum MessageFromPrimary {
     Finished,
 }
 
-type ReqProvider = Box<dyn RequestProvider + Send>;
+type ReqProvider = Box<dyn RequestProvider<Item = HttpReq> + Send>;
 
 pub enum ProviderOrFuture {
     Provider(ReqProvider),
@@ -183,7 +183,7 @@ impl Into<RequestGenerator> for Request {
             RateSpecEnum::ArraySpec(qps) => Box::new(qps),
             RateSpecEnum::Steps(qps) => Box::new(qps),
         };
-        let req: Box<dyn RequestProvider + Send> = match self.req {
+        let req: ReqProvider = match self.req {
             RequestSpecEnum::RequestList(req) => Box::new(req),
             RequestSpecEnum::RequestFile(req) => Box::new(req),
             RequestSpecEnum::RandomDataRequest(req) => Box::new(req),
