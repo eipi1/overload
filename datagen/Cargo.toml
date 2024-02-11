@@ -35,12 +35,12 @@ version = "1.0"
 [dependencies.log]
 version = "0.4"
 
-[dependencies.tokio]
-version = "1.19"
-features = ["sync", "time"]
+#[dependencies.tokio]
+#version = "1.19"
+#features = ["sync", "time"]
 
-[dependencies.async-recursion]
-version = "1.0"
+#[dependencies.async-recursion]
+#version = "1.0"
 
 [dependencies.hashbrown]
 version = "0.14"
@@ -62,4 +62,5 @@ version = "1.19"
 features = ["sync", "time", "rt", "test-util", "macros"]
 
 [features]
+default = ["data-gen-file"]
 data-gen-file = []

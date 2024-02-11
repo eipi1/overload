@@ -19,7 +19,7 @@ use derivative::Derivative;
 
 #[derive(Derivative, Clone, Debug)]
 #[derivative(PartialEq, Hash)]
-pub(crate) enum ExternalData {
+pub enum ExternalData {
     Array(String, Vec<Self>),
     Object {
         path: String,
@@ -31,7 +31,7 @@ pub(crate) enum ExternalData {
 
 impl ExternalData {
     pub(crate) fn set_object_count(&mut self, new_count: usize) {
-        if let ExternalData::Object { path, count } = self {
+        if let ExternalData::Object { path: _, count } = self {
             *count = new_count;
         }
     }

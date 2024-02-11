@@ -1,8 +1,7 @@
-pub mod external_data;
+use std::collections::HashMap;
+use std::convert::TryFrom;
+use std::string::ToString;
 
-use crate::external_data::ExternalData;
-use crate::Constraints::DataFile;
-use crate::DataSchema::Empty;
 use anyhow::{anyhow, Error as AnyError, Result as AnyResult};
 use hashbrown::HashMap as HashBrownMap;
 use log::{error, trace, warn};
@@ -12,17 +11,17 @@ use regex_syntax::hir::Hir;
 use regex_syntax::Parser;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::{json, Map, Value};
-use std::collections::{HashMap, HashSet};
-use std::convert::TryFrom;
-use std::string::ToString;
-use std::time::Duration;
-use tokio::sync::mpsc::{Receiver, Sender};
-use tokio::time::timeout;
+
+pub use external_data::ExternalData;
+
+use crate::Constraints::DataFile;
+use crate::DataSchema::Empty;
+
+mod external_data;
 
 const PATTER_MAX_REPEAT: u32 = 10;
 const TYPE_DATA: &str = "type";
 const KEY_FOR_KEYLESS_SCHEMAS: &str = "__";
-const DURATION_DATA_FILE_TIMEOUT: Duration = Duration::from_millis(10);
 
 #[derive(Debug, Serialize, Deserialize, Eq, PartialEq, Hash, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -427,21 +426,15 @@ fn parse_constraints(
     Some(())
 }
 
-type ReqSender = Option<Sender<usize>>;
-type DataReceiver = Option<Receiver<Vec<Vec<String>>>>;
 #[cfg(feature = "data-gen-file")]
-pub async fn generate_data_with_external_data(
-    schema: &DataSchema,
-    req_tx: &Option<Sender<usize>>,
-    data_rx: &mut Option<Receiver<Vec<Vec<String>>>>,
-) -> (Value, Option<Vec<ExternalData>>) {
+pub fn generate_data_with_external_data(schema: &DataSchema) -> (Value, Option<Vec<ExternalData>>) {
     match schema {
         DataSchema::Object(k, v) => {
             if k.is_some() {
                 error!("key should be None for root object");
                 (Value::Null, None)
             } else {
-                let (data, ext_data) = generate_object_data(v, req_tx, data_rx).await;
+                let (data, ext_data) = generate_object_data(v);
                 (Value::Object(data), ext_data)
             }
         }
@@ -457,23 +450,18 @@ pub async fn generate_data_with_external_data(
 
 /// Return JSON object with randomly generated data
 /// Not returning result, because a valid [DataSchema] should return valid data
-pub async fn generate_data(schema: &DataSchema) -> (Value, Option<Vec<ExternalData>>) {
-    generate_data_with_external_data(schema, &None, &mut None).await
+pub fn generate_data(schema: &DataSchema) -> (Value, Option<Vec<ExternalData>>) {
+    generate_data_with_external_data(schema)
 }
 
-#[async_recursion::async_recursion]
-async fn generate_object_data(
-    data: &[DataSchema],
-    tx: &ReqSender,
-    rx: &mut DataReceiver,
-) -> (Map<String, Value>, Option<Vec<ExternalData>>) {
+fn generate_object_data(data: &[DataSchema]) -> (Map<String, Value>, Option<Vec<ExternalData>>) {
     let mut map = Map::new();
     let mut external_data_desc: HashBrownMap<ExternalData, usize> = HashBrownMap::new();
     for datum in data {
         match datum {
             DataSchema::Empty => {}
             DataSchema::String(k, c) => {
-                let (str_data, external) = generate_string_data(c, tx, rx).await;
+                let (str_data, external) = generate_string_data(c);
                 map.insert(k.clone(), Value::String(str_data));
                 if external {
                     let ext_data = ExternalData::Object {
@@ -486,36 +474,36 @@ async fn generate_object_data(
                 }
             }
             DataSchema::Integer(k, c) => {
-                map.insert(k.clone(), json!(generate_integer_data(c, tx, rx).await.0));
+                map.insert(k.clone(), json!(generate_integer_data(c).0));
             }
             DataSchema::Object(k, c) => {
-                let (obj_data, external_data) = generate_object_data(c, tx, rx).await;
+                let (obj_data, external_data) = generate_object_data(c);
                 map.insert(k.as_ref().unwrap().clone(), Value::Object(obj_data));
                 if let Some(mut external_data) = external_data {
                     let updated_path = k.as_ref().unwrap().as_str().to_owned() + ".";
                     for external_datum in external_data.iter_mut() {
                         if let ExternalData::Object {
                             ref mut path,
-                            count,
+                            count: _,
                         } = external_datum
                         {
                             path.insert_str(0, &updated_path);
                         }
-                        let count = external_data_desc.entry_ref(external_datum).or_insert(0);
+                        external_data_desc.entry_ref(external_datum).or_insert(0);
                     }
                 }
             }
             DataSchema::Array(k, schema, constraints) => {
-                let (data, mut ext_data) = generate_array_data(schema, constraints, tx, rx).await;
+                let (data, mut ext_data) = generate_array_data(schema, constraints);
                 let k = k.as_ref().unwrap().clone();
                 if let Some(ExternalData::Array(ref mut key, _)) = ext_data {
                     *key = k.clone() + key;
                 }
-                ext_data.map(|d| {
+                if let Some(d) = ext_data {
                     // external_data_desc.insert(d);
                     let count = external_data_desc.entry_ref(&d).or_insert(0);
                     *count += 1;
-                });
+                };
                 map.insert(k, Value::Array(data));
             }
             DataSchema::ConstantObject(k, c) => {
@@ -546,11 +534,9 @@ fn external_data_map_to_vec(map: &mut HashBrownMap<ExternalData, usize>) -> Vec<
     })
 }
 
-async fn generate_array_data(
+fn generate_array_data(
     schema: &[DataSchema],
     constraints: &HashMap<Keywords, Constraints>,
-    tx: &ReqSender,
-    rx: &mut DataReceiver,
 ) -> (Vec<Value>, Option<ExternalData>) {
     let min = constraints
         .get(&Keywords::MinLength)
@@ -565,9 +551,9 @@ async fn generate_array_data(
     // let mut ext_data = Vec::new();
     let mut ext_data: HashBrownMap<ExternalData, usize> = HashBrownMap::new();
     for _ in 0..len {
-        let (mut data, mut ext) = generate_object_data(schema, tx, rx).await;
+        let (mut data, ext) = generate_object_data(schema);
         array_values.push(data.remove(KEY_FOR_KEYLESS_SCHEMAS).unwrap());
-        if let Some(mut ext) = ext {
+        if let Some(ext) = ext {
             for datum in ext {
                 let x = ext_data.entry_ref(&datum).or_insert(0);
                 *x += 1;
@@ -585,11 +571,7 @@ async fn generate_array_data(
     (array_values, ext_data)
 }
 
-async fn generate_integer_data(
-    constraints: &HashMap<Keywords, Constraints>,
-    tx: &ReqSender,
-    rx: &mut DataReceiver,
-) -> (i64, bool) {
+fn generate_integer_data(constraints: &HashMap<Keywords, Constraints>) -> (i64, bool) {
     if let Some(constraint) = constraints.get(&Keywords::Constant) {
         return (constraint.as_i64().unwrap_or(i64::MIN), false);
     }
@@ -606,12 +588,11 @@ async fn generate_integer_data(
         }
         return (constraint.as_i64().unwrap_or(i64::MIN), false);
     }
-    let data = try_to_get_data_from_file(constraints, tx, rx)
-        .await
-        .and_then(|val| val.parse::<i64>().ok());
-    if let Some(data) = data {
-        return (-1, true);
-    }
+    // let data = try_to_get_data_from_file(constraints, tx, rx)
+    //     .and_then(|val| val.parse::<i64>().ok());
+    // if let Some(data) = data {
+    //     return (-1, true);
+    // }
     let min = constraints
         .get(&Keywords::Minimum)
         .and_then(|constraint| constraint.as_i64())
@@ -646,11 +627,7 @@ fn random_string(pattern: &String, hir: &Option<Hir>) -> String {
     }
 }
 
-async fn generate_string_data(
-    constraints: &HashMap<Keywords, Constraints>,
-    tx: &ReqSender,
-    rx: &mut DataReceiver,
-) -> (String, bool) {
+fn generate_string_data(constraints: &HashMap<Keywords, Constraints>) -> (String, bool) {
     if let Some(constraint) = constraints.get(&Keywords::Constant) {
         return (
             constraint
@@ -689,51 +666,53 @@ async fn generate_string_data(
     (data, false)
 }
 
-async fn try_to_get_data_from_file(
-    constraints: &HashMap<Keywords, Constraints>,
-    tx: &ReqSender,
-    rx: &mut DataReceiver,
-) -> Option<String> {
-    if let Some(DataFile(column)) = constraints.get(&Keywords::DataFile) {
-        if let Some(tx) = tx {
-            if tx.send(1).await.is_ok() {
-                let val = timeout(DURATION_DATA_FILE_TIMEOUT, rx.as_mut().unwrap().recv())
-                    .await
-                    .ok()
-                    .flatten()
-                    .and_then(|mut str_from_file| str_from_file.pop())
-                    .and_then(|mut str_from_file| {
-                        let column = *column as usize;
-                        if column < str_from_file.len() {
-                            Some(str_from_file.swap_remove(column))
-                        } else {
-                            None
-                        }
-                    });
-                if let Some(val) = val {
-                    return Some(val);
-                } else {
-                    error!("unable to get data from file");
-                }
-            }
-        }
-    }
-    None
-}
+// fn try_to_get_data_from_file(
+//     constraints: &HashMap<Keywords, Constraints>,
+//     tx: &ReqSender,
+//     rx: &mut DataReceiver,
+// ) -> Option<String> {
+//     if let Some(DataFile(column)) = constraints.get(&Keywords::DataFile) {
+//         if let Some(tx) = tx {
+//             if tx.send(1).await.is_ok() {
+//                 let val = timeout(DURATION_DATA_FILE_TIMEOUT, rx.as_mut().unwrap().recv())
+//                     .await
+//                     .ok()
+//                     .flatten()
+//                     .and_then(|mut str_from_file| str_from_file.pop())
+//                     .and_then(|mut str_from_file| {
+//                         let column = *column as usize;
+//                         if column < str_from_file.len() {
+//                             Some(str_from_file.swap_remove(column))
+//                         } else {
+//                             None
+//                         }
+//                     });
+//                 if let Some(val) = val {
+//                     return Some(val);
+//                 } else {
+//                     error!("unable to get data from file");
+//                 }
+//             }
+//         }
+//     }
+//     None
+// }
 
 #[cfg(test)]
 mod test {
-    use crate::external_data::ExternalData;
-    use crate::{
-        data_schema_from_value, generate_data, generate_data_with_external_data, Constraints,
-        DataReceiver, DataSchema, Keywords, ReqSender, KEY_FOR_KEYLESS_SCHEMAS,
-    };
+    use std::str::FromStr;
+    use std::sync::Once;
+
     use log::info;
     use regex::Regex;
     use serde_json::{json, Value};
-    use std::str::FromStr;
-    use std::sync::Once;
     use tokio::sync::mpsc::{Receiver, Sender};
+
+    use crate::external_data::ExternalData;
+    use crate::{
+        data_schema_from_value, generate_data, generate_data_with_external_data, Constraints,
+        DataSchema, Keywords, KEY_FOR_KEYLESS_SCHEMAS,
+    };
 
     static INIT: Once = Once::new();
 
@@ -780,12 +759,12 @@ mod test {
         }
     }
 
-    #[tokio::test]
-    async fn integer_pattern_data_gen() {
+    #[test]
+    fn integer_pattern_data_gen() {
         let json_schema = integer_pattern_data_gen_schema();
         let json_schema: Value = serde_json::from_str(json_schema).unwrap();
         let data_schema = data_schema_from_value(&json_schema).unwrap();
-        let data = generate_data(&data_schema).await.0;
+        let data = generate_data(&data_schema).0;
         let val = validate_json_path("$.nested.objKey1", &data, None);
         info!("[integer_pattern_data_gen] - val: {:?}", val);
         assert_ne!(val.first().unwrap().as_i64().unwrap(), 0)
@@ -817,12 +796,12 @@ mod test {
         "#
     }
 
-    #[tokio::test]
-    async fn const_obj_data_gen() {
+    #[test]
+    fn const_obj_data_gen() {
         let json_schema = const_obj_data_gen_schema();
         let json_schema: Value = serde_json::from_str(json_schema).unwrap();
         let data_schema = data_schema_from_value(&json_schema).unwrap();
-        let data = generate_data(&data_schema).await.0;
+        let data = generate_data(&data_schema).0;
         validate_json_path(
             "$.constObject.properties.comment",
             &data,
@@ -830,12 +809,12 @@ mod test {
         );
     }
 
-    #[tokio::test]
-    async fn const_obj_data_gen_with_other_obj_property() {
+    #[test]
+    fn const_obj_data_gen_with_other_obj_property() {
         let json_schema = const_obj_data_gen_with_other_obj_property_schema();
         let json_schema: Value = serde_json::from_str(json_schema).unwrap();
         let data_schema = data_schema_from_value(&json_schema).unwrap();
-        let data = generate_data(&data_schema).await.0;
+        let data = generate_data(&data_schema).0;
         validate_json_path("$.key1", &data, Some(&json!("value1")));
         validate_json_path("$.nested.objKey1", &data, None);
         validate_json_path("$.constObject.keyInt", &data, Some(&json!(1234)));
@@ -942,12 +921,12 @@ mod test {
         match schema {
             DataSchema::Object(_, values) => {
                 assert_eq!(values.len(), 1);
-                let array = values.get(0).unwrap();
+                let array = values.first().unwrap();
                 match array {
                     DataSchema::Array(k, values, c) => {
                         assert_eq!(k, &Some("keys".to_string()));
                         assert_eq!(values.len(), 1);
-                        let elements = values.get(0).unwrap();
+                        let elements = values.first().unwrap();
                         matches!(elements, DataSchema::Integer(_, _));
                         assert_eq!(
                             c.get(&Keywords::MinLength).unwrap(),
@@ -988,11 +967,11 @@ mod test {
         assert_json_diff::assert_json_eq!(value, original_schema);
     }
 
-    #[tokio::test]
-    async fn array_schema_data_gen_integer() {
+    #[test]
+    fn array_schema_data_gen_integer() {
         let data = array_sample_json_1();
         let schema: DataSchema = serde_json::from_str(data).unwrap();
-        let value = generate_data(&schema).await.0;
+        let value = generate_data(&schema).0;
         matches!(value, Value::Object(_));
         let array = value.get("keys").unwrap();
         matches!(array, &Value::Array(_));
@@ -1004,11 +983,11 @@ mod test {
         }
     }
 
-    #[tokio::test]
-    async fn array_schema_data_gen_object() {
+    #[test]
+    fn array_schema_data_gen_object() {
         let data = array_sample_json_2();
         let schema: DataSchema = serde_json::from_str(data).unwrap();
-        let value = generate_data(&schema).await.0;
+        let value = generate_data(&schema).0;
         matches!(value, Value::Object(_));
         let array = value.get("keys").unwrap();
         matches!(array, &Value::Array(_));
@@ -1024,11 +1003,11 @@ mod test {
         }
     }
 
-    #[tokio::test]
-    async fn array_schema_data_gen_string_pattern() {
+    #[test]
+    fn array_schema_data_gen_string_pattern() {
         let data = array_sample_json_3();
         let schema: DataSchema = serde_json::from_str(data).unwrap();
-        let value = generate_data(&schema).await.0;
+        let value = generate_data(&schema).0;
         matches!(value, Value::Object(_));
         let array = value.get("objArrayKeys").unwrap();
         matches!(array, &Value::Array(_));
@@ -1365,8 +1344,8 @@ mod test {
             .contains("requires both minLength & maxLength"));
     }
 
-    #[tokio::test]
-    async fn test() {
+    #[test]
+    fn test() {
         let data = r#"{
             "properties": {
             "firstName": {
@@ -1420,7 +1399,7 @@ mod test {
         let result = data_schema_from_value(&schema);
         assert!(result.is_ok());
         let result = result.as_ref().unwrap();
-        let g = generate_data(result).await.0;
+        let g = generate_data(result).0;
         println!("{g}")
     }
 
@@ -1465,8 +1444,8 @@ mod test {
         );
     }
 
-    #[tokio::test]
-    async fn test_integer_constant() {
+    #[test]
+    fn test_integer_constant() {
         init_logger();
         let schema = r#"{"properties":{"sample":{"type":"integer","constant":10}}}"#;
         let schema: Value = serde_json::from_str(schema).unwrap();
@@ -1474,66 +1453,70 @@ mod test {
         info!("schema: {:?}", &result);
         assert!(result.is_ok());
         let result = result.as_ref().unwrap();
-        let value = generate_data(result).await.0;
+        let value = generate_data(result).0;
         info!("{:?}", &value.to_string());
         assert_eq!(value.get("sample").unwrap().as_i64().unwrap(), 10);
     }
 
-    #[tokio::test]
-    async fn test_integer_data_file() {
-        let schema = r#"{"properties":{"sample":{"type":"integer","dataFile":1}}}"#;
-        let schema: Value = serde_json::from_str(schema).unwrap();
-        let result = data_schema_from_value(&schema);
-        assert!(result.is_ok());
-        let result = result.as_ref().unwrap();
-        let (mut rx, rtx) = get_rx_tx().await;
-        let value = generate_data_with_external_data(result, &rtx, &mut rx)
-            .await
-            .0;
-        assert_eq!(value.get("sample").unwrap().as_i64().unwrap(), 5);
-    }
+    // #[test]
+    // fn test_integer_data_file() {
+    //     let schema = r#"{"properties":{"sample":{"type":"integer","dataFile":1}}}"#;
+    //     let schema: Value = serde_json::from_str(schema).unwrap();
+    //     let result = data_schema_from_value(&schema);
+    //     assert!(result.is_ok());
+    //     let result = result.as_ref().unwrap();
+    //     let (mut rx, rtx) = get_rx_tx().await;
+    //     let value = generate_data_with_external_data(result, &rtx, &mut rx)
+    //         .await
+    //         .0;
+    //     assert_eq!(value.get("sample").unwrap().as_i64().unwrap(), 5);
+    // }
 
-    #[tokio::test]
-    async fn test_string_constant() {
+    #[test]
+    fn test_string_constant() {
         let schema = r#"{"properties":{"sample":{"type":"string","constant":"always produce this string"}}}"#;
         let schema: Value = serde_json::from_str(schema).unwrap();
         let result = data_schema_from_value(&schema);
         assert!(result.is_ok());
         let result = result.as_ref().unwrap();
-        let value = generate_data(result).await.0;
+        let value = generate_data(result).0;
         assert_eq!(
             value.get("sample").unwrap().as_str().unwrap(),
             "always produce this string"
         );
     }
 
-    #[tokio::test]
-    async fn test_string_pattern() {
+    #[test]
+    fn test_string_pattern() {
         let regex = regex::Regex::new(r"^\d{4}-\w+-\d{2}$").unwrap();
         let schema = r#"{"properties":{"sample":{"type":"string","pattern":"^[0-9]{4}-[a-z]{2,}-[0-9]{2}$"}}}"#;
         let schema: Value = serde_json::from_str(schema).unwrap();
         let result = data_schema_from_value(&schema);
         assert!(result.is_ok());
         let result = result.as_ref().unwrap();
-        let value = generate_data(result).await.0;
+        let value = generate_data(result).0;
         assert!(regex.is_match(value.get("sample").unwrap().as_str().unwrap()));
     }
 
-    #[tokio::test]
-    async fn test_string_data_file() {
-        let schema = r#"{"properties":{"sample":{"type":"string","dataFile":1}}}"#;
-        let schema: Value = serde_json::from_str(schema).unwrap();
-        let result = data_schema_from_value(&schema);
-        assert!(result.is_ok());
-        let result = result.as_ref().unwrap();
-        let (mut rx, rtx) = get_rx_tx().await;
-        // let value = generate_data(result).await;
-        let value = generate_data_with_external_data(result, &rtx, &mut rx)
-            .await
-            .0;
-        assert_eq!(value.get("sample").unwrap().as_str().unwrap(), "5");
-    }
+    // #[test]
+    // fn test_string_data_file() {
+    //     let schema = r#"{"properties":{"sample":{"type":"string","dataFile":1}}}"#;
+    //     let schema: Value = serde_json::from_str(schema).unwrap();
+    //     let result = data_schema_from_value(&schema);
+    //     assert!(result.is_ok());
+    //     let result = result.as_ref().unwrap();
+    //     let (mut rx, rtx) = get_rx_tx().await;
+    //     // let value = generate_data(result).await;
+    //     let value = generate_data_with_external_data(result, &rtx, &mut rx)
+    //         .await
+    //         .0;
+    //     assert_eq!(value.get("sample").unwrap().as_str().unwrap(), "5");
+    // }
 
+    type ReqSender = Option<Sender<usize>>;
+    type DataReceiver = Option<Receiver<Vec<Vec<String>>>>;
+
+    #[allow(dead_code)]
     async fn get_rx_tx() -> (DataReceiver, ReqSender) {
         let (tx, rx): (_, Receiver<Vec<Vec<String>>>) = tokio::sync::mpsc::channel(10);
         let (rtx, mut rrx): (Sender<usize>, _) = tokio::sync::mpsc::channel(10);
@@ -1550,29 +1533,29 @@ mod test {
         (Some(rx), Some(rtx))
     }
 
-    #[tokio::test]
-    async fn test_object() {
+    #[test]
+    fn test_object() {
         let schema = r#"{"properties":{"sample":{"constant":10,"type":"integer"},"sampleObject":{"properties":{"nestedSample":{"constant":20,"type":"integer"}},"type":"object"}}}"#;
         let schema: Value = serde_json::from_str(schema).unwrap();
         let result = data_schema_from_value(&schema);
         assert!(result.is_ok());
         let result = result.as_ref().unwrap();
-        let value = generate_data(result).await.0;
+        let value = generate_data(result).0;
         assert_eq!(value.get("sample").unwrap().as_i64().unwrap(), 10);
         let object = value.get("sampleObject").unwrap();
         assert_eq!(object.get("nestedSample").unwrap().as_i64().unwrap(), 20);
     }
 
-    #[tokio::test]
-    async fn test_external_data_description_depth_1() {
+    #[test]
+    fn test_external_data_description_depth_1() {
         let schema = r#"{"properties":{"sample":{"type":"string","dataFile":1}}}"#;
         let schema: Value = serde_json::from_str(schema).unwrap();
         let result = data_schema_from_value(&schema);
         assert!(result.is_ok());
         let result = result.as_ref().unwrap();
-        let (mut rx, rtx) = get_rx_tx().await;
+        // let (mut rx, rtx) = get_rx_tx().await;
         // let value = generate_data(result).await;
-        let value = generate_data_with_external_data(result, &rtx, &mut rx).await;
+        let value = generate_data_with_external_data(result);
         let value = value.1.unwrap();
         println!("{:?}", value);
         let expect = ExternalData::Object {
@@ -1582,16 +1565,16 @@ mod test {
         assert_eq!(value.first().unwrap(), &expect);
     }
 
-    #[tokio::test]
-    async fn test_external_data_description_depth_2() {
+    #[test]
+    fn test_external_data_description_depth_2() {
         let schema = r#"{"properties":{"sample":{"type":"object","properties":{"sample":{"type":"string","dataFile":1}}}}}"#;
         let schema: Value = serde_json::from_str(schema).unwrap();
         let result = data_schema_from_value(&schema);
         assert!(result.is_ok());
         let result = result.as_ref().unwrap();
-        let (mut rx, rtx) = get_rx_tx().await;
+        // let (mut rx, rtx) = get_rx_tx().await;
         // let value = generate_data(result).await;
-        let value = generate_data_with_external_data(result, &rtx, &mut rx).await;
+        let value = generate_data_with_external_data(result);
         let value = value.1.unwrap();
         println!("{:?}", value);
         let expect = ExternalData::Object {
@@ -1601,16 +1584,16 @@ mod test {
         assert_eq!(value.first().unwrap(), &expect);
     }
 
-    #[tokio::test]
-    async fn test_external_data_description_depth_3() {
+    #[test]
+    fn test_external_data_description_depth_3() {
         let schema = r#"{"properties":{"sample":{"type":"object","properties":{"sample":{"type":"object","properties":{"sample":{"type":"string","dataFile":1}}}}}}}"#;
         let schema: Value = serde_json::from_str(schema).unwrap();
         let result = data_schema_from_value(&schema);
         assert!(result.is_ok());
         let result = result.as_ref().unwrap();
-        let (mut rx, rtx) = get_rx_tx().await;
+        // let (mut rx, rtx) = get_rx_tx().await;
         // let value = generate_data(result).await;
-        let value = generate_data_with_external_data(result, &rtx, &mut rx).await;
+        let value = generate_data_with_external_data(result);
         let value = value.1.unwrap();
         println!("{:?}", value);
         let expect = ExternalData::Object {
@@ -1620,16 +1603,14 @@ mod test {
         assert_eq!(value.first().unwrap(), &expect);
     }
 
-    #[tokio::test]
-    async fn test_multi_external_data_description_depth_1() {
+    #[test]
+    fn test_multi_external_data_description_depth_1() {
         let schema = r#"{"properties":{"sample":{"type":"string","dataFile":1}, "sample2":{"type":"string","dataFile":2}}}"#;
         let schema: Value = serde_json::from_str(schema).unwrap();
         let result = data_schema_from_value(&schema);
         assert!(result.is_ok());
         let result = result.as_ref().unwrap();
-        let (mut rx, rtx) = get_rx_tx().await;
-        // let value = generate_data(result).await;
-        let value = generate_data_with_external_data(result, &rtx, &mut rx).await;
+        let value = generate_data_with_external_data(result);
         let value = value.1.unwrap();
         println!("{:?}", value);
         let expect_1 = ExternalData::Object {
@@ -1644,17 +1625,15 @@ mod test {
         assert!(value.contains(&expect_2));
     }
 
-    #[tokio::test]
-    async fn test_arr_external_data_description_depth_1() {
+    #[test]
+    fn test_arr_external_data_description_depth_1() {
         init_logger();
         let schema = r#"{"properties":{"keys":{"type":"array","items":{"type": "string", "dataFile":1},"maxLength":10,"minLength":2}}}"#;
         let schema: Value = serde_json::from_str(schema).unwrap();
         let result = data_schema_from_value(&schema);
         assert!(result.is_ok());
         let result = result.as_ref().unwrap();
-        let (mut rx, rtx) = get_rx_tx().await;
-        // let value = generate_data(result).await;
-        let (value, ext_data) = generate_data_with_external_data(result, &rtx, &mut rx).await;
+        let (value, ext_data) = generate_data_with_external_data(result);
         let ext_data = ext_data.unwrap();
         let expect = ExternalData::Array(
             "keys[*]".to_string(),
@@ -1670,11 +1649,8 @@ mod test {
             "generated json data: {}, external data: {:?}",
             value, ext_data
         );
-        match ext_data {
-            ExternalData::Object { path, count } => {
-                assert_eq!(value.get("keys").unwrap().as_array().unwrap().len(), *count);
-            }
-            _ => {}
+        if let ExternalData::Object { path: _, count } = ext_data {
+            assert_eq!(value.get("keys").unwrap().as_array().unwrap().len(), *count);
         }
     }
 }
