@@ -477,6 +477,7 @@ fn generate_object_data(data: &[DataSchema]) -> (Map<String, Value>, Option<Vec<
                 map.insert(k.clone(), json!(generate_integer_data(c).0));
             }
             DataSchema::Object(k, c) => {
+                trace!("generating object at: {:?}", k);
                 let (obj_data, external_data) = generate_object_data(c);
                 map.insert(k.as_ref().unwrap().clone(), Value::Object(obj_data));
                 if let Some(mut external_data) = external_data {
@@ -489,6 +490,9 @@ fn generate_object_data(data: &[DataSchema]) -> (Map<String, Value>, Option<Vec<
                         {
                             path.insert_str(0, &updated_path);
                         }
+                        if let ExternalData::Array(ref mut path, _) = external_datum {
+                            path.insert_str(0, &updated_path);
+                        }
                         external_data_desc.entry_ref(external_datum).or_insert(0);
                     }
                 }
@@ -497,10 +501,9 @@ fn generate_object_data(data: &[DataSchema]) -> (Map<String, Value>, Option<Vec<
                 let (data, mut ext_data) = generate_array_data(schema, constraints);
                 let k = k.as_ref().unwrap().clone();
                 if let Some(ExternalData::Array(ref mut key, _)) = ext_data {
-                    *key = k.clone() + key;
+                    key.insert_str(0, &k);
                 }
                 if let Some(d) = ext_data {
-                    // external_data_desc.insert(d);
                     let count = external_data_desc.entry_ref(&d).or_insert(0);
                     *count += 1;
                 };
@@ -1651,6 +1654,93 @@ mod test {
         );
         if let ExternalData::Object { path: _, count } = ext_data {
             assert_eq!(value.get("keys").unwrap().as_array().unwrap().len(), *count);
+        }
+    }
+
+    #[test]
+    fn test_arr_external_data_description_depth_3() {
+        init_logger();
+        let schema = r#"{"properties":{"sample":{"type":"object","properties":{"sample":{"type":"object","properties":{"keys":{"type":"array","items":{"type": "string", "dataFile":1},"maxLength":10,"minLength":2}}}}}}}"#;
+        let schema: Value = serde_json::from_str(schema).unwrap();
+        let result = data_schema_from_value(&schema);
+        assert!(result.is_ok());
+        let result = result.as_ref().unwrap();
+        let (value, ext_data) = generate_data_with_external_data(result);
+        info!(
+            "generated json data: {}, external data: {:?}",
+            value, ext_data
+        );
+        let ext_data = ext_data.unwrap();
+        let expect = ExternalData::Array(
+            "sample.sample.keys[*]".to_string(),
+            vec![ExternalData::Object {
+                path: String::from(KEY_FOR_KEYLESS_SCHEMAS),
+                count: 0,
+            }],
+        );
+        assert_eq!(ext_data.len(), 1);
+        let ext_data = ext_data.first().unwrap();
+        assert_eq!(ext_data, &expect);
+        if let ExternalData::Object { path: _, count } = ext_data {
+            assert_eq!(
+                value
+                    .get("sample")
+                    .map(|t| { t.get("sample").unwrap() })
+                    .map(|t| { t.get("keys").unwrap() })
+                    .map(|t| { t.as_array().unwrap().len() })
+                    .unwrap_or(usize::MAX),
+                *count
+            );
+        }
+    }
+
+    #[test]
+    fn test_arr_obj_external_data_description_depth_3() {
+        init_logger();
+        let schema = r#"{"properties":{"firstName":{"type":"string"},"lastName":{"type":"string",
+        "pattern":"^a[0-9]{4}z$"},"age":{"type":"integer","minimum":10,"maximum":20},"objArrayKeys":
+        {"type":"array","maxLength":20,"minLength":10,"items":{"type":"object","properties":{"objKey1":
+        {"type": "string", "dataFile":1},"objKey2":{"type": "string", "dataFile":2}}}},
+        "scalarArray":{"type":"array","maxLength":20,"minLength":20,"items":{"type":"string","pattern":"^a[0-9]{4}z$"}}}}"#;
+        let schema: Value = serde_json::from_str(schema).unwrap();
+        let result = data_schema_from_value(&schema);
+        assert!(result.is_ok());
+        let result = result.as_ref().unwrap();
+        let (value, ext_data) = generate_data_with_external_data(result);
+        info!(
+            "generated json data: {}, external data: {:?}",
+            value, ext_data
+        );
+        let ext_data = ext_data.unwrap();
+        let expect = ExternalData::Array(
+            "objArrayKeys[*]".to_string(),
+            vec![
+                ExternalData::Object {
+                    path: String::from("__.objKey1"),
+                    count: 0,
+                },
+                ExternalData::Object {
+                    path: String::from("__.objKey2"),
+                    count: 0,
+                },
+            ],
+        );
+        assert_eq!(ext_data.len(), 1);
+        let ext_data = ext_data.first().unwrap();
+        assert_eq!(ext_data, &expect);
+        // if let ExternalData::Object { path: _, count } = ext_data {
+        if let ExternalData::Array(_, data) = ext_data {
+            if let Some(ExternalData::Object { path: _, count }) = data.first() {
+                assert_eq!(
+                    value
+                        .get("objArrayKeys")
+                        .map(|t| { t.as_array().unwrap().len() })
+                        .unwrap_or(usize::MAX),
+                    *count
+                );
+            } else {
+                assert!(false);
+            }
         }
     }
 }
