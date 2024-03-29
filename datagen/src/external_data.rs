@@ -18,7 +18,7 @@
 use derivative::Derivative;
 
 #[derive(Derivative, Clone, Debug)]
-#[derivative(PartialEq, Hash)]
+#[derivative(Eq, PartialEq, Hash)]
 pub enum ExternalData {
     Array(String, Vec<Self>),
     Object {
@@ -26,12 +26,18 @@ pub enum ExternalData {
         #[derivative(PartialEq = "ignore")]
         #[derivative(Hash = "ignore")]
         count: usize,
+        column: usize,
     },
 }
 
 impl ExternalData {
     pub(crate) fn set_object_count(&mut self, new_count: usize) {
-        if let ExternalData::Object { path: _, count } = self {
+        if let ExternalData::Object {
+            path: _,
+            count,
+            column: _,
+        } = self
+        {
             *count = new_count;
         }
     }
@@ -42,30 +48,3 @@ impl From<&ExternalData> for ExternalData {
         value.clone()
     }
 }
-
-// impl PartialEq for ExternalData {
-//     fn eq(&self, other: &Self) -> bool {
-//         let self_tag = std::mem::discriminant(self);
-//         let other_tag = std::mem::discriminant(other);
-//         self_tag == other_tag &&
-//             match (self, other) {
-//                 (
-//                     ExternalData::Array(__self_0, __self_1),
-//                     ExternalData::Array(__arg1_0, __arg1_1),
-//                 ) => *__self_0 == *__arg1_0 && *__self_1 == *__arg1_1,
-//                 (
-//                     ExternalData::Object { path: __self_0, count: __self_1 },
-//                     ExternalData::Object { path: __arg1_0, count: __arg1_1 },
-//                 ) => *__self_0 == *__arg1_0,
-//                 _ => false
-//             }
-//     }
-// }
-
-impl Eq for ExternalData {}
-
-// struct ExternalDataDescriptor {
-//     path: String,
-//     data_type: Type,
-//     child: Vec<ExternalDataDescriptor>
-// }

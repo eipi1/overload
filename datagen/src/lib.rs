@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 use std::convert::TryFrom;
+use std::fmt::Debug;
+use std::str::FromStr;
 use std::string::ToString;
 
 use anyhow::{anyhow, Error as AnyError, Result as AnyResult};
@@ -462,16 +464,17 @@ fn generate_object_data(data: &[DataSchema]) -> (Map<String, Value>, Option<Vec<
             DataSchema::Empty => {}
             DataSchema::String(k, c) => {
                 let (str_data, external) = generate_string_data(c);
-                map.insert(k.clone(), Value::String(str_data));
                 if external {
                     let ext_data = ExternalData::Object {
                         path: k.clone(),
                         count: 1,
+                        column: usize::from_str(&str_data).unwrap(),
                     };
                     let count = external_data_desc.entry_ref(&ext_data).or_insert(0);
                     *count += 1;
                     // external_data_desc.insert(ExternalData::Object { path: k.clone(), count: 1 });
                 }
+                map.insert(k.clone(), Value::String(str_data));
             }
             DataSchema::Integer(k, c) => {
                 map.insert(k.clone(), json!(generate_integer_data(c).0));
@@ -481,11 +484,12 @@ fn generate_object_data(data: &[DataSchema]) -> (Map<String, Value>, Option<Vec<
                 let (obj_data, external_data) = generate_object_data(c);
                 map.insert(k.as_ref().unwrap().clone(), Value::Object(obj_data));
                 if let Some(mut external_data) = external_data {
-                    let updated_path = k.as_ref().unwrap().as_str().to_owned() + ".";
+                    let updated_path = k.as_ref().unwrap().as_str().to_owned() + "/";
                     for external_datum in external_data.iter_mut() {
                         if let ExternalData::Object {
                             ref mut path,
                             count: _,
+                            column: _,
                         } = external_datum
                         {
                             path.insert_str(0, &updated_path);
@@ -567,7 +571,7 @@ fn generate_array_data(
         None
     } else {
         Some(ExternalData::Array(
-            "[*]".to_string(),
+            String::new(),
             external_data_map_to_vec(&mut ext_data),
         ))
     };
@@ -651,9 +655,6 @@ fn generate_string_data(constraints: &HashMap<Keywords, Constraints>) -> (String
         return (column.to_string(), true);
     }
 
-    // if let Some(value) = try_to_get_data_from_file(constraints, tx, rx).await {
-    //     return (value, true);
-    // }
     let min = constraints
         .get(&Keywords::MinLength)
         .and_then(|constraint| constraint.as_i64())
@@ -669,52 +670,88 @@ fn generate_string_data(constraints: &HashMap<Keywords, Constraints>) -> (String
     (data, false)
 }
 
-// fn try_to_get_data_from_file(
-//     constraints: &HashMap<Keywords, Constraints>,
-//     tx: &ReqSender,
-//     rx: &mut DataReceiver,
-// ) -> Option<String> {
-//     if let Some(DataFile(column)) = constraints.get(&Keywords::DataFile) {
-//         if let Some(tx) = tx {
-//             if tx.send(1).await.is_ok() {
-//                 let val = timeout(DURATION_DATA_FILE_TIMEOUT, rx.as_mut().unwrap().recv())
-//                     .await
-//                     .ok()
-//                     .flatten()
-//                     .and_then(|mut str_from_file| str_from_file.pop())
-//                     .and_then(|mut str_from_file| {
-//                         let column = *column as usize;
-//                         if column < str_from_file.len() {
-//                             Some(str_from_file.swap_remove(column))
-//                         } else {
-//                             None
-//                         }
-//                     });
-//                 if let Some(val) = val {
-//                     return Some(val);
-//                 } else {
-//                     error!("unable to get data from file");
-//                 }
-//             }
-//         }
-//     }
-//     None
-// }
+pub trait IntoJson: Into<Value> + Debug + Clone {}
+impl<T: Into<Value> + Debug + Clone> IntoJson for T {}
+
+pub fn populate_external_data<T: IntoJson>(
+    external_data: &Vec<ExternalData>,
+    data: &mut Vec<Vec<T>>,
+    json: &mut Value,
+) {
+    trace!("populating external data: {:?}", external_data);
+    for external_datum in external_data {
+        match external_datum {
+            ExternalData::Array(path, ext) => {
+                let mut p = "/".to_string();
+                p.push_str(path);
+                match json.pointer_mut(&p) {
+                    None => {}
+                    Some(val) => {
+                        populate_external_data(ext, data, val);
+                    }
+                }
+            }
+            ExternalData::Object {
+                path,
+                count: _,
+                column,
+            } => {
+                update_json(path, column, data, json);
+            }
+        }
+    }
+}
+
+fn update_json<T: IntoJson>(path: &str, column: &usize, data: &Vec<Vec<T>>, json: &mut Value) {
+    trace!(
+        "updating JSON with data - json: {:?}, data: {:?}",
+        json,
+        data
+    );
+
+    match json {
+        Value::Array(v) => {
+            let path = path
+                .split_once(KEY_FOR_KEYLESS_SCHEMAS)
+                .map(|t| t.1)
+                .unwrap_or_else(|| {
+                    warn!("Unexpected path: {}", path);
+                    "/"
+                });
+
+            let mut row = 0usize;
+            for val in v.iter_mut() {
+                if let Some(x) = val.pointer_mut(path) {
+                    if let Some(d) = data.get(row).and_then(|v| v.get(column - 1)) {
+                        *x = d.clone().into();
+                        row += 1;
+                    }
+                }
+            }
+        }
+        Value::Object(_) => {}
+        _ => {
+            error!("Unsupported json type")
+        }
+    }
+}
 
 #[cfg(test)]
 mod test {
+    use std::collections::{HashSet, VecDeque};
+    use std::hash::Hash;
     use std::str::FromStr;
     use std::sync::Once;
 
-    use log::info;
+    use log::{info, trace};
     use regex::Regex;
     use serde_json::{json, Value};
     use tokio::sync::mpsc::{Receiver, Sender};
 
     use crate::external_data::ExternalData;
     use crate::{
-        data_schema_from_value, generate_data, generate_data_with_external_data, Constraints,
-        DataSchema, Keywords, KEY_FOR_KEYLESS_SCHEMAS,
+        data_schema_from_value, generate_data, generate_data_with_external_data,
+        populate_external_data, Constraints, DataSchema, Keywords, KEY_FOR_KEYLESS_SCHEMAS,
     };
 
     static INIT: Once = Once::new();
@@ -1564,6 +1601,7 @@ mod test {
         let expect = ExternalData::Object {
             path: "sample".to_string(),
             count: 1,
+            column: 1,
         };
         assert_eq!(value.first().unwrap(), &expect);
     }
@@ -1581,8 +1619,9 @@ mod test {
         let value = value.1.unwrap();
         println!("{:?}", value);
         let expect = ExternalData::Object {
-            path: "sample.sample".to_string(),
+            path: "sample/sample".to_string(),
             count: 1,
+            column: 1,
         };
         assert_eq!(value.first().unwrap(), &expect);
     }
@@ -1600,8 +1639,9 @@ mod test {
         let value = value.1.unwrap();
         println!("{:?}", value);
         let expect = ExternalData::Object {
-            path: "sample.sample.sample".to_string(),
+            path: "sample/sample/sample".to_string(),
             count: 1,
+            column: 1,
         };
         assert_eq!(value.first().unwrap(), &expect);
     }
@@ -1619,10 +1659,12 @@ mod test {
         let expect_1 = ExternalData::Object {
             path: "sample".to_string(),
             count: 1,
+            column: 1,
         };
         let expect_2 = ExternalData::Object {
             path: "sample2".to_string(),
             count: 1,
+            column: 2,
         };
         assert!(value.contains(&expect_1));
         assert!(value.contains(&expect_2));
@@ -1639,10 +1681,11 @@ mod test {
         let (value, ext_data) = generate_data_with_external_data(result);
         let ext_data = ext_data.unwrap();
         let expect = ExternalData::Array(
-            "keys[*]".to_string(),
+            "keys".to_string(),
             vec![ExternalData::Object {
                 path: String::from(KEY_FOR_KEYLESS_SCHEMAS),
                 count: 0,
+                column: 1,
             }],
         );
         assert_eq!(ext_data.len(), 1);
@@ -1652,7 +1695,12 @@ mod test {
             "generated json data: {}, external data: {:?}",
             value, ext_data
         );
-        if let ExternalData::Object { path: _, count } = ext_data {
+        if let ExternalData::Object {
+            path: _,
+            count,
+            column: _,
+        } = ext_data
+        {
             assert_eq!(value.get("keys").unwrap().as_array().unwrap().len(), *count);
         }
     }
@@ -1672,16 +1720,22 @@ mod test {
         );
         let ext_data = ext_data.unwrap();
         let expect = ExternalData::Array(
-            "sample.sample.keys[*]".to_string(),
+            "sample/sample/keys".to_string(),
             vec![ExternalData::Object {
                 path: String::from(KEY_FOR_KEYLESS_SCHEMAS),
                 count: 0,
+                column: 1,
             }],
         );
         assert_eq!(ext_data.len(), 1);
         let ext_data = ext_data.first().unwrap();
         assert_eq!(ext_data, &expect);
-        if let ExternalData::Object { path: _, count } = ext_data {
+        if let ExternalData::Object {
+            path: _,
+            count,
+            column: _,
+        } = ext_data
+        {
             assert_eq!(
                 value
                     .get("sample")
@@ -1697,11 +1751,7 @@ mod test {
     #[test]
     fn test_arr_obj_external_data_description_depth_3() {
         init_logger();
-        let schema = r#"{"properties":{"firstName":{"type":"string"},"lastName":{"type":"string",
-        "pattern":"^a[0-9]{4}z$"},"age":{"type":"integer","minimum":10,"maximum":20},"objArrayKeys":
-        {"type":"array","maxLength":20,"minLength":10,"items":{"type":"object","properties":{"objKey1":
-        {"type": "string", "dataFile":1},"objKey2":{"type": "string", "dataFile":2}}}},
-        "scalarArray":{"type":"array","maxLength":20,"minLength":20,"items":{"type":"string","pattern":"^a[0-9]{4}z$"}}}}"#;
+        let schema = array_obj_data_file_sample();
         let schema: Value = serde_json::from_str(schema).unwrap();
         let result = data_schema_from_value(&schema);
         assert!(result.is_ok());
@@ -1713,34 +1763,177 @@ mod test {
         );
         let ext_data = ext_data.unwrap();
         let expect = ExternalData::Array(
-            "objArrayKeys[*]".to_string(),
+            "objArrayKeys".to_string(),
             vec![
                 ExternalData::Object {
-                    path: String::from("__.objKey1"),
+                    path: String::from("__/objKey2"),
                     count: 0,
+                    column: 2,
                 },
                 ExternalData::Object {
-                    path: String::from("__.objKey2"),
+                    path: String::from("__/objKey1"),
                     count: 0,
+                    column: 1,
                 },
             ],
         );
         assert_eq!(ext_data.len(), 1);
         let ext_data = ext_data.first().unwrap();
-        assert_eq!(ext_data, &expect);
+        // assert_eq!(ext_data, &expect);
+        equal_external_data_array(&ext_data, &expect);
         // if let ExternalData::Object { path: _, count } = ext_data {
         if let ExternalData::Array(_, data) = ext_data {
-            if let Some(ExternalData::Object { path: _, count }) = data.first() {
+            if let Some(ExternalData::Object {
+                path: _,
+                count,
+                column: _,
+            }) = data.first()
+            {
                 assert_eq!(
                     value
                         .get("objArrayKeys")
                         .map(|t| { t.as_array().unwrap().len() })
-                        .unwrap_or(usize::MAX),
+                        .unwrap_or(1),
                     *count
                 );
             } else {
-                assert!(false);
+                panic!("expected ExternalData::Object but not found")
             }
         }
+    }
+
+    fn equal_external_data_array(d1: &ExternalData, d2: &ExternalData) {
+        match d1 {
+            ExternalData::Array(s1, v1) => {
+                if let ExternalData::Array(s2, v2) = d2 {
+                    assert_eq!(s1, s2);
+                    assert!(iters_equal_any_order(v1, v2));
+                } else {
+                    panic!("not an array.");
+                }
+            }
+            _ => {
+                panic!("not an array.");
+            }
+        }
+    }
+
+    fn iters_equal_any_order<T>(a: &[T], b: &[T]) -> bool
+    where
+        T: Eq + Hash,
+    {
+        let a: HashSet<_> = a.iter().collect();
+        let b: HashSet<_> = b.iter().collect();
+
+        a == b
+    }
+
+    #[allow(clippy::get_first)]
+    #[test]
+    fn test_arr_obj_external_data_population() {
+        init_logger();
+        let schema = array_obj_data_file_sample();
+        let schema: Value = serde_json::from_str(schema).unwrap();
+        let result = data_schema_from_value(&schema);
+        assert!(result.is_ok());
+        let result = result.as_ref().unwrap();
+        let (mut value, Some(ext_data)) = generate_data_with_external_data(result) else {
+            panic!("No external data or Error in generate_data_with_external_data");
+        };
+
+        let mut vec = vec![];
+        let count = value
+            .get("objArrayKeys")
+            .map(|t| t.as_array().unwrap().len())
+            .unwrap_or(1);
+        for i in 0..=count {
+            let v1 = format!("abc{i}");
+            let v2 = format!("def{i}");
+            let v = vec![v1, v2];
+            vec.push(v);
+        }
+
+        info!(
+            "generated json data: {}, external data: {:?}",
+            &value, &ext_data
+        );
+        populate_external_data(&ext_data, &mut vec, &mut value);
+        info!("json after data population: {}", &value);
+        let mut vec = VecDeque::from(vec);
+
+        for elm in value
+            .get("objArrayKeys")
+            .and_then(|t| t.as_array())
+            .unwrap()
+            .iter()
+        {
+            let values = vec.pop_front().unwrap();
+            trace!("elm: {}, val: {:?}", elm, &values);
+            assert_eq!(
+                &elm.get("objKey1").unwrap().as_str().unwrap(),
+                values.get(0).unwrap()
+            );
+            assert_eq!(
+                &elm.get("objKey2").unwrap().as_str().unwrap(),
+                values.get(1).unwrap()
+            );
+        }
+    }
+
+    fn array_obj_data_file_sample() -> &'static str {
+        r#"{
+            "properties":
+            {
+                "firstName":
+                {
+                    "type": "string"
+                },
+                "lastName":
+                {
+                    "type": "string",
+                    "pattern": "^a[0-9]{4}z$"
+                },
+                "age":
+                {
+                    "type": "integer",
+                    "minimum": 10,
+                    "maximum": 20
+                },
+                "objArrayKeys":
+                {
+                    "type": "array",
+                    "maxLength": 20,
+                    "minLength": 10,
+                    "items":
+                    {
+                        "type": "object",
+                        "properties":
+                        {
+                            "objKey1":
+                            {
+                                "type": "string",
+                                "dataFile": 1
+                            },
+                            "objKey2":
+                            {
+                                "type": "string",
+                                "dataFile": 2
+                            }
+                        }
+                    }
+                },
+                "scalarArray":
+                {
+                    "type": "array",
+                    "maxLength": 20,
+                    "minLength": 20,
+                    "items":
+                    {
+                        "type": "string",
+                        "pattern": "^a[0-9]{4}z$"
+                    }
+                }
+            }
+        }"#
     }
 }
