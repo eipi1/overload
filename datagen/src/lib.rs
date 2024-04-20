@@ -465,19 +465,20 @@ fn generate_object_data(data: &[DataSchema]) -> (Map<String, Value>, Option<Vec<
             DataSchema::String(k, c) => {
                 let (str_data, external) = generate_string_data(c);
                 if external {
-                    let ext_data = ExternalData::Object {
-                        path: k.clone(),
-                        count: 1,
-                        column: usize::from_str(&str_data).unwrap(),
-                    };
-                    let count = external_data_desc.entry_ref(&ext_data).or_insert(0);
-                    *count += 1;
-                    // external_data_desc.insert(ExternalData::Object { path: k.clone(), count: 1 });
+                    let column = usize::from_str(&str_data).unwrap_or_else(|_| {
+                        error!("invalid row: {str_data}");
+                        0
+                    });
+                    add_to_external_data_mapping(&mut external_data_desc, k, column);
                 }
                 map.insert(k.clone(), Value::String(str_data));
             }
             DataSchema::Integer(k, c) => {
-                map.insert(k.clone(), json!(generate_integer_data(c).0));
+                let (int_data, external) = generate_integer_data(c);
+                if external {
+                    add_to_external_data_mapping(&mut external_data_desc, k, int_data as usize);
+                }
+                map.insert(k.clone(), json!(int_data));
             }
             DataSchema::Object(k, c) => {
                 trace!("generating object at: {:?}", k);
@@ -530,6 +531,20 @@ fn generate_object_data(data: &[DataSchema]) -> (Map<String, Value>, Option<Vec<
         Some(external_data_map_to_vec(&mut external_data_desc))
     };
     (map, external_data_desc)
+}
+
+fn add_to_external_data_mapping(
+    external_data_desc: &mut HashBrownMap<ExternalData, usize>,
+    k: &str,
+    column: usize,
+) {
+    let ext_data = ExternalData::Object {
+        path: k.to_string(),
+        count: 1,
+        column,
+    };
+    let count = external_data_desc.entry_ref(&ext_data).or_insert(0);
+    *count += 1;
 }
 
 #[inline]
@@ -595,11 +610,11 @@ fn generate_integer_data(constraints: &HashMap<Keywords, Constraints>) -> (i64, 
         }
         return (constraint.as_i64().unwrap_or(i64::MIN), false);
     }
-    // let data = try_to_get_data_from_file(constraints, tx, rx)
-    //     .and_then(|val| val.parse::<i64>().ok());
-    // if let Some(data) = data {
-    //     return (-1, true);
-    // }
+
+    if let Some(DataFile(column)) = constraints.get(&Keywords::DataFile) {
+        return (i64::try_from(*column).unwrap_or(0), true);
+    }
+
     let min = constraints
         .get(&Keywords::Minimum)
         .and_then(|constraint| constraint.as_i64())
@@ -670,8 +685,8 @@ fn generate_string_data(constraints: &HashMap<Keywords, Constraints>) -> (String
     (data, false)
 }
 
-pub trait IntoJson: Into<Value> + Debug + Clone {}
-impl<T: Into<Value> + Debug + Clone> IntoJson for T {}
+pub trait IntoJson: Serialize + Debug + Clone {}
+impl<T: Serialize + Debug + Clone> IntoJson for T {}
 
 pub fn populate_external_data<T: IntoJson>(
     external_data: &Vec<ExternalData>,
@@ -723,7 +738,7 @@ fn update_json<T: IntoJson>(path: &str, column: &usize, data: &Vec<Vec<T>>, json
             for val in v.iter_mut() {
                 if let Some(x) = val.pointer_mut(path) {
                     if let Some(d) = data.get(row).and_then(|v| v.get(column - 1)) {
-                        *x = d.clone().into();
+                        *x = create_json_with_same_type(x, d);
                         row += 1;
                     }
                 }
@@ -733,6 +748,69 @@ fn update_json<T: IntoJson>(path: &str, column: &usize, data: &Vec<Vec<T>>, json
         _ => {
             error!("Unsupported json type")
         }
+    }
+}
+
+fn create_json_with_same_type<T: IntoJson>(json: &Value, data: &T) -> Value {
+    match json {
+        Value::Number(v) => {
+            if v.is_f64() {
+                let val = serde_json::to_value(data).ok();
+                if let Some(Value::Number(_)) = &val {
+                    val.unwrap()
+                } else {
+                    let f = val
+                        .as_ref()
+                        .and_then(|t| t.as_str())
+                        .and_then(|t| f64::from_str(t).ok())
+                        .unwrap_or_else(|| {
+                            warn!("invalid float {:?}", data);
+                            0.0
+                        });
+                    json!(f)
+                }
+            } else {
+                let val = serde_json::to_value(data).ok();
+                if let Some(Value::Number(_)) = &val {
+                    val.unwrap()
+                } else {
+                    let i = val
+                        .as_ref()
+                        .and_then(|t| t.as_str())
+                        .and_then(|t| i64::from_str(t).ok())
+                        .unwrap_or_else(|| {
+                            warn!("invalid int {:?}", data);
+                            0i64
+                        });
+                    json!(i)
+                }
+            }
+        }
+        Value::String(_) => {
+            serde_json::from_str::<serde_json::Value>(serde_json::to_string(data).unwrap().as_str())
+                .unwrap()
+        }
+        _ => {
+            warn!("unsupported type: {:?}", json);
+            Value::Null
+        }
+    }
+}
+
+pub fn get_ext_data_count(ext_data: &[ExternalData]) -> usize {
+    if let Some(ExternalData::Array(_, v)) = ext_data.first() {
+        if let Some(ExternalData::Object {
+            count,
+            column: _,
+            path: _,
+        }) = v.first()
+        {
+            *count
+        } else {
+            0
+        }
+    } else {
+        1
     }
 }
 
@@ -751,7 +829,8 @@ mod test {
     use crate::external_data::ExternalData;
     use crate::{
         data_schema_from_value, generate_data, generate_data_with_external_data,
-        populate_external_data, Constraints, DataSchema, Keywords, KEY_FOR_KEYLESS_SCHEMAS,
+        get_ext_data_count, populate_external_data, Constraints, DataSchema, Keywords,
+        KEY_FOR_KEYLESS_SCHEMAS,
     };
 
     static INIT: Once = Once::new();
@@ -1780,7 +1859,7 @@ mod test {
         assert_eq!(ext_data.len(), 1);
         let ext_data = ext_data.first().unwrap();
         // assert_eq!(ext_data, &expect);
-        equal_external_data_array(&ext_data, &expect);
+        equal_external_data_array(ext_data, &expect);
         // if let ExternalData::Object { path: _, count } = ext_data {
         if let ExternalData::Array(_, data) = ext_data {
             if let Some(ExternalData::Object {
@@ -1878,6 +1957,157 @@ mod test {
                 values.get(1).unwrap()
             );
         }
+    }
+
+    #[allow(clippy::get_first)]
+    #[test]
+    fn test_arr_obj_external_data_population_integer() {
+        init_logger();
+        let schema = crate::test::array_obj_data_file_sample_integer();
+        let schema: Value = serde_json::from_str(schema).unwrap();
+        let result = data_schema_from_value(&schema);
+        assert!(result.is_ok());
+        let result = result.as_ref().unwrap();
+        let (mut value, Some(ext_data)) = generate_data_with_external_data(result) else {
+            panic!("No external data or Error in generate_data_with_external_data");
+        };
+
+        let ext_data_count = get_ext_data_count(&ext_data);
+
+        let mut vec: Vec<Vec<String>> = vec![];
+        let count = value
+            .get("objArrayKeys")
+            .map(|t| t.as_array().unwrap().len())
+            .unwrap_or(1);
+        assert_eq!(ext_data_count, count);
+        for i in 0..=count {
+            let v1 = format!("{i}");
+            let v2 = format!("{}", i * 2);
+            let v = vec![v1, v2];
+            vec.push(v);
+        }
+
+        info!(
+            "generated json data: {}, external data: {:?}",
+            &value, &ext_data
+        );
+        populate_external_data(&ext_data, &mut vec, &mut value);
+        info!("json after data population: {}", &value);
+        let mut vec = VecDeque::from(vec);
+
+        for elm in value
+            .get("objArrayKeys")
+            .and_then(|t| t.as_array())
+            .unwrap()
+            .iter()
+        {
+            let values = vec.pop_front().unwrap();
+            trace!("elm: {}, val: {:?}", elm, &values);
+            let x = elm.get("objKey1").unwrap();
+            assert!(x.is_number());
+            assert_eq!(
+                x.as_i64().unwrap(),
+                i64::from_str(values.get(0).unwrap()).unwrap()
+            );
+            let x = elm.get("objKey2").unwrap();
+            assert!(x.is_number());
+            assert_eq!(
+                x.as_i64().unwrap(),
+                i64::from_str(values.get(1).unwrap()).unwrap()
+            );
+        }
+    }
+
+    #[allow(clippy::get_first)]
+    #[test]
+    fn test_scalar_arr_external_data_population_integer() {
+        init_logger();
+        let schema = r#"{"properties":{"sample":{"type":"object","properties":{"sample":{"type":"object","properties":{"keys":{"type":"array","items":{"type": "integer", "dataFile":1},"maxLength":10,"minLength":2}}}}}}}"#;
+        let schema: Value = serde_json::from_str(schema).unwrap();
+        let result = data_schema_from_value(&schema);
+        assert!(result.is_ok());
+        let result = result.as_ref().unwrap();
+        let (mut value, Some(ext_data)) = generate_data_with_external_data(result) else {
+            panic!("No external data or Error in generate_data_with_external_data");
+        };
+
+        let ext_data_count = get_ext_data_count(&ext_data);
+
+        let mut vec: Vec<Vec<i64>> = vec![];
+        let count = value
+            .pointer("/sample/sample/keys")
+            .map(|t| t.as_array().unwrap().len())
+            .unwrap_or(1);
+        assert_eq!(ext_data_count, count);
+        for i in 0..=count {
+            let v = vec![i as i64, (i * 2) as i64];
+            vec.push(v);
+        }
+
+        info!(
+            "generated json data: {}, external data: {:?}",
+            &value, &ext_data
+        );
+        populate_external_data(&ext_data, &mut vec, &mut value);
+        info!("json after data population: {}", &value);
+        let mut vec = VecDeque::from(vec);
+
+        for elm in value
+            .pointer("/sample/sample/keys")
+            .and_then(|t| t.as_array())
+            .unwrap()
+            .iter()
+        {
+            let values = vec.pop_front().unwrap();
+            trace!("elm: {}, val: {:?}", elm, &values);
+            assert_eq!(&elm.as_i64().unwrap(), values.get(0).unwrap());
+        }
+    }
+
+    fn array_obj_data_file_sample_integer() -> &'static str {
+        r#"{
+              "properties": {
+                "firstName": {
+                  "type": "string"
+                },
+                "lastName": {
+                  "type": "string",
+                  "pattern": "^a[0-9]{4}z$"
+                },
+                "age": {
+                  "type": "integer",
+                  "minimum": 10,
+                  "maximum": 20
+                },
+                "objArrayKeys": {
+                  "type": "array",
+                  "maxLength": 20,
+                  "minLength": 10,
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "objKey1": {
+                        "type": "integer",
+                        "dataFile": 1
+                      },
+                      "objKey2": {
+                        "type": "integer",
+                        "dataFile": 2
+                      }
+                    }
+                  }
+                },
+                "scalarArray": {
+                  "type": "array",
+                  "maxLength": 20,
+                  "minLength": 20,
+                  "items": {
+                    "type": "string",
+                    "pattern": "^a[0-9]{4}z$"
+                  }
+                }
+              }
+            }"#
     }
 
     fn array_obj_data_file_sample() -> &'static str {
