@@ -7,3 +7,4 @@ scribbles
 *.db
 *.sqlite-*
 *.log
+.vscode

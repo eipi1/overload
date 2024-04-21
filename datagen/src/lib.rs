@@ -735,6 +735,7 @@ mod test {
         "#
     }
 
+    #[allow(clippy::get_first)]
     #[test]
     fn array_json_to_schema() {
         let data = array_sample_json_1();

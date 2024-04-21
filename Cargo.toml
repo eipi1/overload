@@ -9,6 +9,18 @@ members = [
     "lua-helper",
     "tests"
 ]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.70"
+authors = ["Md Sarowar Alam <sarowar.cse@gmail.com>"]
+license = "MIT"
+
+[workspace.dependencies.tokio]
+version = "1.37.0"
+default-features = false
+features = ["rt-multi-thread", "macros"]
 
 [profile.release]
 debug = true

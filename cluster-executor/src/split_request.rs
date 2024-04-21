@@ -74,7 +74,7 @@ mod test {
             assert_eq!(splits.len(), size);
             let (_, e) = splits.back().unwrap();
             assert_eq!(*e, end);
-            let (s, last_e) = splits.get(0).unwrap();
+            let (s, last_e) = splits.front().unwrap();
             assert!(s <= last_e);
             let mut last_e = *last_e;
             for i in 1..splits.len() {

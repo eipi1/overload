@@ -120,7 +120,7 @@ impl PartialEq<Self> for UrlParam {
 
 impl PartialOrd<Self> for UrlParam {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.start.partial_cmp(&other.start)
+        Some(self.cmp(other))
     }
 }
 

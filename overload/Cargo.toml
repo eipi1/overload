@@ -1,9 +1,9 @@
 [package]
 name = "overload"
 version = "0.8.0"
-authors = ["Md Sarowar Alam <sarowar.cse@gmail.com>"]
-edition = "2018"
-license = "MIT"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
 readme = "README.md"
 repository = "https://github.com/eipi1/overload"
 description = """
@@ -73,7 +73,7 @@ version = "0.3"
 version = "1.0"
 
 [dependencies.tokio]
-version = "1.19"
+workspace=true
 features = ["rt-multi-thread", "macros", "fs", "io-util", "sync", "parking_lot"]
 
 [dependencies.tokio-stream]
@@ -168,7 +168,7 @@ version = "0.1"
 version = "0.2"
 
 [dev-dependencies.tokio]
-version = "1.19"
+workspace=true
 features = ["rt-multi-thread", "macros", "fs", "io-util", "time", "test-util"]
 
 [dev-dependencies.tokio-test]

@@ -1,7 +1,7 @@
 [package]
 name = "overload-http"
 version = "0.1.0"
-edition = "2021"
+edition.workspace = true
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -63,5 +63,4 @@ version = "1.1"
 features = ["v4"]
 
 [dev-dependencies.tokio]
-version = "1.19"
-features = ["rt-multi-thread"]
+workspace=true

@@ -436,7 +436,7 @@ mod tests {
                 .simple_assertions
                 .as_ref()
                 .unwrap()
-                .get(0)
+                .first()
                 .unwrap()
                 .expectation,
             Expectation::Constant(_)
@@ -445,7 +445,7 @@ mod tests {
             .simple_assertions
             .as_ref()
             .unwrap()
-            .get(0)
+            .first()
             .unwrap()
             .expectation
         {
@@ -462,7 +462,7 @@ mod tests {
                 .simple_assertions
                 .as_ref()
                 .unwrap()
-                .get(0)
+                .first()
                 .unwrap()
                 .actual,
             Actual::FromJsonResponse(_)

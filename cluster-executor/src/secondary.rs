@@ -20,7 +20,10 @@ use log::{debug, error, info, trace, warn};
 use lua_helper::{init_lua, load_lua_func, load_lua_func_with_registry, LuaAssertionResult};
 use mlua::Value::Function;
 use once_cell::sync::OnceCell;
-use overload_http::{HttpReq, Request, RequestSpecEnum, Target, PATH_REQUEST_DATA_FILE_DOWNLOAD};
+use overload_http::{
+    ConcurrentConnectionRateSpec, HttpReq, Request, RequestSpecEnum, Target,
+    PATH_REQUEST_DATA_FILE_DOWNLOAD,
+};
 use overload_metrics::{Metrics, MetricsFactory, METRICS_FACTORY};
 use regex::Regex;
 use remoc::rch;
@@ -122,6 +125,10 @@ async fn handle_connection_from_primary(
     info!("[handle_connection_from_primary] - {:?}", &request);
 
     let job_id = job_id(&request.name);
+    let elastic_pool = matches!(
+        request.concurrent_connection,
+        Some(ConcurrentConnectionRateSpec::Elastic(_))
+    );
     let buckets = request.histogram_buckets.clone();
     let metrics = metrics_factory
         .metrics_with_buckets(buckets.to_vec(), &job_id)
@@ -133,6 +140,7 @@ async fn handle_connection_from_primary(
         &request.target,
         job_id.clone(),
         request.connection_keep_alive,
+        elastic_pool,
     )
     .await
     .ok_or_else(|| anyhow!("Unable to create connection pool"))?;
@@ -262,14 +270,12 @@ async fn init_connection_pool(
     target: &Target,
     job_id: String,
     keep_alive: ConnectionKeepAlive,
+    elastic_pool: bool,
 ) -> Option<(QueuePool, Sender<()>)> {
     let host_port = format!("{}:{}", &target.host, &target.port);
 
-    // #[cfg(not(feature = "cluster"))]
-    // let mut queue_pool = get_new_queue_pool(host_port.clone()).await;
-    // #[cfg(feature = "cluster")]
     let queue_pool = {
-        //there's a possibility that pool already exists for this job,
+        // there's a possibility (in case of reconnection with primary) that pool already exists for this job,
         // but didn't finish the previous batch and pool hasn't returned to CONNECTION_POOLS
         // so we need to try a few times
 
@@ -311,7 +317,7 @@ async fn init_connection_pool(
             // if received notification
             get_existing_queue_pool(&job_id).await.unwrap()
         } else {
-            get_new_queue_pool(host_port.clone(), keep_alive).await
+            get_new_queue_pool(host_port.clone(), keep_alive, elastic_pool).await
         }
     };
 
@@ -331,9 +337,13 @@ async fn init_connection_pool(
     Some((queue_pool, tx))
 }
 
-async fn get_new_queue_pool(host_port: String, keep_alive: ConnectionKeepAlive) -> QueuePool {
+async fn get_new_queue_pool(
+    host_port: String,
+    keep_alive: ConnectionKeepAlive,
+    elastic_pool: bool,
+) -> QueuePool {
     debug!("Creating new pool for: {}", &host_port);
-    QueuePool::new(host_port, keep_alive)
+    QueuePool::new(host_port, keep_alive, elastic_pool)
 }
 
 // #[cfg(feature = "cluster")]
@@ -888,7 +898,7 @@ mod test {
         let mut req_spec = req_spec_enum(&url);
         let job_id = uuid::Uuid::new_v4().to_string();
         let metrics = MetricsFactory::default().metrics(&job_id).await;
-        let mut queue_pool = pool(&url);
+        let mut queue_pool = test_pool(&url);
         let assertion = Arc::new(ResponseAssertion::default());
         let start = Instant::now();
         send_multiple_requests(
@@ -947,7 +957,7 @@ mod test {
                 .body(r#"{"hello": "world"}"#);
         });
 
-        let mut queue_pool = pool(&url);
+        let mut queue_pool = test_pool(&url);
         let assertion = Arc::new(ResponseAssertion::default());
 
         let mut req_spec = req_spec_enum(&url);
@@ -974,10 +984,11 @@ mod test {
         mock.assert_hits_async(25).await;
     }
 
-    fn pool(url: &Url) -> QueuePool {
+    fn test_pool(url: &Url) -> QueuePool {
         QueuePool::new(
             format!("{}:{}", url.host_str().unwrap(), url.port().unwrap()),
             ConnectionKeepAlive::default(),
+            false,
         )
     }
 }
