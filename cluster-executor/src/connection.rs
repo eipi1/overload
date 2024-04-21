@@ -50,7 +50,7 @@ pub(crate) struct QueuePool {
 }
 
 impl QueuePool {
-    pub fn new(host_port: String, keep_alive: ConnectionKeepAlive) -> Self {
+    pub fn new(host_port: String, keep_alive: ConnectionKeepAlive, elastic_pool: bool) -> Self {
         QueuePool {
             max_connection: 0,
             connections: VecDeque::new(),
@@ -61,7 +61,7 @@ impl QueuePool {
             _new_connection: AtomicU32::new(0),
             _recyclable_connection: AtomicU32::new(0),
             host_port,
-            elastic: true,
+            elastic: elastic_pool,
             keep_alive,
             last_use: Instant::now(),
             failed_connection: Arc::new(AtomicUsize::new(0)),
@@ -257,7 +257,6 @@ impl QueuePool {
                 failed_connection,
             )
             .await;
-        } else {
         }
     }
 

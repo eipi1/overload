@@ -375,7 +375,7 @@ mod test {
         let req = HttpReq {
             id: {
                 if let RequestSpecEnum::RequestList(r) = &result.req {
-                    r.data.get(0).unwrap().id.clone()
+                    r.data.first().unwrap().id.clone()
                 } else {
                     "".to_string()
                 }

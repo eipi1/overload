@@ -103,7 +103,7 @@ where
             }
         }
     }
-    connection.close();
+    let _ = connection.close().await;
     Ok(success)
 }
 

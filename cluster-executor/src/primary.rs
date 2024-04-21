@@ -15,9 +15,10 @@ use tokio_stream::StreamExt;
 
 pub async fn handle_request(request: Request, cluster: Arc<Cluster>) {
     let job_id = request.name.clone().unwrap();
-    debug!(
-        "[handle_request] - [{}] - handling request: {:?}",
-        &job_id, &request
+    info!(
+        "[handle_request] - [{}] - started processing request: {:?}",
+        &job_id,
+        serde_json::to_string(&request)
     );
     {
         JOB_STATUS
