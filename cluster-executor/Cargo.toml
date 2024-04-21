@@ -20,6 +20,9 @@ path = "../overload-metrics"
 [dependencies.lua-helper]
 path = "../lua-helper"
 
+[dependencies.common-types]
+path = "../common-types"
+
 [dependencies.rust-cloud-discovery]
 version = "0.2"
 

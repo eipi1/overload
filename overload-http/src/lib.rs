@@ -5,6 +5,8 @@ pub use rate_spec::{ArraySpec, Bounded, ConstantRate, Elastic, Linear, Steps};
 pub use request_specs::{RandomDataRequest, RequestFile, RequestList, SplitRequestFile};
 
 use anyhow::Error as AnyError;
+use common_env::request_bundle_size;
+use common_types::LoadGenerationMode;
 use once_cell::sync::OnceCell;
 use response_assert::ResponseAssertion;
 use serde::{Deserialize, Serialize};
@@ -15,7 +17,7 @@ use std::collections::HashMap;
 use std::error::Error as StdError;
 use std::fmt::{Display, Formatter};
 use std::io::Error as StdIoError;
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroUsize};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::{env, fmt};
@@ -144,6 +146,8 @@ pub struct Request {
     #[serde(default = "default_histogram_bucket")]
     pub histogram_buckets: SmallVec<[f64; 6]>,
     pub response_assertion: Option<ResponseAssertion>,
+    #[serde(default = "default_generation_mode")]
+    pub generation_mode: LoadGenerationMode,
 }
 
 /// Describe multiple tests in single request
@@ -320,6 +324,12 @@ impl StdError for GenericError {}
 
 pub fn default_histogram_bucket() -> SmallVec<[f64; 6]> {
     smallvec::SmallVec::from(DEFAULT_HISTOGRAM_BUCKET)
+}
+
+pub fn default_generation_mode() -> LoadGenerationMode {
+    LoadGenerationMode::Batch {
+        batch_size: NonZeroUsize::new(request_bundle_size()).unwrap(),
+    }
 }
 
 fn uuid() -> String {

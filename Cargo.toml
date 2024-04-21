@@ -7,7 +7,9 @@ members = [
     "datagen",
     "overload-metrics",
     "lua-helper",
-    "tests"
+    "tests",
+    "common-types",
+    "common-env"
 ]
 resolver = "2"
 
@@ -21,6 +23,11 @@ license = "MIT"
 version = "1.37.0"
 default-features = false
 features = ["rt-multi-thread", "macros"]
+
+[workspace.dependencies.serde]
+version = "1.0"
+default-features = false
+features = ["derive"]
 
 [profile.release]
 debug = true

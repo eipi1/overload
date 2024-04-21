@@ -8,6 +8,7 @@ use crate::{
 };
 use anyhow::{anyhow, Error as AnyError, Result as AnyResult};
 use cluster_mode::Cluster;
+use common_types::LoadGenerationMode;
 use futures_core::future::BoxFuture;
 use futures_util::stream::FuturesUnordered;
 use futures_util::{FutureExt, TryStreamExt};
@@ -65,6 +66,7 @@ pub fn wait_on_no_connection() -> u64 {
         .unwrap_or(DEFAULT_WAIT_ON_NO_CONNECTION)
 }
 
+#[deprecated]
 pub fn request_bundle_size() -> u16 {
     *REQUEST_BUNDLE_SIZE.get_or_init(|| {
         env::var(ENV_NAME_BUNDLE_SIZE)
@@ -72,6 +74,12 @@ pub fn request_bundle_size() -> u16 {
             .and_then(|port| u16::from_str(&port).map_err(|_| ()))
             .unwrap_or(DEFAULT_REQUEST_BUNDLE_SIZE)
     })
+}
+
+struct ExecutionContext<'a> {
+    job_id: &'a str,
+    elastic_pool: bool,
+    metrics: Arc<Metrics>,
 }
 
 /// Listen to request from primary
@@ -122,7 +130,160 @@ async fn handle_connection_from_primary(
 
     //the second message secondary receive from primary should be request message
     let mut request = check_for_request_msg(&mut rx).await?;
-    info!("[handle_connection_from_primary] - {:?}", &request);
+
+    if matches!(request.generation_mode, LoadGenerationMode::Immediate) {
+        return handle_connection_from_primary_v2(rx, metrics_factory, metadata, request).await;
+    }
+
+    info!(
+        "[handle_connection_from_primary] - {:?}",
+        serde_json::to_string(&request)
+    );
+
+    let job_id = job_id(&request.name);
+
+    let elastic_pool = matches!(
+        request.concurrent_connection,
+        Some(ConcurrentConnectionRateSpec::Elastic(_))
+    );
+    let buckets = request.histogram_buckets.clone();
+    let metrics = metrics_factory
+        .metrics_with_buckets(buckets.to_vec(), &job_id)
+        .await;
+    let init = prepare(&mut request, metadata.primary_host.clone());
+    init.await?;
+
+    let (mut queue_pool, tx) = init_connection_pool(
+        &request.target,
+        job_id.clone(),
+        request.connection_keep_alive,
+        elastic_pool,
+    )
+    .await
+    .ok_or_else(|| anyhow!("Unable to create connection pool"))?;
+
+    let mut request_spec = request.req;
+
+    let mut stop = false;
+    let mut finish = false;
+    let mut error_exit = false;
+    let mut reset = false;
+
+    let mut prev_connection_count = 0;
+    let mut time_offset: i128 = 0;
+    let response_assertion = Arc::new(request.response_assertion.unwrap_or_default());
+    let lua_executor_sender = response_assert::init_lua_executor(&response_assertion).await;
+    loop {
+        let msg = tokio::time::timeout(Duration::from_secs(2), rx.recv()).await;
+        if msg.is_err() {
+            error!(
+                "[handle_connection_from_primary] - [{}] - there should a message every second, \
+                but nothing received for two seconds",
+                &job_id
+            );
+            continue;
+        }
+        let msg = msg.unwrap();
+        match msg {
+            Err(err) => {
+                error!(
+                    "[handle_connection_from_primary] - [{}] - receiver error: {:?}",
+                    &job_id, err
+                );
+                error_exit = true;
+                break;
+            }
+            Ok(msg) => {
+                match msg {
+                    None => {
+                        debug!("[handle_connection_from_primary] - None received, exiting loop");
+                        break;
+                    }
+                    Some(msg) => match msg {
+                        MessageFromPrimary::Metadata(_) => {
+                            error!("[handle_connection_from_primary] - [{}] - unexpected MessageFromPrimary::Request", &job_id);
+                        }
+                        MessageFromPrimary::Rates(rate) => {
+                            trace!("[handle_connection_from_primary] - {:?}", &rate);
+                            (prev_connection_count, time_offset) = handle_rate_msg(
+                                rate,
+                                prev_connection_count,
+                                &metrics,
+                                time_offset,
+                                job_id.clone(),
+                                &mut queue_pool,
+                                &mut request_spec,
+                                response_assertion.clone(),
+                                lua_executor_sender.clone(),
+                            )
+                            .await;
+                        }
+                        MessageFromPrimary::Stop => {
+                            stop = true;
+                            break;
+                        }
+                        MessageFromPrimary::Finished => {
+                            finish = true;
+                            stop = true;
+                            break;
+                        }
+                        MessageFromPrimary::Reset => {
+                            info!(
+                                "[handle_connection_from_primary] - [{}] - reset received",
+                                &job_id
+                            );
+                            reset = true;
+                        }
+                        MessageFromPrimary::Request(mut req) => {
+                            if !reset {
+                                error!("[handle_connection_from_primary] - [{}] - unexpected message - {:?}", &job_id, req);
+                            }
+                            info!("[handle_connection_from_primary] - [{}] - reset - new request - {:?}", &job_id, &req);
+                            prepare(&mut req, metadata.primary_host.clone()).await?;
+                            request_spec = req.req;
+                            reset = false;
+                        }
+                    },
+                }
+            }
+        }
+    }
+    // #[cfg(feature = "cluster")]
+    {
+        if error_exit {
+            CONNECTION_POOLS
+                .write()
+                .await
+                .insert(job_id.clone(), queue_pool);
+            let _ = tx.send(());
+        } else if stop || finish {
+            CONNECTION_POOLS.write().await.remove(&job_id);
+            CONNECTION_POOLS_USAGE_LISTENER
+                .write()
+                .await
+                .remove(&job_id);
+            METRICS_FACTORY.remove_metrics(&job_id).await;
+        }
+    }
+    // #[cfg(not(feature = "cluster"))]
+    // {
+    //     METRICS_FACTORY.remove_metrics(&job_id).await;
+    // }
+    debug!("[handle_connection_from_primary] - [{}] - exiting with status stop:{}, finish:{}, error_exit:{}", &job_id,
+    stop, finish, error_exit);
+    Ok(())
+}
+
+async fn handle_connection_from_primary_v2(
+    mut rx: Receiver<MessageFromPrimary>,
+    metrics_factory: &MetricsFactory,
+    metadata: Metadata,
+    mut request: Request,
+) -> AnyResult<()> {
+    info!(
+        "[handle_connection_from_primary_v2] - {:?}",
+        serde_json::to_string(&request)
+    );
 
     let job_id = job_id(&request.name);
     let elastic_pool = matches!(
