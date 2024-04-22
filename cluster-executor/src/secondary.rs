@@ -76,10 +76,21 @@ pub fn request_bundle_size() -> u16 {
     })
 }
 
-struct ExecutionContext<'a> {
-    job_id: &'a str,
-    elastic_pool: bool,
+struct ExecutionContext {
+    prev_connection_count: u32,
     metrics: Arc<Metrics>,
+    time_offset: i128,
+    job_id: String,
+    queue_pool: QueuePool,
+    request_spec: RequestSpecEnum,
+    response_assertion: Arc<ResponseAssertion>,
+    lua_executor_sender: Option<LuaExecSender>,
+}
+
+impl ExecutionContext {
+    fn take_out_pool(self) -> QueuePool {
+        self.queue_pool
+    }
 }
 
 /// Listen to request from primary
@@ -285,19 +296,22 @@ async fn handle_connection_from_primary_v2(
         serde_json::to_string(&request)
     );
 
-    let job_id = job_id(&request.name);
+    let job_id = request.name.clone().unwrap();
+
     let elastic_pool = matches!(
         request.concurrent_connection,
         Some(ConcurrentConnectionRateSpec::Elastic(_))
     );
+
     let buckets = request.histogram_buckets.clone();
     let metrics = metrics_factory
         .metrics_with_buckets(buckets.to_vec(), &job_id)
         .await;
+
     let init = prepare(&mut request, metadata.primary_host.clone());
     init.await?;
 
-    let (mut queue_pool, tx) = init_connection_pool(
+    let (queue_pool, tx) = init_connection_pool(
         &request.target,
         job_id.clone(),
         request.connection_keep_alive,
@@ -305,8 +319,6 @@ async fn handle_connection_from_primary_v2(
     )
     .await
     .ok_or_else(|| anyhow!("Unable to create connection pool"))?;
-
-    let mut request_spec = request.req;
 
     let mut stop = false;
     let mut finish = false;
@@ -317,6 +329,18 @@ async fn handle_connection_from_primary_v2(
     let mut time_offset: i128 = 0;
     let response_assertion = Arc::new(request.response_assertion.unwrap_or_default());
     let lua_executor_sender = response_assert::init_lua_executor(&response_assertion).await;
+
+    let mut ctx = ExecutionContext {
+        prev_connection_count,
+        metrics,
+        time_offset,
+        job_id: job_id.clone(),
+        queue_pool,
+        request_spec: request.req,
+        response_assertion,
+        lua_executor_sender,
+    };
+
     loop {
         let msg = tokio::time::timeout(Duration::from_secs(2), rx.recv()).await;
         if msg.is_err() {
@@ -349,18 +373,7 @@ async fn handle_connection_from_primary_v2(
                         }
                         MessageFromPrimary::Rates(rate) => {
                             trace!("[handle_connection_from_primary] - {:?}", &rate);
-                            (prev_connection_count, time_offset) = handle_rate_msg(
-                                rate,
-                                prev_connection_count,
-                                &metrics,
-                                time_offset,
-                                job_id.clone(),
-                                &mut queue_pool,
-                                &mut request_spec,
-                                response_assertion.clone(),
-                                lua_executor_sender.clone(),
-                            )
-                            .await;
+                            handle_rate_msg_v2(rate, &mut ctx).await;
                         }
                         MessageFromPrimary::Stop => {
                             stop = true;
@@ -384,7 +397,7 @@ async fn handle_connection_from_primary_v2(
                             }
                             info!("[handle_connection_from_primary] - [{}] - reset - new request - {:?}", &job_id, &req);
                             prepare(&mut req, metadata.primary_host.clone()).await?;
-                            request_spec = req.req;
+                            ctx.request_spec = req.req;
                             reset = false;
                         }
                     },
@@ -392,13 +405,12 @@ async fn handle_connection_from_primary_v2(
             }
         }
     }
-    // #[cfg(feature = "cluster")]
     {
         if error_exit {
             CONNECTION_POOLS
                 .write()
                 .await
-                .insert(job_id.clone(), queue_pool);
+                .insert(job_id.clone(), ctx.take_out_pool());
             let _ = tx.send(());
         } else if stop || finish {
             CONNECTION_POOLS.write().await.remove(&job_id);
@@ -409,10 +421,6 @@ async fn handle_connection_from_primary_v2(
             METRICS_FACTORY.remove_metrics(&job_id).await;
         }
     }
-    // #[cfg(not(feature = "cluster"))]
-    // {
-    //     METRICS_FACTORY.remove_metrics(&job_id).await;
-    // }
     debug!("[handle_connection_from_primary] - [{}] - exiting with status stop:{}, finish:{}, error_exit:{}", &job_id,
     stop, finish, error_exit);
     Ok(())
@@ -548,6 +556,193 @@ async fn check_for_metadata_msg(
         _ => Err(anyhow!(
             "Expected MessageFromPrimary::Metadata, but didn't receive"
         )),
+    }
+}
+
+async fn handle_rate_msg_v2(rate: RateMessage, ctx: &mut ExecutionContext) {
+    let metrics = &ctx.metrics; //: &Arc<Metrics>,
+    let job_id = ctx.job_id.clone(); //String,
+    let mut queue_pool = &mut ctx.queue_pool; //: &mut QueuePool,
+    let mut req_spec = &mut ctx.request_spec; //: &mut RequestSpecEnum,
+    let response_assertion = ctx.response_assertion.clone(); //: Arc<ResponseAssertion>,
+    let lua_executor_sender = ctx.lua_executor_sender.clone(); //Option<LuaExecSender>,
+
+    let start_of_cycle = Instant::now();
+
+    if ctx.prev_connection_count != rate.connections {
+        queue_pool
+            .set_connection_count(rate.connections as usize, metrics)
+            .await;
+        metrics.pool_size(rate.connections as f64);
+        ctx.prev_connection_count = rate.connections;
+    }
+    queue_pool.last_use = Instant::now();
+
+    let mut corrected_with_offset = start_of_cycle;
+    if ctx.time_offset > 0 {
+        //the previous cycle took longer than cycle duration
+        // use less time for next one
+        corrected_with_offset = start_of_cycle
+            .checked_sub(Duration::from_millis(ctx.time_offset as u64))
+            .unwrap();
+    }
+
+    send_multiple_requests_v2(
+        rate,
+        job_id.clone(),
+        metrics.clone(),
+        queue_pool,
+        corrected_with_offset,
+        &response_assertion,
+        req_spec,
+        lua_executor_sender,
+    )
+    .await;
+    ctx.time_offset = start_of_cycle.elapsed().as_millis() as i128 - CYCLE_LENGTH_IN_MILLIS;
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn send_multiple_requests_v2(
+    rate: RateMessage,
+    job_id: String,
+    metrics: Arc<Metrics>,
+    queue_pool: &mut QueuePool,
+    // connection_count: u32,
+    start_of_cycle: Instant,
+    response_assertion: &Arc<ResponseAssertion>,
+    req_spec: &mut RequestSpecEnum,
+    lua_executor_sender: Option<LuaExecSender>,
+) {
+    let connection_count = rate.connections;
+    let number_of_req = rate.qps;
+    debug!(
+        "[{}] [send_multiple_requests] - count: {}, connection count: {}",
+        &job_id, &number_of_req, &connection_count
+    );
+
+    if number_of_req == 0 {
+        trace!("no requests are sent, qps is 0",);
+        return;
+    }
+    let return_pool = queue_pool.get_return_pool();
+
+    let time_remaining =
+        move || CYCLE_LENGTH_IN_MILLIS - start_of_cycle.elapsed().as_millis() as i128;
+    let interval_between_requests = |remaining_requests: u32| {
+        let remaining_time_in_cycle = time_remaining();
+        trace!(
+            "remaining time in cycle:{}, remaining requests: {}",
+            remaining_time_in_cycle,
+            remaining_requests
+        );
+        if remaining_time_in_cycle < 1 {
+            warn!(
+                "no time remaining for {} requests in this cycle",
+                remaining_requests
+            );
+            return 0_f32;
+        }
+        remaining_time_in_cycle as f32 / remaining_requests as f32
+    };
+    let mut total_remaining_qps = number_of_req;
+    let request_bundle_size: u32 = max((number_of_req / 100) + 1, request_bundle_size() as u32);
+    let bundle_size = if connection_count == 0 {
+        //elastic pool
+        min(number_of_req, request_bundle_size)
+    } else {
+        min(number_of_req, min(connection_count, request_bundle_size))
+    };
+    let mut sleep_time = interval_between_requests(number_of_req) * bundle_size as f32;
+    //reserve 10% of the time for the internal logic
+    sleep_time = (sleep_time - (sleep_time * 0.1)).floor();
+
+    loop {
+        let remaining_t = time_remaining();
+        if remaining_t < 0 {
+            debug!(
+                "stopping the cycle. remaining time: {}, remaining request: {}",
+                remaining_t, total_remaining_qps
+            );
+            break; // give up
+        }
+        let requested_connection = min(bundle_size, total_remaining_qps);
+        let mut connections = queue_pool
+            .get_connections(requested_connection, &metrics)
+            .await;
+        let available_connection = connections.len();
+        debug!("[{}] - connection requested:{}, available connection: {}, request remaining: {}, remaining duration: {}, sleep duration: {}",
+            &job_id, requested_connection, available_connection, total_remaining_qps, remaining_t, sleep_time);
+        if available_connection < requested_connection as usize {
+            if available_connection < 1 {
+                //adjust sleep time
+                sleep(Duration::from_millis(wait_on_no_connection())).await; //retry every 10 ms
+                sleep_time =
+                    (interval_between_requests(total_remaining_qps) * bundle_size as f32).floor();
+                continue;
+            }
+            //adjust sleep time
+            sleep_time =
+                (interval_between_requests(total_remaining_qps) * bundle_size as f32).floor();
+            debug!("resetting sleep time: after: {}", sleep_time);
+        }
+
+        {
+            let requests_to_send = get_requests(req_spec, available_connection).await;
+            if requests_to_send.is_err() {
+                error!("Error while generating request - {:?}", requests_to_send);
+                return;
+            }
+            let mut requests_to_send = requests_to_send.unwrap();
+            if requests_to_send.is_empty() {
+                error!("Error while generating request - no request generated");
+            }
+            // if number of request < available_connection, clone the connections and fill up
+            let available_req = requests_to_send.len();
+            if available_req < available_connection {
+                //todo this logic is for file provider. Should handle in there
+                fill_req_if_less_than_connections(
+                    available_connection,
+                    available_req,
+                    &mut requests_to_send,
+                );
+            }
+            let id = job_id.clone();
+            let m = metrics.clone();
+            let rp = return_pool.clone();
+            let assertion = response_assertion.clone();
+            let lua_sender = lua_executor_sender.clone();
+            tokio::spawn(async move {
+                let mut requests: FuturesUnordered<_> = connections
+                    .drain(..)
+                    .map(|connection| {
+                        send_single_requests(
+                            requests_to_send.pop().unwrap(),
+                            id.clone(),
+                            &m,
+                            connection,
+                            &assertion,
+                            lua_sender.clone(),
+                        )
+                    })
+                    .collect();
+                while let Some(connection) = requests.next().await {
+                    QueuePool::return_connection(&rp, connection, &m).await;
+                }
+            });
+        }
+        total_remaining_qps -= available_connection as u32;
+        if time_remaining() < 0 {
+            debug!(
+                "stopping the cycle after sending req. remaining time: {}, remaining request: {}",
+                remaining_t, total_remaining_qps
+            );
+            break; // give up
+        }
+        if total_remaining_qps == 0 {
+            debug!("sent all the request of the cycle");
+            break; //done
+        }
+        sleep(Duration::from_millis(sleep_time as u64)).await;
     }
 }
 
