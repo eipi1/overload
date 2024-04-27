@@ -5,7 +5,6 @@ pub use rate_spec::{ArraySpec, Bounded, ConstantRate, Elastic, Linear, Steps};
 pub use request_specs::{RandomDataRequest, RequestFile, RequestList, SplitRequestFile};
 
 use anyhow::Error as AnyError;
-use common_env::request_bundle_size;
 use common_types::LoadGenerationMode;
 use once_cell::sync::OnceCell;
 use response_assert::ResponseAssertion;
@@ -17,7 +16,7 @@ use std::collections::HashMap;
 use std::error::Error as StdError;
 use std::fmt::{Display, Formatter};
 use std::io::Error as StdIoError;
-use std::num::{NonZeroU32, NonZeroUsize};
+use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::{env, fmt};
@@ -327,9 +326,7 @@ pub fn default_histogram_bucket() -> SmallVec<[f64; 6]> {
 }
 
 pub fn default_generation_mode() -> LoadGenerationMode {
-    LoadGenerationMode::Batch {
-        batch_size: NonZeroUsize::new(request_bundle_size()).unwrap(),
-    }
+    LoadGenerationMode::Immediate
 }
 
 fn uuid() -> String {
@@ -347,7 +344,7 @@ mod test {
     use std::convert::TryInto;
 
     #[test]
-    fn deserialize_str() {
+    fn request_de_serialize_test_1() {
         let req = r#"
             {
               "duration": 1,
@@ -372,12 +369,16 @@ mod test {
                 "port": 8080,
                 "protocol": "HTTP"
               },
-              "histogramBuckets": [35,40,45,48,50, 52]
+              "histogramBuckets": [35,40,45,48,50, 52],
+              "generation_mode": "Immediate"
             }
         "#;
-        let result = serde_json::from_str::<Request>(req);
-        assert!(result.is_ok());
-        let result = result.unwrap();
+        let result = serde_json::from_str::<Request>(req).unwrap();
+        let serialized = serde_json::to_string(&result).unwrap();
+        println!("serialized: {}", serialized);
+        //deserialize after serialized and then verify to ensure both de/serialization is okay
+        let result = serde_json::from_str::<Request>(req).unwrap();
+
         assert_eq!(
             result.histogram_buckets,
             smallvec::SmallVec::from([35f64, 40f64, 45f64, 48f64, 50f64, 52f64])

@@ -77,6 +77,8 @@ impl QueuePool {
             self.connections
                 .drain(0..(avail_con_len - connection_count));
         }
+        let dropped = avail_con_len - self.connections.len();
+        metrics.pool_connection_dropped(dropped as u64);
         let avail_con_len = self.connections.len();
         let connection_count = connection_count as i64;
         let mut diff = connection_count - self.max_connection;
@@ -225,7 +227,7 @@ impl QueuePool {
     #[allow(clippy::comparison_chain)]
     async fn resize_connection_pool(
         new_connections: SharedMutableVec,
-        recycle_connections: SharedMutableVec,
+        _recycle_connections: SharedMutableVec,
         host_port: String,
         diff: i64,
         keep_alive: ConnectionKeepAlive,
@@ -236,15 +238,15 @@ impl QueuePool {
         if diff < 0 {
             // remove connections from the pool
             let diff = diff.unsigned_abs() as usize;
-            // try removing recycled connection first
-            let removed = QueuePool::resize_conn_container(recycle_connections, diff).await;
-            debug!("removed {} connections from recycled pool", &removed);
-            // didn't have enough connections in recycle_connections, try removing from new connection
-            if removed < diff {
-                let removed =
-                    QueuePool::resize_conn_container(new_connections, diff - removed).await;
-                debug!("removed {} connections from new connection pool", &removed);
+            // try removing new connections
+            let removed = QueuePool::resize_conn_container(new_connections, diff).await;
+            debug!("removed {} connections from new connection pool", &removed);
+            if removed > 0 {
+                metrics.pool_connection_dropped(removed as u64);
+                metrics.pool_connection_idle(-(removed as f64));
             }
+            // previously there was a logic to remove from recycled connections, but now there is as
+            // pool resize logic on every get connection request, so no need to do that.
         } else if diff > 0 {
             // need to add new connections
             debug!("resizing, requesting {} more connections", diff);

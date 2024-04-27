@@ -5,9 +5,11 @@ use crate::request_providers::RequestProvider;
 use crate::{
     data_dir_path, log_error, HttpRequestFuture, HttpRequestState, MessageFromPrimary, Metadata,
     OriginalRequest, RateMessage, ReturnableConnection, CYCLE_LENGTH_IN_MILLIS,
+    CYCLE_LENGTH_IN_MILLIS_V2,
 };
 use anyhow::{anyhow, Error as AnyError, Result as AnyResult};
 use cluster_mode::Cluster;
+use common_env::wait_on_no_connection;
 use common_types::LoadGenerationMode;
 use futures_core::future::BoxFuture;
 use futures_util::stream::FuturesUnordered;
@@ -56,16 +58,6 @@ pub const ENV_NAME_BUNDLE_SIZE: &str = "REQUEST_BUNDLE_SIZE";
 pub static REQUEST_BUNDLE_SIZE: OnceCell<u16> = OnceCell::new();
 pub static DEFAULT_REQUEST_BUNDLE_SIZE: u16 = 50;
 
-const ENV_NAME_WAIT_ON_NO_CONNECTION: &str = "WAIT_ON_NO_CONNECTION";
-const DEFAULT_WAIT_ON_NO_CONNECTION: u64 = 100;
-
-pub fn wait_on_no_connection() -> u64 {
-    env::var(ENV_NAME_WAIT_ON_NO_CONNECTION)
-        .map_err(|_| ())
-        .and_then(|val| u64::from_str(&val).map_err(|_| ()))
-        .unwrap_or(DEFAULT_WAIT_ON_NO_CONNECTION)
-}
-
 #[deprecated]
 pub fn request_bundle_size() -> u16 {
     *REQUEST_BUNDLE_SIZE.get_or_init(|| {
@@ -76,7 +68,41 @@ pub fn request_bundle_size() -> u16 {
     })
 }
 
-struct ExecutionContext {
+trait LoadGenerationLogic {
+    fn interval_duration(&self, remaining_time: usize, remaining_request: usize) -> u64;
+
+    fn bundle_size(&self) -> usize;
+
+    fn wait_on_no_connection(&self) -> u64 {
+        wait_on_no_connection()
+    }
+}
+
+impl LoadGenerationLogic for LoadGenerationMode {
+    fn interval_duration(&self, _remaining_time: usize, _remaining_request: usize) -> u64 {
+        match &self {
+            LoadGenerationMode::Batch { .. } => {
+                unimplemented!()
+            }
+            LoadGenerationMode::Immediate => 1,
+        }
+    }
+
+    fn bundle_size(&self) -> usize {
+        match &self {
+            LoadGenerationMode::Batch { .. } => {
+                unimplemented!()
+            }
+            LoadGenerationMode::Immediate => 65535,
+        }
+    }
+
+    fn wait_on_no_connection(&self) -> u64 {
+        2u64
+    }
+}
+
+struct ExecutionContext<T: LoadGenerationLogic> {
     prev_connection_count: u32,
     metrics: Arc<Metrics>,
     time_offset: i128,
@@ -85,9 +111,10 @@ struct ExecutionContext {
     request_spec: RequestSpecEnum,
     response_assertion: Arc<ResponseAssertion>,
     lua_executor_sender: Option<LuaExecSender>,
+    generation_logic: T,
 }
 
-impl ExecutionContext {
+impl<T: LoadGenerationLogic> ExecutionContext<T> {
     fn take_out_pool(self) -> QueuePool {
         self.queue_pool
     }
@@ -325,20 +352,19 @@ async fn handle_connection_from_primary_v2(
     let mut error_exit = false;
     let mut reset = false;
 
-    let mut prev_connection_count = 0;
-    let mut time_offset: i128 = 0;
     let response_assertion = Arc::new(request.response_assertion.unwrap_or_default());
     let lua_executor_sender = response_assert::init_lua_executor(&response_assertion).await;
 
     let mut ctx = ExecutionContext {
-        prev_connection_count,
+        prev_connection_count: 0,
         metrics,
-        time_offset,
+        time_offset: 0,
         job_id: job_id.clone(),
         queue_pool,
         request_spec: request.req,
         response_assertion,
         lua_executor_sender,
+        generation_logic: request.generation_mode,
     };
 
     loop {
@@ -559,21 +585,20 @@ async fn check_for_metadata_msg(
     }
 }
 
-async fn handle_rate_msg_v2(rate: RateMessage, ctx: &mut ExecutionContext) {
-    let metrics = &ctx.metrics; //: &Arc<Metrics>,
-    let job_id = ctx.job_id.clone(); //String,
-    let mut queue_pool = &mut ctx.queue_pool; //: &mut QueuePool,
-    let mut req_spec = &mut ctx.request_spec; //: &mut RequestSpecEnum,
-    let response_assertion = ctx.response_assertion.clone(); //: Arc<ResponseAssertion>,
-    let lua_executor_sender = ctx.lua_executor_sender.clone(); //Option<LuaExecSender>,
+async fn handle_rate_msg_v2<T: LoadGenerationLogic>(
+    rate: RateMessage,
+    ctx: &mut ExecutionContext<T>,
+) {
+    // let metrics = &ctx.metrics; //: &Arc<Metrics>,
+    let queue_pool = &mut ctx.queue_pool; //: &mut QueuePool,
 
     let start_of_cycle = Instant::now();
 
     if ctx.prev_connection_count != rate.connections {
         queue_pool
-            .set_connection_count(rate.connections as usize, metrics)
+            .set_connection_count(rate.connections as usize, &ctx.metrics)
             .await;
-        metrics.pool_size(rate.connections as f64);
+        ctx.metrics.pool_size(rate.connections as f64);
         ctx.prev_connection_count = rate.connections;
     }
     queue_pool.last_use = Instant::now();
@@ -587,74 +612,44 @@ async fn handle_rate_msg_v2(rate: RateMessage, ctx: &mut ExecutionContext) {
             .unwrap();
     }
 
-    send_multiple_requests_v2(
-        rate,
-        job_id.clone(),
-        metrics.clone(),
-        queue_pool,
-        corrected_with_offset,
-        &response_assertion,
-        req_spec,
-        lua_executor_sender,
-    )
-    .await;
+    send_n_request_in_t_duration(rate, ctx, corrected_with_offset).await;
     ctx.time_offset = start_of_cycle.elapsed().as_millis() as i128 - CYCLE_LENGTH_IN_MILLIS;
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn send_multiple_requests_v2(
+async fn send_n_request_in_t_duration<T: LoadGenerationLogic>(
     rate: RateMessage,
-    job_id: String,
-    metrics: Arc<Metrics>,
-    queue_pool: &mut QueuePool,
-    // connection_count: u32,
+    ctx: &mut ExecutionContext<T>,
     start_of_cycle: Instant,
-    response_assertion: &Arc<ResponseAssertion>,
-    req_spec: &mut RequestSpecEnum,
-    lua_executor_sender: Option<LuaExecSender>,
 ) {
+    let job_id = &ctx.job_id; // required,
+
     let connection_count = rate.connections;
     let number_of_req = rate.qps;
     debug!(
-        "[{}] [send_multiple_requests] - count: {}, connection count: {}",
+        "[{}] [send_n_request_in_t_duration] - count: {}, connection count: {}",
         &job_id, &number_of_req, &connection_count
     );
+
+    let time_remaining = || CYCLE_LENGTH_IN_MILLIS_V2 - start_of_cycle.elapsed().as_millis() as i64;
+    if time_remaining() < 10 {
+        error!("[{}] [send_n_request_in_t_duration] - available time is less than 10ms. not sending any request", &ctx.job_id);
+        return;
+    }
 
     if number_of_req == 0 {
         trace!("no requests are sent, qps is 0",);
         return;
     }
-    let return_pool = queue_pool.get_return_pool();
+    let return_pool = ctx.queue_pool.get_return_pool();
 
-    let time_remaining =
-        move || CYCLE_LENGTH_IN_MILLIS - start_of_cycle.elapsed().as_millis() as i128;
-    let interval_between_requests = |remaining_requests: u32| {
-        let remaining_time_in_cycle = time_remaining();
-        trace!(
-            "remaining time in cycle:{}, remaining requests: {}",
-            remaining_time_in_cycle,
-            remaining_requests
-        );
-        if remaining_time_in_cycle < 1 {
-            warn!(
-                "no time remaining for {} requests in this cycle",
-                remaining_requests
-            );
-            return 0_f32;
-        }
-        remaining_time_in_cycle as f32 / remaining_requests as f32
-    };
     let mut total_remaining_qps = number_of_req;
-    let request_bundle_size: u32 = max((number_of_req / 100) + 1, request_bundle_size() as u32);
-    let bundle_size = if connection_count == 0 {
-        //elastic pool
-        min(number_of_req, request_bundle_size)
-    } else {
-        min(number_of_req, min(connection_count, request_bundle_size))
-    };
-    let mut sleep_time = interval_between_requests(number_of_req) * bundle_size as f32;
-    //reserve 10% of the time for the internal logic
-    sleep_time = (sleep_time - (sleep_time * 0.1)).floor();
+    // let request_bundle_size: u32 = max((number_of_req / 100) + 1, request_bundle_size() as u32);
+    let bundle_size = ctx.generation_logic.bundle_size();
+    let mut sleep_time = ctx
+        .generation_logic
+        .interval_duration(time_remaining() as usize, total_remaining_qps as usize);
+    // to check: do I need to reserve 10% of the time for the internal logic
+    // sleep_time = (sleep_time - (sleep_time * 0.1)).floor();
 
     loop {
         let remaining_t = time_remaining();
@@ -665,71 +660,97 @@ async fn send_multiple_requests_v2(
             );
             break; // give up
         }
-        let requested_connection = min(bundle_size, total_remaining_qps);
-        let mut connections = queue_pool
-            .get_connections(requested_connection, &metrics)
+        let requested_connection = min(bundle_size as u32, total_remaining_qps);
+        let mut connections = ctx
+            .queue_pool
+            .get_connections(requested_connection, &ctx.metrics)
             .await;
         let available_connection = connections.len();
-        debug!("[{}] - connection requested:{}, available connection: {}, request remaining: {}, remaining duration: {}, sleep duration: {}",
+        debug!("[{}] - connection requested:{}, available connection: {}, request remaining: {}, remaining duration: {}ms, sleep duration: {}ms",
             &job_id, requested_connection, available_connection, total_remaining_qps, remaining_t, sleep_time);
-        if available_connection < requested_connection as usize {
-            if available_connection < 1 {
-                //adjust sleep time
-                sleep(Duration::from_millis(wait_on_no_connection())).await; //retry every 10 ms
-                sleep_time =
-                    (interval_between_requests(total_remaining_qps) * bundle_size as f32).floor();
-                continue;
-            }
+
+        if available_connection < 1 {
             //adjust sleep time
-            sleep_time =
-                (interval_between_requests(total_remaining_qps) * bundle_size as f32).floor();
-            debug!("resetting sleep time: after: {}", sleep_time);
+            sleep(Duration::from_millis(
+                ctx.generation_logic.wait_on_no_connection(),
+            ))
+            .await;
+            sleep_time = ctx
+                .generation_logic
+                .interval_duration(time_remaining() as usize, total_remaining_qps as usize);
+            continue;
+        }
+        if available_connection < requested_connection as usize {
+            //adjust sleep time
+            sleep_time = ctx
+                .generation_logic
+                .interval_duration(time_remaining() as usize, total_remaining_qps as usize);
+            debug!("resetting sleep time to: {}", &sleep_time);
         }
 
-        {
-            let requests_to_send = get_requests(req_spec, available_connection).await;
-            if requests_to_send.is_err() {
-                error!("Error while generating request - {:?}", requests_to_send);
-                return;
-            }
-            let mut requests_to_send = requests_to_send.unwrap();
-            if requests_to_send.is_empty() {
-                error!("Error while generating request - no request generated");
-            }
-            // if number of request < available_connection, clone the connections and fill up
-            let available_req = requests_to_send.len();
-            if available_req < available_connection {
-                //todo this logic is for file provider. Should handle in there
-                fill_req_if_less_than_connections(
-                    available_connection,
-                    available_req,
-                    &mut requests_to_send,
-                );
-            }
-            let id = job_id.clone();
-            let m = metrics.clone();
-            let rp = return_pool.clone();
-            let assertion = response_assertion.clone();
-            let lua_sender = lua_executor_sender.clone();
-            tokio::spawn(async move {
-                let mut requests: FuturesUnordered<_> = connections
-                    .drain(..)
-                    .map(|connection| {
-                        send_single_requests(
-                            requests_to_send.pop().unwrap(),
-                            id.clone(),
-                            &m,
-                            connection,
-                            &assertion,
-                            lua_sender.clone(),
-                        )
-                    })
-                    .collect();
-                while let Some(connection) = requests.next().await {
-                    QueuePool::return_connection(&rp, connection, &m).await;
-                }
-            });
+        let requests_to_send = get_requests(&mut ctx.request_spec, available_connection).await;
+        if requests_to_send.is_err() {
+            error!("Error while generating request - {:?}", requests_to_send);
+            return;
         }
+        let mut requests_to_send = requests_to_send.unwrap();
+        if requests_to_send.is_empty() {
+            error!("Error while generating request - no request generated");
+            return;
+        }
+
+        // if number of request < available_connection, clone the connections and fill up
+        let available_req = requests_to_send.len();
+        if available_req < available_connection {
+            //todo this logic is for file provider. Should handle in there
+            fill_req_if_less_than_connections(
+                available_connection,
+                available_req,
+                &mut requests_to_send,
+            );
+        }
+
+        let id = job_id.clone();
+        let m = ctx.metrics.clone();
+        let rp = return_pool.clone();
+        let assertion = ctx.response_assertion.clone();
+        let lua_sender = ctx.lua_executor_sender.clone();
+        tokio::spawn(async move {
+            let mut requests: FuturesUnordered<_> = connections
+                .drain(..)
+                .map(|connection| {
+                    send_single_requests(
+                        requests_to_send.pop().unwrap(),
+                        id.clone(),
+                        &m,
+                        connection,
+                        &assertion,
+                        lua_sender.clone(),
+                    )
+                })
+                .collect();
+            while let Some(connection) = requests.next().await {
+                QueuePool::return_connection(&rp, connection, &m).await;
+                #[cfg(test)]
+                {
+                    //test helpers
+                    test::test_help_pool_return_tracker();
+                }
+            }
+        });
+
+        #[cfg(test)]
+        {
+            //test helpers
+            test::test_helper_send_n_request_in_t_duration(
+                job_id,
+                available_req,
+                available_connection,
+                total_remaining_qps,
+                time_remaining(),
+            );
+        }
+
         total_remaining_qps -= available_connection as u32;
         if time_remaining() < 0 {
             debug!(
@@ -742,7 +763,7 @@ async fn send_multiple_requests_v2(
             debug!("sent all the request of the cycle");
             break; //done
         }
-        sleep(Duration::from_millis(sleep_time as u64)).await;
+        sleep(Duration::from_millis(sleep_time)).await;
     }
 }
 
@@ -796,6 +817,7 @@ async fn handle_rate_msg(
     (prev_connection_count, time_offset)
 }
 
+#[allow(deprecated)]
 #[allow(clippy::too_many_arguments)]
 async fn send_multiple_requests(
     number_of_req: u32,
@@ -1135,12 +1157,13 @@ pub async fn download_file_from_url(
 
 #[cfg(test)]
 mod test {
+    use super::LoadGenerationLogic;
     use crate::connection::QueuePool;
     #[cfg(feature = "cluster")]
     use crate::primary::get_sender_for_secondary;
     use crate::secondary::{
         fill_req_if_less_than_connections, handle_rate_msg, primary_listener,
-        send_multiple_requests,
+        send_multiple_requests, ExecutionContext,
     };
     use crate::test_common::init;
     #[cfg(feature = "cluster")]
@@ -1148,14 +1171,19 @@ mod test {
     use crate::{
         send_metadata_with_primary, send_request_to_secondary, RateMessage, DEFAULT_REMOC_PORT,
     };
+    use common_types::LoadGenerationMode;
+    use httpmock::{Mock, MockServer};
+    use lazy_static::lazy_static;
     use log::info;
+    use more_asserts::{assert_gt, assert_le, assert_lt};
     use overload_http::{ConnectionKeepAlive, HttpReq, RequestList, RequestSpecEnum};
     use overload_metrics::MetricsFactory;
     use regex::Regex;
     use response_assert::ResponseAssertion;
     use std::cmp::max;
     use std::collections::HashMap;
-    use std::sync::Arc;
+    use std::sync::OnceLock;
+    use std::sync::{Arc, RwLock};
     use std::time::{Duration, Instant};
     use url::Url;
 
@@ -1242,14 +1270,7 @@ mod test {
         let mock_server = httpmock::MockServer::start_async().await;
         let url = Url::parse(&mock_server.base_url()).unwrap();
 
-        let mock = mock_server.mock(|when, then| {
-            when.method(httpmock::Method::GET)
-                .path_matches(Regex::new(r"^/anything/[a-zA-Z]{6,15}/1([10])\d{5}$").unwrap());
-            then.status(200)
-                .header("content-type", "application/json")
-                .header("Connection", "keep-alive")
-                .body(r#"{"hello": "world"}"#);
-        });
+        let mock = set_mock(&mock_server);
 
         let mut req_spec = req_spec_enum(&url);
         let job_id = uuid::Uuid::new_v4().to_string();
@@ -1291,9 +1312,9 @@ mod test {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    #[ignore]
+    // #[ignore]
     async fn test_handle_rate_msg() {
-        // init();
+        init();
         let rate_message = RateMessage {
             qps: 25,
             connections: 5,
@@ -1304,14 +1325,7 @@ mod test {
         let mock_server = httpmock::MockServer::start_async().await;
         let url = Url::parse(&mock_server.base_url()).unwrap();
 
-        let mock = mock_server.mock(|when, then| {
-            when.method(httpmock::Method::GET)
-                .path_matches(Regex::new(r"^/anything/[a-zA-Z]{6,15}/1([10])\d{5}$").unwrap());
-            then.status(200)
-                .header("content-type", "application/json")
-                .header("Connection", "keep-alive")
-                .body(r#"{"hello": "world"}"#);
-        });
+        let mock = set_mock(&mock_server);
 
         let mut queue_pool = test_pool(&url);
         let assertion = Arc::new(ResponseAssertion::default());
@@ -1346,5 +1360,118 @@ mod test {
             ConnectionKeepAlive::default(),
             false,
         )
+    }
+
+    lazy_static! {
+        static ref CALL_PARAMS: RwLock<Vec<(usize, usize, u32, i64)>> = RwLock::new(vec![]);
+        static ref CONN_RET_TIMES: RwLock<Vec<u128>> = RwLock::new(vec![]);
+    }
+
+    static CONN_RET_TRACKER_CLK: OnceLock<Instant> = OnceLock::new();
+
+    #[tokio::test]
+    async fn test_send_n_request_in_t_duration() {
+        // init();
+        // init();
+        let rate_message = RateMessage {
+            qps: 25,
+            connections: 5,
+        };
+        let job_id = uuid::Uuid::new_v4().to_string();
+        let metrics = MetricsFactory::default().metrics(&job_id).await;
+
+        let mock_server = httpmock::MockServer::start_async().await;
+        let url = Url::parse(&mock_server.base_url()).unwrap();
+
+        let _ = set_mock(&mock_server);
+
+        let mut queue_pool = test_pool(&url);
+        queue_pool.set_connection_count(5, &metrics).await;
+        let assertion = Arc::new(ResponseAssertion::default());
+
+        let req_spec = req_spec_enum(&url);
+
+        let start = Instant::now();
+
+        let generation_mode = LoadGenerationMode::Immediate;
+        let mut context = ExecutionContext {
+            prev_connection_count: 1,
+            metrics,
+            time_offset: 0,
+            job_id,
+            queue_pool,
+            request_spec: req_spec,
+            response_assertion: assertion,
+            lua_executor_sender: None,
+            generation_logic: generation_mode.clone(),
+        };
+
+        let _ = CONN_RET_TRACKER_CLK.get_or_init(|| start);
+        super::send_n_request_in_t_duration(rate_message, &mut context, start).await;
+
+        tokio::time::sleep(Duration::from_millis(1100)).await;
+        println!("call params: {:?}", *CALL_PARAMS);
+        println!("return times: {:?}", *CONN_RET_TIMES);
+        let call_params = CALL_PARAMS.read().unwrap();
+        let return_times = CONN_RET_TIMES.read().unwrap();
+        let first_call = call_params.first().unwrap().3;
+        let mut con_ret_iter = 0usize;
+
+        for p in &call_params[1..] {
+            let diff = first_call - p.3;
+            // iterate over the return time, test_help_pool_return_tracker gets called for every
+            // connection return. So we need to iterate from previous pos (con_ret_iter) to
+            // available connection count (p.0) and compare this with the diff to ensure that the
+            // time difference is less than (interval_duration + 5)ms. If it takes more than that,
+            // it means connection returned, but it wasn't getting used immediately. In case of
+            // LoadGenerationMode::Immediate, it means error.
+            // Well, in a slow system, this test case may fail. I don't know an alternative way to
+            // to test this ¯\_(ツ)_/¯
+            for x in &return_times[con_ret_iter..con_ret_iter + p.0] {
+                // println!("p.3:{},i:{i},x:{x},diff:{diff}",p.3);
+                assert_le!(
+                    diff - *x as i64,
+                    generation_mode.interval_duration(0, 0) as i64 + 5
+                );
+            }
+            con_ret_iter += p.0;
+        }
+        // there's no delay in mock, it shouldn't take 500ms to send 25 ms.
+        // I should find a better way to test it
+        assert_gt!(call_params.last().unwrap().3, 500);
+    }
+
+    fn set_mock(mock_server: &MockServer) -> Mock<'_> {
+        let mock: Mock<'_> = mock_server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path_matches(Regex::new(r"^/anything/[a-zA-Z]{6,15}/1([10])\d{5}$").unwrap());
+            then.status(200)
+                .header("content-type", "application/json")
+                .header("Connection", "keep-alive")
+                .body(r#"{"hello": "world"}"#);
+        });
+        mock
+    }
+
+    pub(crate) fn test_helper_send_n_request_in_t_duration(
+        _job_id: &str,
+        available_req: usize,
+        available_connection: usize,
+        total_remaining_qps: u32,
+        time_remaining: i64,
+    ) {
+        CALL_PARAMS.write().unwrap().push((
+            available_req,
+            available_connection,
+            total_remaining_qps,
+            time_remaining,
+        ));
+    }
+
+    pub(crate) fn test_help_pool_return_tracker() {
+        CONN_RET_TIMES
+            .write()
+            .unwrap()
+            .push(CONN_RET_TRACKER_CLK.get().unwrap().elapsed().as_millis())
     }
 }

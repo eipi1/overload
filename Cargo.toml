@@ -29,5 +29,8 @@ version = "1.0"
 default-features = false
 features = ["derive"]
 
+[workspace.dependencies.env_logger]
+version = "0.11"
+
 [profile.release]
 debug = true

@@ -1,0 +1,45 @@
+{
+  "request": {
+    "duration": 10,
+    "name": "test-load-generation-batch.json",
+    "qps": {
+      "ConstantRate": {
+        "countPerSec": 30
+      }
+    },
+    "req": {
+      "RequestList": {
+        "data": [
+          {
+            "method": "GET",
+            "url": "/get",
+            "headers": {
+              "Host": "127.0.0.1:2080",
+              "Connection":"keep-alive"
+            }
+          }
+        ]
+      }
+    },
+    "target": {
+      "host": "127.0.0.1",
+      "port": 2080,
+      "protocol": "HTTP"
+    },
+    "concurrentConnection": {
+      "ConstantRate": {
+        "countPerSec": 3
+      }
+    },
+    "generationMode": {
+      "batch": {
+        "batchSize": 5
+      }
+    }
+  },
+  "expectation": {
+    "qps": [30,30,30,30,30,30,30,30,30,30],
+    "connectionSuccess": [3,0,0,0,0,0,0,0,0,0],
+    "connectionDropped": [0,0,0,0,0,0,0,0,0,0]
+  }
+}

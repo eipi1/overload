@@ -45,6 +45,7 @@ mod split_request;
 pub mod standalone;
 
 pub const CYCLE_LENGTH_IN_MILLIS: i128 = 1_000; //1 seconds
+pub const CYCLE_LENGTH_IN_MILLIS_V2: i64 = 1_000; //1 seconds
 pub const DEFAULT_REMOC_PORT: u16 = 3031;
 pub const DEFAULT_REMOC_PORT_NAME: &str = "tcp-remoc";
 pub const ENV_NAME_REMOC_PORT: &str = "CLUSTER_COM_PORT";
@@ -644,6 +645,7 @@ mod test_common {
     use crate::RequestGenerator;
     #[cfg(feature = "cluster")]
     use cluster_mode::RestClusterNode;
+    use env_logger::Env;
     use overload_http::Request;
     #[cfg(feature = "cluster")]
     use rust_cloud_discovery::{Port, ServiceInstance};
@@ -654,7 +656,6 @@ mod test_common {
     #[cfg(feature = "cluster")]
     use std::str::FromStr;
     use std::sync::Once;
-    use tracing_core::Level;
     #[cfg(feature = "cluster")]
     use uuid::Uuid;
 
@@ -664,8 +665,8 @@ mod test_common {
     #[allow(dead_code)]
     pub fn init() {
         INIT.call_once(|| {
-            tracing_subscriber::fmt()
-                .with_max_level(Level::TRACE)
+            env_logger::Builder::from_env(Env::default().default_filter_or("trace"))
+                .format_timestamp_millis()
                 .init();
         });
     }

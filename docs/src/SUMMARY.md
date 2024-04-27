@@ -5,6 +5,7 @@
   - [Cluster](./deployment-cluster.md)
   - [Standalone](deployment-standalone.md)
 - [Getting Started](getting-started.md)
+- [Traffic Generation Modes](generation-mode.md)
 - [Monitoring](monitoring.md)
 - [Response Assertion](assertion/README.md)
   - [Lua Assertion](assertion/lua-assertion.md)
