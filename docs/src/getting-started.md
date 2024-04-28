@@ -38,6 +38,11 @@ Sample JSON request body -
     "host": "httpbin.org",
     "port": 80,
     "protocol": "HTTP"
+  },
+  "generationMode": {
+    "batch": {
+      "batchSize": 10
+    }
   }
 }
 # "###;

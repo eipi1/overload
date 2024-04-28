@@ -78,7 +78,8 @@ mod tests {
         let qps_expectation = qps_expectation(&test_spec);
         sleep(Duration::from_secs(1)).await;
         for i in 1..duration - 1 {
-            assert_request_count(i as usize, &job_id, &qps_expectation).await;
+            let all_metrics = get_all_metrics().await;
+            assert_request_count(i as usize, &job_id, &qps_expectation, &all_metrics).await;
             sleep(Duration::from_secs(1)).await;
         }
     }
@@ -96,7 +97,9 @@ mod tests {
     #[case("test-connection-keep-alive-ttl.json")]
     #[case("test-connection-keep-alive-ttl-2.json")]
     #[case("test-connection-keep-alive-max-req.json")]
-    #[tokio::test]
+    #[case("test-load-generation-immediate.json")]
+    #[case("test-load-generation-batch.json")]
+    #[tokio::test(flavor = "multi_thread")]
     #[ignore]
     async fn test_scenarios_assertion(#[case] path: &str) {
         // let path = "test-generator-with-assertion.json";
@@ -112,9 +115,11 @@ mod tests {
 
         sleep(Duration::from_secs(1)).await;
         for i in 1..duration - 1 {
-            assert_request_count(i, &job_id, &qps_expectation).await;
-            assert_assertion_failure_count(i, &job_id, &failure_expectation).await;
-            assert_connection_success_count(i, &job_id, &conn_success_expectation).await;
+            let all_metrics = get_all_metrics().await;
+            assert_request_count(i, &job_id, &qps_expectation, &all_metrics).await;
+            assert_assertion_failure_count(i, &job_id, &failure_expectation, &all_metrics).await;
+            assert_connection_success_count(i, &job_id, &conn_success_expectation, &all_metrics)
+                .await;
             assert_connection_dropped_count(i, &job_id, &conn_dropped_expectation).await;
             sleep(Duration::from_secs(1)).await;
         }
@@ -149,7 +154,8 @@ mod tests {
         //
         sleep(Duration::from_secs(1)).await;
         for i in 1..duration - 1 {
-            assert_request_count(i, &job_id, &qps_expectation).await;
+            let all_metrics = get_all_metrics().await;
+            assert_request_count(i, &job_id, &qps_expectation, &all_metrics).await;
             // assert_assertion_failure_count(i,&job_id, &failure_expectation).await;
             sleep(Duration::from_secs(1)).await;
         }
@@ -256,10 +262,11 @@ mod tests {
         let failure_expectation = assert_failure_expectation(&test_spec);
         sleep(Duration::from_secs(1)).await;
         for i in 1..duration - 1 {
+            let all_metrics = get_all_metrics().await;
             if !cluster_mode() {
-                assert_request_count(i, &job_id, &qps_expectation).await;
+                assert_request_count(i, &job_id, &qps_expectation, &all_metrics).await;
             }
-            assert_assertion_failure_count(i, &job_id, &failure_expectation).await;
+            assert_assertion_failure_count(i, &job_id, &failure_expectation, &all_metrics).await;
             sleep(Duration::from_secs(1)).await;
         }
 
@@ -339,10 +346,11 @@ mod tests {
         let failure_expectation = assert_failure_expectation(&test_spec);
         sleep(Duration::from_secs(1)).await;
         for i in 1..duration - 1 {
+            let all_metrics = get_all_metrics().await;
             if !cluster_mode() {
-                assert_request_count(i, &job_id, &qps_expectation).await;
+                assert_request_count(i, &job_id, &qps_expectation, &all_metrics).await;
             }
-            assert_assertion_failure_count(i, &job_id, &failure_expectation).await;
+            assert_assertion_failure_count(i, &job_id, &failure_expectation, &all_metrics).await;
             sleep(Duration::from_secs(1)).await;
         }
 
@@ -405,11 +413,9 @@ mod tests {
         file_id.to_string()
     }
 
-    async fn assert_request_count(i: usize, job_id: &str, qps_expectation: &[u64]) {
-        let metrics = get_all_metrics().await;
+    async fn assert_request_count(i: usize, job_id: &str, qps_expectation: &[u64], metrics: &str) {
         let metrics = filter_metrics(metrics, "upstream_request_count");
-        let metrics = filter_metrics(metrics, job_id);
-        println!("{}", &metrics);
+        let metrics = filter_metrics(&metrics, job_id);
         assert_metrics_is_in_range(
             &metrics,
             (cumulative_sum::<u64>(qps_expectation, i, 0))
@@ -418,13 +424,17 @@ mod tests {
     }
 
     #[allow(dead_code)]
-    async fn assert_connection_success_count(i: usize, job_id: &str, expectation: &[u64]) {
+    async fn assert_connection_success_count(
+        i: usize,
+        job_id: &str,
+        expectation: &[u64],
+        metrics: &str,
+    ) {
         if expectation.is_empty() {
             return;
         }
-        let metrics = get_all_metrics().await;
         let metrics = filter_metrics(metrics, "connection_pool_new_connection_success");
-        let metrics = filter_metrics(metrics, job_id);
+        let metrics = filter_metrics(&metrics, job_id);
         println!("{}", &metrics);
         assert_metrics_is_in_range(
             &metrics,
@@ -439,8 +449,8 @@ mod tests {
             return;
         }
         let metrics = get_all_metrics().await;
-        let metrics = filter_metrics(metrics, "connection_pool_connection_dropped");
-        let metrics = filter_metrics(metrics, job_id);
+        let metrics = filter_metrics(&metrics, "connection_pool_connection_dropped");
+        let metrics = filter_metrics(&metrics, job_id);
         println!("{}", &metrics);
         assert_metrics_is_in_range(
             &metrics,
@@ -453,23 +463,23 @@ mod tests {
         i: usize,
         job_id: &str,
         failure_expectation: &HashMap<&String, Vec<u64>>,
+        metrics: &str,
     ) {
-        let metrics = get_all_metrics().await;
         let metrics = filter_metrics(metrics, "assertion_failure");
-        let metrics = filter_metrics(metrics, job_id);
+        let metrics = filter_metrics(&metrics, job_id);
         info!("{}", &metrics);
         for (k, expectation) in failure_expectation {
             info!(
                 "asserting assertions - key:{k}, expectation: {:?}",
                 expectation
             );
-            let metrics = filter_metrics(metrics.clone(), &format!("assertion_id=\"{}\"", k));
+            let metrics = filter_metrics(&metrics, &format!("assertion_id=\"{}\"", k));
             assert_metrics_is_in_range(
                 &metrics,
                 (cumulative_sum::<u64>(expectation, i, 0))
                     ..(cumulative_sum::<u64>(expectation, i + 2, 0)),
             );
-            let metrics = filter_metrics(metrics.clone(), &format!("assertion_id=\"{}\"", k));
+            let metrics = filter_metrics(&metrics, &format!("assertion_id=\"{}\"", k));
             assert_metrics_is_in_range(
                 &metrics,
                 (cumulative_sum::<u64>(expectation, i, 0))
@@ -513,7 +523,7 @@ mod tests {
             .unwrap_or_default()
     }
 
-    fn filter_metrics(metrics: String, filter: &str) -> String {
+    fn filter_metrics(metrics: &str, filter: &str) -> String {
         metrics
             .lines()
             .filter(|m| m.contains(filter))
@@ -629,16 +639,23 @@ mod tests {
         vec[0..till].iter().fold(default, |b, x| b + *x)
     }
 
+    /// Test time elapsed in app and test can be a bit different, so matching in range instead
+    /// of exact second
     fn assert_metrics_is_in_range(metrics: &str, range: Range<u64>) {
         let metrics_val = get_value_for_metrics(metrics);
+        let metrics = metrics.trim();
         info!(
-            "expectation range: {:?}, metrics_val: {metrics_val}",
+            "metrics: {metrics}, expectation range: {:?}, metrics_val: {metrics_val}",
             &range
         );
         if metrics_val == 0 {
             assert_eq!(0, range.start);
         } else {
-            assert!(range.contains(&((metrics_val * instance_count() as i64) as u64)));
+            assert!(
+                range.contains(&((metrics_val * instance_count() as i64) as u64)),
+                "range assertion failed. {metrics}: expectation range: {:?}, metrics_val: {metrics_val}",
+                range
+            );
         }
     }
 
@@ -650,7 +667,7 @@ mod tests {
     }
 
     pub fn get_value_for_metrics(metrics: &str) -> i64 {
-        info!("getting value for metrics: {}", metrics);
+        info!("getting value for metrics: {}", metrics.trim());
         return metrics
             .rsplit_once(' ')
             .map_or(0, |(_, count)| count.parse::<i64>().unwrap());

@@ -11,6 +11,12 @@ path = "../response-assert"
 [dependencies.datagen]
 path="../datagen"
 
+[dependencies.common-types]
+path = "../common-types"
+
+[dependencies.common-env]
+path = "../common-env"
+
 [dependencies.async-trait]
 version = "0.1"
 

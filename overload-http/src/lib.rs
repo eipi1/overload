@@ -5,6 +5,7 @@ pub use rate_spec::{ArraySpec, Bounded, ConstantRate, Elastic, Linear, Steps};
 pub use request_specs::{RandomDataRequest, RequestFile, RequestList, SplitRequestFile};
 
 use anyhow::Error as AnyError;
+use common_types::LoadGenerationMode;
 use once_cell::sync::OnceCell;
 use response_assert::ResponseAssertion;
 use serde::{Deserialize, Serialize};
@@ -144,6 +145,8 @@ pub struct Request {
     #[serde(default = "default_histogram_bucket")]
     pub histogram_buckets: SmallVec<[f64; 6]>,
     pub response_assertion: Option<ResponseAssertion>,
+    #[serde(default = "default_generation_mode")]
+    pub generation_mode: LoadGenerationMode,
 }
 
 /// Describe multiple tests in single request
@@ -322,6 +325,10 @@ pub fn default_histogram_bucket() -> SmallVec<[f64; 6]> {
     smallvec::SmallVec::from(DEFAULT_HISTOGRAM_BUCKET)
 }
 
+pub fn default_generation_mode() -> LoadGenerationMode {
+    LoadGenerationMode::Immediate
+}
+
 fn uuid() -> String {
     uuid::Uuid::new_v4().to_string()
 }
@@ -337,7 +344,7 @@ mod test {
     use std::convert::TryInto;
 
     #[test]
-    fn deserialize_str() {
+    fn request_de_serialize_test_1() {
         let req = r#"
             {
               "duration": 1,
@@ -362,19 +369,23 @@ mod test {
                 "port": 8080,
                 "protocol": "HTTP"
               },
-              "histogramBuckets": [35,40,45,48,50, 52]
+              "histogramBuckets": [35,40,45,48,50, 52],
+              "generationMode": "immediate"
             }
         "#;
-        let result = serde_json::from_str::<Request>(req);
-        assert!(result.is_ok());
-        let result = result.unwrap();
+        let result = serde_json::from_str::<Request>(req).unwrap();
+        let serialized = serde_json::to_string(&result).unwrap();
+        println!("serialized: {}", serialized);
+        //deserialize after serialized and then verify to ensure both de/serialization is okay
+        let request = serde_json::from_str::<Request>(req).unwrap();
+
         assert_eq!(
-            result.histogram_buckets,
+            request.histogram_buckets,
             smallvec::SmallVec::from([35f64, 40f64, 45f64, 48f64, 50f64, 52f64])
         );
         let req = HttpReq {
             id: {
-                if let RequestSpecEnum::RequestList(r) = &result.req {
+                if let RequestSpecEnum::RequestList(r) = &request.req {
                     r.data.first().unwrap().id.clone()
                 } else {
                     "".to_string()
@@ -386,10 +397,89 @@ mod test {
             headers: Default::default(),
         };
         assert_eq!(
-            serde_json::to_value(result.req).unwrap(),
+            serde_json::to_value(request.req).unwrap(),
             serde_json::to_value(RequestSpecEnum::RequestList(RequestList::from(vec![req])))
                 .unwrap()
         );
+        assert!(matches!(
+            request.generation_mode,
+            LoadGenerationMode::Immediate
+        ));
+    }
+
+    #[test]
+    fn request_de_serialize_test_2() {
+        let req = r#"
+            {
+              "duration": 1,
+              "name": "demo-test",
+              "qps": {
+                "ConstantRate": {
+                  "countPerSec": 1
+                }
+              },
+              "req": {
+                "RequestList": {
+                  "data": [
+                    {
+                      "method": "GET",
+                      "url": "example.com"
+                    }
+                  ]
+                }
+              },
+              "target": {
+                "host": "example.com",
+                "port": 8080,
+                "protocol": "HTTP"
+              },
+              "histogramBuckets": [
+                35,
+                40,
+                45,
+                48,
+                50,
+                52
+              ],
+              "generationMode": {
+                "batch": {
+                  "batchSize": 10
+                }
+              }
+            }
+        "#;
+        let result = serde_json::from_str::<Request>(req).unwrap();
+        let serialized = serde_json::to_string(&result).unwrap();
+        println!("serialized: {}", serialized);
+        //deserialize after serialized and then verify to ensure both de/serialization is okay
+        let request = serde_json::from_str::<Request>(req).unwrap();
+
+        assert_eq!(
+            request.histogram_buckets,
+            smallvec::SmallVec::from([35f64, 40f64, 45f64, 48f64, 50f64, 52f64])
+        );
+        let req = HttpReq {
+            id: {
+                if let RequestSpecEnum::RequestList(r) = &request.req {
+                    r.data.first().unwrap().id.clone()
+                } else {
+                    "".to_string()
+                }
+            },
+            method: Method::GET,
+            url: "example.com".to_string(),
+            body: None,
+            headers: Default::default(),
+        };
+        assert_eq!(
+            serde_json::to_value(request.req).unwrap(),
+            serde_json::to_value(RequestSpecEnum::RequestList(RequestList::from(vec![req])))
+                .unwrap()
+        );
+        assert!(matches!(
+            request.generation_mode,
+            LoadGenerationMode::Batch { .. }
+        ));
     }
 
     #[test]

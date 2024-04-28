@@ -20,6 +20,12 @@ path = "../overload-metrics"
 [dependencies.lua-helper]
 path = "../lua-helper"
 
+[dependencies.common-types]
+path = "../common-types"
+
+[dependencies.common-env]
+path = "../common-env"
+
 [dependencies.rust-cloud-discovery]
 version = "0.2"
 
@@ -123,6 +129,9 @@ version = "0.8"
 
 [dev-dependencies.base64]
 version = "0.13"
+
+[dev-dependencies.env_logger]
+workspace = true
 
 [features]
 cluster = []
