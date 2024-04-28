@@ -414,9 +414,8 @@ mod tests {
     }
 
     async fn assert_request_count(i: usize, job_id: &str, qps_expectation: &[u64], metrics: &str) {
-        let metrics = metrics.to_string();
         let metrics = filter_metrics(metrics, "upstream_request_count");
-        let metrics = filter_metrics(metrics, job_id);
+        let metrics = filter_metrics(&metrics, job_id);
         assert_metrics_is_in_range(
             &metrics,
             (cumulative_sum::<u64>(qps_expectation, i, 0))
@@ -434,9 +433,8 @@ mod tests {
         if expectation.is_empty() {
             return;
         }
-        let metrics = metrics.to_string();
         let metrics = filter_metrics(metrics, "connection_pool_new_connection_success");
-        let metrics = filter_metrics(metrics, job_id);
+        let metrics = filter_metrics(&metrics, job_id);
         println!("{}", &metrics);
         assert_metrics_is_in_range(
             &metrics,
@@ -451,8 +449,8 @@ mod tests {
             return;
         }
         let metrics = get_all_metrics().await;
-        let metrics = filter_metrics(metrics, "connection_pool_connection_dropped");
-        let metrics = filter_metrics(metrics, job_id);
+        let metrics = filter_metrics(&metrics, "connection_pool_connection_dropped");
+        let metrics = filter_metrics(&metrics, job_id);
         println!("{}", &metrics);
         assert_metrics_is_in_range(
             &metrics,
@@ -467,22 +465,21 @@ mod tests {
         failure_expectation: &HashMap<&String, Vec<u64>>,
         metrics: &str,
     ) {
-        let metrics = metrics.to_string();
         let metrics = filter_metrics(metrics, "assertion_failure");
-        let metrics = filter_metrics(metrics, job_id);
+        let metrics = filter_metrics(&metrics, job_id);
         info!("{}", &metrics);
         for (k, expectation) in failure_expectation {
             info!(
                 "asserting assertions - key:{k}, expectation: {:?}",
                 expectation
             );
-            let metrics = filter_metrics(metrics.clone(), &format!("assertion_id=\"{}\"", k));
+            let metrics = filter_metrics(&metrics, &format!("assertion_id=\"{}\"", k));
             assert_metrics_is_in_range(
                 &metrics,
                 (cumulative_sum::<u64>(expectation, i, 0))
                     ..(cumulative_sum::<u64>(expectation, i + 2, 0)),
             );
-            let metrics = filter_metrics(metrics.clone(), &format!("assertion_id=\"{}\"", k));
+            let metrics = filter_metrics(&metrics, &format!("assertion_id=\"{}\"", k));
             assert_metrics_is_in_range(
                 &metrics,
                 (cumulative_sum::<u64>(expectation, i, 0))
@@ -526,7 +523,7 @@ mod tests {
             .unwrap_or_default()
     }
 
-    fn filter_metrics(metrics: String, filter: &str) -> String {
+    fn filter_metrics(metrics: &str, filter: &str) -> String {
         metrics
             .lines()
             .filter(|m| m.contains(filter))

@@ -447,15 +447,16 @@ async fn handle_connection_from_primary_v2(
             METRICS_FACTORY.remove_metrics(&job_id).await;
         }
     }
-    debug!("[handle_connection_from_primary] - [{}] - exiting with status stop:{}, finish:{}, error_exit:{}", &job_id,
-    stop, finish, error_exit);
+    info!("[handle_connection_from_primary] - [{}] - exiting with status stop:{}, finish:{}, error_exit:{}", 
+        &job_id,stop, finish, error_exit
+    );
     Ok(())
 }
 
 // #[cfg(feature = "cluster")]
 lazy_static! {
     //in cluster mode, connection between primary & secondary may break and should avoid creating
-    // new pool when reconnect. Otherwise it'll lead to inconsistent number of connections.
+    // new pool when reconnected. Otherwise, it'll lead to inconsistent number of connections.
     // To avoid that, use global pool collection.
     pub(crate) static ref CONNECTION_POOLS: RwLock<HashMap<String, QueuePool>> = RwLock::new(HashMap::new());
     pub(crate) static ref CONNECTION_POOLS_USAGE_LISTENER: RwLock<HashMap<String, tokio::sync::oneshot::Receiver<()>>> = RwLock::new(HashMap::new());
@@ -589,8 +590,7 @@ async fn handle_rate_msg_v2<T: LoadGenerationLogic>(
     rate: RateMessage,
     ctx: &mut ExecutionContext<T>,
 ) {
-    // let metrics = &ctx.metrics; //: &Arc<Metrics>,
-    let queue_pool = &mut ctx.queue_pool; //: &mut QueuePool,
+    let queue_pool = &mut ctx.queue_pool;
 
     let start_of_cycle = Instant::now();
 
@@ -1312,7 +1312,6 @@ mod test {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    // #[ignore]
     async fn test_handle_rate_msg() {
         init();
         let rate_message = RateMessage {
@@ -1371,7 +1370,6 @@ mod test {
 
     #[tokio::test]
     async fn test_send_n_request_in_t_duration() {
-        // init();
         // init();
         let rate_message = RateMessage {
             qps: 25,
@@ -1472,6 +1470,6 @@ mod test {
         CONN_RET_TIMES
             .write()
             .unwrap()
-            .push(CONN_RET_TRACKER_CLK.get().unwrap().elapsed().as_millis())
+            .push(CONN_RET_TRACKER_CLK.get().unwrap().elapsed().as_millis());
     }
 }

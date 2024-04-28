@@ -11,7 +11,7 @@ Sends the requests in batches at certain intervals. The generator keeps track of
 to send all the required batches. If it fails to send a batch or any request in the batch,
 intervals might be reduced to accommodate remaining requests in the available time.
 
-```json5
+```json
 {
   "generationMode": {
     "batch": {
@@ -45,7 +45,7 @@ required as long as it's allowed by concurrent connection configuration. If enou
 are not available, generator waits for next a(or more) connection to be available, and sends the
 request.
 
-```json5
+```json
 {
   "generationMode": "immediate"
 }
