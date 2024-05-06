@@ -1,5 +1,4 @@
 use crate::{data_dir_path, HttpReq};
-// use anyhow::Result as AnyResult;
 use datagen::DataSchema;
 use http::Method;
 use regex::Regex;
@@ -183,6 +182,21 @@ impl RandomDataRequest {
             }
         }
     }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+#[allow(clippy::type_complexity)]
+pub struct JsonTemplateRequest {
+    #[serde(skip)]
+    #[serde(default)]
+    pub init: bool,
+    #[serde(with = "http_serde::method")]
+    pub method: Method,
+    pub url: String,
+    #[serde(default = "HashMap::new")]
+    pub headers: HashMap<String, String>,
+    pub body: Value,
 }
 
 fn default_split_range() -> usize {

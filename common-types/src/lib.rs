@@ -1,6 +1,8 @@
 //! Define common types uses by various components of overload
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::collections::HashMap;
 use std::num::NonZeroUsize;
 
 /// Specify how requests should be generated at any specific moment("second")
@@ -40,4 +42,28 @@ use std::num::NonZeroUsize;
 pub enum LoadGenerationMode {
     Batch { batch_size: NonZeroUsize },
     Immediate,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(from = "Value")]
+#[serde(into = "Value")]
+pub struct JsonTemplate<T: Clone> {
+    json: Value,
+    #[serde(skip)]
+    templates: HashMap<String, T>,
+}
+
+impl<T: Clone> From<Value> for JsonTemplate<T> {
+    fn from(value: Value) -> JsonTemplate<T> {
+        JsonTemplate {
+            json: value,
+            templates: HashMap::new(),
+        }
+    }
+}
+
+impl<T: Clone> From<JsonTemplate<T>> for Value {
+    fn from(value: JsonTemplate<T>) -> Self {
+        value.json
+    }
 }

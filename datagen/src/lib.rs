@@ -1,3 +1,5 @@
+mod template;
+
 use crate::DataSchema::Empty;
 use anyhow::{anyhow, Error as AnyError, Result as AnyResult};
 use log::{error, trace, warn};
