@@ -84,7 +84,7 @@ impl RequestProvider for RequestFile {
         }
         let mut random_ids = repeat_with(|| fastrand::usize(1..=self.size))
             .take(n)
-            .fold(String::new(), |acc, r| acc + &r.to_string() + ",");
+            .fold(String::new(), |acc, r| acc + r.to_string().as_str() + ",");
         random_ids.pop(); //remove last comma
 
         let random_data: Vec<HttpReq> = sqlx::query_as(

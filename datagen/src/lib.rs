@@ -1,4 +1,7 @@
-mod template;
+//! ## Data generation library
+//! The library contains nuts & bolts for generating data based on json schema or templates
+
+pub mod template;
 
 use crate::DataSchema::Empty;
 use anyhow::{anyhow, Error as AnyError, Result as AnyResult};
