@@ -83,21 +83,8 @@ pub fn build_engine() -> Engine {
     // Create a raw scripting Engine
     let mut engine = Engine::new_raw();
 
-    // Use the file-based module resolver
-    // engine.set_module_resolver(FileModuleResolver::new());
-
     // Enable the strings interner
     engine.set_max_strings_interned(1024);
-
-    // Default print/debug implementations
-    // engine.on_print(|text| println!("{text}"));
-
-    // engine.on_debug(|text, source, pos| match (source, pos) {
-    //     (Some(source), crate::Position::NONE) => println!("{source} | {text}"),
-    //     (Some(source), pos) => println!("{source} @ {pos:?} | {text}"),
-    //     (None, crate::Position::NONE) => println!("{text}"),
-    //     (None, pos) => println!("{pos:?} | {text}"),
-    // });
 
     // Register the Standard Package
     let package = StandardPackage::new();
@@ -153,8 +140,8 @@ fn register_template_functions(engine: &mut Engine) {
             .to_string()
             .parse::<i64>()
             .map_err(|e| e.to_string())
-            .map(|v| Dynamic::from_int(v))
-            .unwrap_or_else(|e| Dynamic::from(e))
+            .map(Dynamic::from_int)
+            .unwrap_or_else(Dynamic::from)
     }
 
     engine.register_fn("randomInt", random_int);
