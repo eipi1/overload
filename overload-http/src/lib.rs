@@ -2,7 +2,9 @@ mod rate_spec;
 mod request_specs;
 
 pub use rate_spec::{ArraySpec, Bounded, ConstantRate, Elastic, Linear, Steps};
-pub use request_specs::{RandomDataRequest, RequestFile, RequestList, SplitRequestFile};
+pub use request_specs::{
+    JsonTemplate, RandomDataRequest, RequestFile, RequestList, SplitRequestFile,
+};
 
 use anyhow::Error as AnyError;
 use common_types::LoadGenerationMode;
@@ -62,6 +64,7 @@ pub enum RequestSpecEnum {
     RequestFile(RequestFile),
     SplitRequestFile(SplitRequestFile),
     RandomDataRequest(RandomDataRequest),
+    JsonTemplateRequest(JsonTemplate),
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

@@ -189,6 +189,7 @@ impl Into<RequestGenerator> for Request {
             RequestSpecEnum::RequestFile(req) => Box::new(req),
             RequestSpecEnum::RandomDataRequest(req) => Box::new(req),
             RequestSpecEnum::SplitRequestFile(req) => Box::new(req),
+            RequestSpecEnum::JsonTemplateRequest(req) => Box::new(req),
         };
 
         let connection_rate = if let Some(connection_rate_spec) = self.concurrent_connection {

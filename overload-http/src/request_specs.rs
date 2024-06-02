@@ -2,12 +2,15 @@ use crate::{data_dir_path, HttpReq};
 use datagen::DataSchema;
 use http::Method;
 use regex::Regex;
+use rhai::{Engine, AST};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use smol_str::SmolStr;
 use sqlx::SqliteConnection;
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
+use std::sync::Arc;
+use validator::{Validate, ValidationError};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RequestList {
@@ -185,18 +188,63 @@ impl RandomDataRequest {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-#[allow(clippy::type_complexity)]
-pub struct JsonTemplateRequest {
-    #[serde(skip)]
-    #[serde(default)]
-    pub init: bool,
-    #[serde(with = "http_serde::method")]
+#[serde(from = "JsonTemplateRequest", into = "JsonTemplateRequest")]
+pub struct JsonTemplate {
     pub method: Method,
-    pub url: String,
-    #[serde(default = "HashMap::new")]
+    pub url: Value,
     pub headers: HashMap<String, String>,
     pub body: Value,
+    pub url_template: HashMap<String, AST>,
+    pub body_template: HashMap<String, AST>,
+    pub engine: Arc<Engine>,
+}
+
+#[derive(Debug, Validate, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct JsonTemplateRequest {
+    #[serde(with = "http_serde::method")]
+    pub method: Method,
+    pub url: Value,
+    #[validate(custom(function = "validate_host_header"))]
+    pub headers: HashMap<String, String>,
+    #[serde(default = "default_body")]
+    pub body: Value,
+}
+
+fn validate_host_header(headers: &HashMap<String, String>) -> Result<(), ValidationError> {
+    headers
+        .keys()
+        .map(|x| x.to_lowercase())
+        .find(|x| x.eq("host"));
+    todo!()
+}
+
+impl From<JsonTemplateRequest> for JsonTemplate {
+    fn from(value: JsonTemplateRequest) -> Self {
+        let engine = datagen::template::build_engine();
+        let url_template = datagen::template::parse_templates(&value.url);
+        let body_template = datagen::template::parse_templates(&value.body);
+        Self {
+            method: value.method,
+            url: value.url,
+            headers: value.headers,
+            body: value.body,
+            url_template,
+            body_template,
+            engine: Arc::new(engine),
+        }
+    }
+}
+
+impl From<JsonTemplate> for JsonTemplateRequest {
+    fn from(value: JsonTemplate) -> Self {
+        Self {
+            method: value.method,
+            url: value.url,
+            headers: value.headers,
+            body: value.body,
+        }
+    }
 }
 
 fn default_split_range() -> usize {
@@ -204,4 +252,7 @@ fn default_split_range() -> usize {
 }
 fn default_usize_max() -> usize {
     2147483647 //i32::max
+}
+fn default_body() -> Value {
+    Value::Null
 }

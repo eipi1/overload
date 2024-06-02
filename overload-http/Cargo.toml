@@ -17,9 +17,6 @@ path = "../common-types"
 [dependencies.common-env]
 path = "../common-env"
 
-[dependencies.async-trait]
-version = "0.1"
-
 [dependencies.serde]
 version = "1.0"
 features = ["derive"]
@@ -67,6 +64,14 @@ version = "1.4"
 [dependencies.uuid]
 version = "1.1"
 features = ["v4"]
+
+[dependencies.rhai]
+version = "1.18"
+features = ["std", "sync"]
+
+[dependencies.validator]
+version = "0.18"
+features = ["derive"]
 
 [dev-dependencies.tokio]
 workspace=true

@@ -1044,6 +1044,7 @@ async fn get_requests(
         RequestSpecEnum::RequestFile(req) => req.get_n(count),
         RequestSpecEnum::RandomDataRequest(req) => req.get_n(count),
         RequestSpecEnum::SplitRequestFile(req) => req.get_n(count),
+        RequestSpecEnum::JsonTemplateRequest(req) => req.get_n(count),
     }
     .await
 }
@@ -1088,7 +1089,9 @@ pub(crate) fn initiator_for_request_from_primary(
         RequestSpecEnum::SplitRequestFile(req) => {
             download_request_file_from_primary(req.file_name.to_string(), primary_uri).boxed()
         }
-        RequestSpecEnum::RandomDataRequest(_) | RequestSpecEnum::RequestList(_) => noop().boxed(),
+        RequestSpecEnum::RandomDataRequest(_)
+        | RequestSpecEnum::RequestList(_)
+        | RequestSpecEnum::JsonTemplateRequest(_) => noop().boxed(),
     };
 }
 

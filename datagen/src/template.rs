@@ -13,7 +13,13 @@ lazy_static! {
     // static ref PATTERN_FUNCTION_NAME_WITH_REGEX: Regex = Regex::new(r#".+_pattern.*?\("#).unwrap();
 }
 
-pub fn parse_templates(
+pub fn parse_templates(json: &Value) -> HashMap<String, AST> {
+    let mut templates = HashMap::new();
+    parse_templates_inner(&build_engine(), json, "", &mut templates);
+    templates
+}
+
+pub fn parse_templates_inner(
     engine: &Engine,
     json: &Value,
     path: &str,
@@ -36,13 +42,13 @@ pub fn parse_templates(
         Value::Array(vals) => {
             for (pos, val) in vals.iter().enumerate() {
                 let new_path = format!("{path}/{pos}");
-                parse_templates(engine, val, &new_path, template_map);
+                parse_templates_inner(engine, val, &new_path, template_map);
             }
         }
         Value::Object(vals) => {
             for (key, val) in vals {
                 let new_path = format!("{path}/{key}");
-                parse_templates(engine, val, &new_path, template_map);
+                parse_templates_inner(engine, val, &new_path, template_map);
             }
         }
     }
@@ -148,7 +154,7 @@ fn register_template_functions(engine: &mut Engine) {
     engine.register_fn("randomBool", random_bool);
     engine.register_fn("randomFloat", random_float);
     engine.register_fn("randomStr", random_str);
-    engine.register_fn("randomStrWithPattern", random_str_pattern);
+    engine.register_fn("patternStr", random_str_pattern);
     engine.register_fn("toStr", to_str::<i64>);
     engine.register_fn("toStr", to_str::<bool>);
     engine.register_fn("toStr", to_str::<f64>);
@@ -161,7 +167,8 @@ fn register_template_functions(engine: &mut Engine) {
 #[cfg(test)]
 mod tests {
     use crate::template::{
-        build_engine, find_pattern_and_compile, parse_templates, populate_data, PATTERN_FUNCTION,
+        build_engine, find_pattern_and_compile, parse_templates_inner, populate_data,
+        PATTERN_FUNCTION,
     };
     use crate::test::init_logger;
     use log::info;
@@ -189,7 +196,7 @@ mod tests {
         let mut json: Value = serde_json::from_str(json).unwrap();
         let path = "".to_string();
         let mut map = HashMap::new();
-        parse_templates(&engine, &json, &path, &mut map);
+        parse_templates_inner(&engine, &json, &path, &mut map);
         info!("{:?}", &map);
         populate_data(&engine, &mut json, &map);
         info!("{:?}", &json);
@@ -236,10 +243,10 @@ mod tests {
         r#"
             {
               "duration": "{{randomInt(100, 200)}}",
-              "name": "demo-test-{{randomStrWithPattern(\"[a-zA-Z0-9_]{4,10}\")}}",
+              "name": "demo-test-{{patternStr(\"[a-zA-Z0-9_]{4,10}\")}}",
               "qps": {
                 "ConstantRate": {
-                  "countPerSec": "{{toInt(randomStrWithPattern(\"1[0-9]{4}\"))}}"
+                  "countPerSec": "{{toInt(patternStr(\"1[0-9]{4}\"))}}"
                 }
               },
               "req": {
@@ -285,7 +292,7 @@ mod tests {
         let mut json: Value = serde_json::from_str(json).unwrap();
         let path = "".to_string();
         let mut map = HashMap::new();
-        parse_templates(&engine, &json, &path, &mut map);
+        parse_templates_inner(&engine, &json, &path, &mut map);
         info!("{:?}", &map);
         populate_data(&engine, &mut json, &map);
         info!("{:?}", &json);
@@ -316,7 +323,7 @@ mod tests {
         let json: Value = serde_json::from_str(json).unwrap();
         let path = "".to_string();
         let mut map = HashMap::new();
-        parse_templates(&engine, &json, &path, &mut map);
+        parse_templates_inner(&engine, &json, &path, &mut map);
 
         for (path, ast) in &map {
             let i = engine.eval_ast::<Dynamic>(ast).unwrap();
@@ -336,7 +343,7 @@ mod tests {
         let json: Value = serde_json::from_str(json).unwrap();
         let path = "".to_string();
         let mut map = HashMap::new();
-        parse_templates(&engine, &json, &path, &mut map);
+        parse_templates_inner(&engine, &json, &path, &mut map);
         info!("{:?}", &map);
         assert_eq!(map.len(), 2);
         assert!(matches!(map.get("/name"), Some(AST { .. })));
@@ -368,7 +375,7 @@ mod tests {
         let json: Value = serde_json::from_str(json).unwrap();
         let path = "".to_string();
         let mut map = HashMap::new();
-        parse_templates(&engine, &json, &path, &mut map);
+        parse_templates_inner(&engine, &json, &path, &mut map);
         info!("{:?}", &map);
         assert_eq!(map.len(), 2);
         assert!(matches!(map.get("/duration"), Some(AST { .. })));
@@ -399,7 +406,7 @@ mod tests {
         let json: Value = serde_json::from_str(json).unwrap();
         let path = "".to_string();
         let mut map = HashMap::new();
-        parse_templates(&engine, &json, &path, &mut map);
+        parse_templates_inner(&engine, &json, &path, &mut map);
         assert_eq!(map.len(), 1);
         assert!(matches!(map.get("/duration"), Some(AST { .. })));
     }

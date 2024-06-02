@@ -1,7 +1,9 @@
 use log::{debug, error};
 use mlua::{FromLua, Function, Lua, RegistryKey, Table, Value};
 
-static LUA_DEF_JSON_PARSER: &str = include_str!("json.lua");
+const LUA_DEF_JSON_PARSER: &str = include_str!("json.lua");
+const LUA_DEF_TABLE_PATH: &str = include_str!("table-path.lua");
+const LUA_DEF_VAR_DUMP: &str = include_str!("utils/dump.lua");
 
 #[derive(Debug)]
 pub struct LuaAssertionResult {
@@ -43,8 +45,15 @@ impl FromLua<'_> for LuaAssertionResult {
 
 pub fn init_lua() -> Lua {
     let lua = Lua::new();
-    let f: Table = lua.load(LUA_DEF_JSON_PARSER).eval().unwrap();
-    lua.globals().set("json", f).unwrap();
+    let json: Table = lua.load(LUA_DEF_JSON_PARSER).eval().unwrap();
+    lua.globals().set("json", json).unwrap();
+
+    let table_path: Function = lua.load(LUA_DEF_TABLE_PATH).eval().unwrap();
+    lua.globals().set("getValueByPath", table_path).unwrap();
+
+    let func: Function = lua.load(LUA_DEF_VAR_DUMP).eval().unwrap();
+    lua.globals().set("dump", func).unwrap();
+
     lua
 }
 
@@ -228,6 +237,40 @@ mod tests {
             .get::<_, String>("id")
             .unwrap();
         assert_eq!(v, "0001".to_string())
+    }
+
+    #[test]
+    fn lua_table_path() {
+        let lua = init_lua();
+        let test_json: Function = lua
+            .load(
+                r#"
+                function(s)
+                    jsonVal=json.decode(s)
+                    print(dump(jsonVal))
+                    result = {}
+                    result[1] = getValueByPath(jsonVal,"/1/id")
+                    result[2] = getValueByPath(jsonVal,"/2/id")
+                    result[3] = getValueByPath(jsonVal,"/1/batters/batter/1/id")
+                    result[4] = getValueByPath(jsonVal,'/1/batters/batter/2/type')
+                    print(dump(result))
+                    return result
+                end
+        "#,
+            )
+            .eval()
+            .unwrap();
+
+        let json = sample_json();
+        let lua_table = test_json.call::<_, Table>(json.to_string()).unwrap();
+        // let v =
+        assert_eq!(lua_table.get::<_, String>(1).unwrap(), "0001".to_string());
+        assert_eq!(lua_table.get::<_, String>(2).unwrap(), "0002".to_string());
+        assert_eq!(lua_table.get::<_, String>(3).unwrap(), "1001".to_string());
+        assert_eq!(
+            lua_table.get::<_, String>(4).unwrap(),
+            "Chocolate".to_string()
+        );
     }
 
     fn sample_json() -> serde_json::Value {

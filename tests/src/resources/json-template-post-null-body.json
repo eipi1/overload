@@ -1,0 +1,71 @@
+{
+  "request": {
+    "duration": 10,
+    "name": "test-sample-1",
+    "qps": {
+      "ConstantRate": {
+        "countPerSec": 3
+      }
+    },
+    "req": {
+      "JsonTemplateRequest": {
+        "method": "POST",
+        "url": "/anything",
+        "headers": {
+          "Host": "127.0.0.1:2080",
+          "Connection": "keep-alive"
+        },
+        "body": null
+      }
+    },
+    "target": {
+      "host": "127.0.0.1",
+      "port": 2080,
+      "protocol": "HTTP"
+    },
+    "generationMode": {
+      "batch": {
+        "batchSize": 3
+      }
+    },
+    "concurrentConnection": {
+      "ConstantRate": {
+        "countPerSec": 3
+      }
+    },
+    "responseAssertion": {
+      "luaAssertion": [
+        "function (method, url, reqBody, respBody)",
+        "    print(respBody)",
+        "    result ={}",
+        "    if method~=\"POST\" then",
+        "        local err={}",
+        "        err.id=1",
+        "        err.success=false",
+        "        err.error=\"Invalid method\"",
+        "        table.insert(result,err)",
+        "    end",
+        "    jsonResp=json.decode(respBody)",
+        "    print(respBody)",
+        "    local val = getValueByPath(jsonResp, '/json')",
+        "    if val ~=nil then",
+        "        local err={}",
+        "        err.id=2",
+        "        err.success=false",
+        "        err.error=\"Invalid duration\"",
+        "        table.insert(result,err)",
+        "    end",
+        "    return result",
+        "end"
+      ]
+    }
+  },
+  "expectation": {
+    "qps": [3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
+    "assertionFailure": {
+      "1": [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      "2": [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      "2147483647": [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    }
+  }
+}
