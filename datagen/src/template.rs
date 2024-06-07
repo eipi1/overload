@@ -9,7 +9,7 @@ use std::cmp::max;
 use std::collections::HashMap;
 
 lazy_static! {
-    static ref PATTERN_FUNCTION: Regex = Regex::new(r#"\{\{(.+?)}}"#).unwrap();
+    pub static ref PATTERN_FUNCTION: Regex = Regex::new(r#"\{\{(.+?)}}"#).unwrap();
     // static ref PATTERN_FUNCTION_NAME_WITH_REGEX: Regex = Regex::new(r#".+_pattern.*?\("#).unwrap();
 }
 

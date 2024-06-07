@@ -103,7 +103,7 @@ mod tests {
     #[case("json-template-post.json")]
     #[case("json-template-post-null-body.json")]
     #[tokio::test(flavor = "multi_thread")]
-    // #[ignore]
+    #[ignore]
     async fn test_scenarios_assertion(#[case] path: &str) {
         // let path = "test-generator-with-assertion.json";
         init_logger();

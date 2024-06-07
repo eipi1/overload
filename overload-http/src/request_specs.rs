@@ -10,7 +10,7 @@ use sqlx::SqliteConnection;
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
 use std::sync::Arc;
-use validator::{Validate, ValidationError};
+use validator::{Validate, ValidationError, ValidationErrors};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RequestList {
@@ -188,7 +188,7 @@ impl RandomDataRequest {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(from = "JsonTemplateRequest", into = "JsonTemplateRequest")]
+#[serde(try_from = "JsonTemplateRequest", into = "JsonTemplateRequest")]
 pub struct JsonTemplate {
     pub method: Method,
     pub url: Value,
@@ -204,6 +204,7 @@ pub struct JsonTemplate {
 struct JsonTemplateRequest {
     #[serde(with = "http_serde::method")]
     pub method: Method,
+    #[validate(custom(function = "validate_url_json_val"))]
     pub url: Value,
     #[validate(custom(function = "validate_host_header"))]
     pub headers: HashMap<String, String>,
@@ -211,20 +212,15 @@ struct JsonTemplateRequest {
     pub body: Value,
 }
 
-fn validate_host_header(headers: &HashMap<String, String>) -> Result<(), ValidationError> {
-    headers
-        .keys()
-        .map(|x| x.to_lowercase())
-        .find(|x| x.eq("host"));
-    todo!()
-}
+impl TryFrom<JsonTemplateRequest> for JsonTemplate {
+    type Error = ValidationErrors;
 
-impl From<JsonTemplateRequest> for JsonTemplate {
-    fn from(value: JsonTemplateRequest) -> Self {
+    fn try_from(value: JsonTemplateRequest) -> Result<Self, ValidationErrors> {
+        value.validate()?;
         let engine = datagen::template::build_engine();
         let url_template = datagen::template::parse_templates(&value.url);
         let body_template = datagen::template::parse_templates(&value.body);
-        Self {
+        Ok(Self {
             method: value.method,
             url: value.url,
             headers: value.headers,
@@ -232,7 +228,7 @@ impl From<JsonTemplateRequest> for JsonTemplate {
             url_template,
             body_template,
             engine: Arc::new(engine),
-        }
+        })
     }
 }
 
@@ -247,6 +243,39 @@ impl From<JsonTemplate> for JsonTemplateRequest {
     }
 }
 
+fn validate_host_header(headers: &HashMap<String, String>) -> Result<(), ValidationError> {
+    let host_exists = headers.keys().any(|x| x.to_lowercase() == "host");
+    if host_exists {
+        Ok(())
+    } else {
+        Err(ValidationError::new(
+            "Host header must exists, use IP as the value if header is unknown or not required for the request.",
+        ))
+    }
+}
+
+const MESSAGE_VALIDATION_ERR_URL_STRING: &str = "Invalid url - requires string starting with /";
+
+fn validate_url_json_val(url: &Value) -> Result<(), ValidationError> {
+    if !url.is_string() {
+        return Err(ValidationError::new(MESSAGE_VALIDATION_ERR_URL_STRING));
+    }
+    let url = url.as_str().unwrap();
+    let template_fn = datagen::template::PATTERN_FUNCTION.is_match(&url);
+    if !template_fn {
+        validate_url_str(&url)?
+    }
+    Ok(())
+}
+
+#[inline]
+fn validate_url_str(url: &str) -> Result<(), ValidationError> {
+    if !url.starts_with('/') {
+        return Err(ValidationError::new(MESSAGE_VALIDATION_ERR_URL_STRING));
+    }
+    Ok(())
+}
+
 fn default_split_range() -> usize {
     0
 }
@@ -255,4 +284,51 @@ fn default_usize_max() -> usize {
 }
 fn default_body() -> Value {
     Value::Null
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::JsonTemplate;
+
+    #[test]
+    fn test_validator_json_template_ok() {
+        let json_str = r#"{
+              "method": "GET",
+              "url": "{{patternStr(\"/anything/[a-z]{4}\")}}",
+              "headers": {
+                "Host": "127.0.0.1:2080",
+                "Connection": "keep-alive"
+              }
+            }"#;
+        let result = serde_json::from_str::<JsonTemplate>(json_str);
+        assert!(result.is_ok())
+    }
+
+    #[test]
+    fn test_validator_json_template_ok_2() {
+        let json_str = r#"{
+              "method": "GET",
+              "url": "/anything",
+              "headers": {
+                "Host": "127.0.0.1:2080",
+                "Connection": "keep-alive"
+              }
+            }"#;
+        let result = serde_json::from_str::<JsonTemplate>(json_str);
+        assert!(result.is_ok())
+    }
+
+    #[test]
+    fn test_validator_json_template_fail() {
+        let json_str = r#"{
+              "method": "GET",
+              "url": "{{patternStr(\"/anything/[a-z]{4}\")}}",
+              "headers": {
+                "Connection": "keep-alive"
+              }
+            }"#;
+        let result = serde_json::from_str::<JsonTemplate>(json_str);
+        assert!(result.is_err());
+        dbg!(result.err().unwrap().to_string());
+    }
 }
