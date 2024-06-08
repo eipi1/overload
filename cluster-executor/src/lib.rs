@@ -666,9 +666,9 @@ mod test_common {
     #[allow(dead_code)]
     pub fn init() {
         INIT.call_once(|| {
-            env_logger::Builder::from_env(Env::default().default_filter_or("trace"))
+            let _ = env_logger::Builder::from_env(Env::default().default_filter_or("trace"))
                 .format_timestamp_millis()
-                .init();
+                .try_init();
         });
     }
 
