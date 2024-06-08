@@ -39,7 +39,7 @@ jobs:
     - name: Lint
       run: cargo fmt --all -- --check
     - name: Run cluster tests
-      run: cargo test --all-features  -- --test-threads=1
+      run: RUST_BACKTRACE=1 cargo test --all-features  -- --test-threads=1 --show-output
     - name: Install mdbook
       run: |
         mkdir bin
