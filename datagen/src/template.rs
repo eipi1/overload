@@ -114,6 +114,7 @@ fn register_template_functions(engine: &mut Engine) {
         fastrand_contrib::f64_range(l..h)
     }
 
+    /// Random alphabetical String with `min_len<=length<=max_len`
     fn random_str(min_len: i64, max_len: i64) -> String {
         let min_len = max(1, min_len);
         let max_len = max(min_len, max_len);
@@ -205,6 +206,10 @@ mod tests {
         let value = value.as_i64().unwrap();
         assert!((100..200).contains(&value));
 
+        let value = json.pointer("/boolTest").unwrap();
+        let value = value.as_str().unwrap();
+        assert!(value.eq("true") || value.eq("false"));
+
         let value = json.pointer("/name").unwrap();
         let value = value.as_str().unwrap();
         let regex = Regex::new("[a-zA-Z0-9_]{4,10}").unwrap();
@@ -244,6 +249,7 @@ mod tests {
             {
               "duration": "{{randomInt(100, 200)}}",
               "name": "demo-test-{{patternStr(\"[a-zA-Z0-9_]{4,10}\")}}",
+              "boolTest": "{{toStr(randomBool())}}",
               "qps": {
                 "ConstantRate": {
                   "countPerSec": "{{toInt(patternStr(\"1[0-9]{4}\"))}}"

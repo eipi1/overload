@@ -1,0 +1,183 @@
+{
+  "request": {
+    "duration": 10,
+    "name": "json-template-post-2.json",
+    "qps": {
+      "ConstantRate": {
+        "countPerSec": 3
+      }
+    },
+    "req": {
+      "JsonTemplateRequest": {
+        "method": "POST",
+        "url": "{{patternStr(\"/anything/[a-z]{4}\")}}",
+        "headers": {
+          "Host": "httpbin.org",
+          "Connection": "keep-alive"
+        },
+        "body": [
+          {
+            "id": "{{randomInt(1,10)}}",
+            "type": "donut",
+            "name": "Cake",
+            "ppu": "{{randomFloat(0.2,1.0)}}",
+            "available": "{{randomBool()}}",
+            "batters":
+            {
+              "batter":
+              [
+                { "id": "{{toStr(randomInt(100,200))}}", "type": "Regular" },
+                { "id": "{{toStr(randomInt(100,200))}}", "type": "Chocolate" }
+              ]
+            },
+            "topping":
+            [
+              { "id": "5001", "type": "None" },
+              { "id": "5002", "type": "Glazed" },
+              { "id": "5005", "type": "Sugar" },
+              { "id": "5007", "type": "Powdered Sugar" },
+              { "id": "5006", "type": "Chocolate with Sprinkles" },
+              { "id": "5003", "type": "Chocolate" },
+              { "id": "5004", "type": "Maple" }
+            ]
+          },
+          {
+            "id": "0002",
+            "type": "donut",
+            "name": "{{patternStr(\"[a-z]{5}-[0-9]{3}\")}}",
+            "ppu": 0.6,
+            "available": "{{randomBool()}}",
+            "batters":
+            {
+              "batter":
+              [
+                { "id": "1001", "type": "Regular" }
+              ]
+            },
+            "topping":
+            [
+              { "id": "5001", "type": "None" },
+              { "id": "5002", "type": "Glazed" }
+            ]
+          }
+        ]
+      }
+    },
+    "target": {
+      "host": "httpbin.org",
+      "port": 80,
+      "protocol": "HTTP"
+    },
+    "generationMode": {
+      "batch": {
+        "batchSize": 3
+      }
+    },
+    "concurrentConnection": {
+      "ConstantRate": {
+        "countPerSec": 3
+      }
+    },
+    "responseAssertion": {
+      "luaAssertion": [
+        "function (method, url, reqBody, respBody)",
+        "    print(reqBody)",
+        "    print(respBody)",
+        "    jsonReq=json.decode(reqBody)",
+        "    jsonResp=json.decode(respBody)",
+        "    result ={}",
+        "    if method~=\"POST\" then",
+        "        local err={}",
+        "        err.id=1",
+        "        err.success=false",
+        "        err.error=\"Invalid method\"",
+        "        table.insert(result,err)",
+        "    end",
+        "    local val = getValueByPath(jsonResp, '/url')",
+        "    if val == nil or string.find(val,'^(.+%/anything%/[a-z][a-z][a-z][a-z])$') == nil then",
+        "        local err={}",
+        "        err.id=2",
+        "        err.success=false",
+        "        err.error=\"Invalid duration\"",
+        "        table.insert(result,err)",
+        "    end",
+        "    print(respBody)",
+        "    local val = getValueByPath(jsonResp, '/json/1/id')",
+        "    if val ==nil or val<1 or val > 10 then",
+        "        local err={}",
+        "        err.id=3",
+        "        err.success=false",
+        "        err.error=\"Invalid /json/1/id\"",
+        "        table.insert(result,err)",
+        "    end",
+        "    local val = getValueByPath(jsonResp, '/json/1/ppu')",
+        "    if val < 1 then --negative test - should be true",
+        "        local err={}",
+        "        err.id=4",
+        "        err.success=false",
+        "        err.error=\"Invalid /json/1/ppu(negative case)\"",
+        "        table.insert(result,err)",
+        "    end",
+        "    if val == nil or val < 0.2 or val >= 1 then",
+        "        local err={}",
+        "        err.id=5",
+        "        err.success=false",
+        "        err.error=\"Invalid /json/1/ppu\"",
+        "        table.insert(result,err)",
+        "    end",
+        "    local val = getValueByPath(jsonResp, '/json/1/available')",
+        "    if val == nil or (val~=false and val~=true) then",
+        "        local err={}",
+        "        err.id=6",
+        "        err.success=false",
+        "        err.error=\"Invalid /json/1/available\"",
+        "        table.insert(result,err)",
+        "    end",
+        "    local val = getValueByPath(jsonResp, '/json/1/batters/batter/1/id')",
+        "    local val_num = tonumber(val)",
+        "    if val_num == nil or val_num<100 or val_num>=200 then",
+        "        local err={}",
+        "        err.id=7",
+        "        err.success=false",
+        "        err.error=\"Invalid /json/1/batters/batter/1/id\"",
+        "        table.insert(result,err)",
+        "    end",
+        "    local val = getValueByPath(jsonResp, '/json/1/batters/batter/2/id')",
+        "    local val_num = tonumber(val)",
+        "    if val_num == nil or val_num<100 or val_num>=200 then",
+        "        local err={}",
+        "        err.id=8",
+        "        err.success=false",
+        "        err.error=\"Invalid /json/1/batters/batter/2/id\"",
+        "        table.insert(result,err)",
+        "    end",
+        "    local val = getValueByPath(jsonResp, '/json/2/name')",
+        "    print(val)",
+        "    if val == nil or string.find(val,'^([a-z][a-z][a-z][a-z][a-z]%-[0-9][0-9][0-9])$') == nil then",
+        "        local err={}",
+        "        err.id=9",
+        "        err.success=false",
+        "        err.error=\"Invalid /json/2/name\"",
+        "        table.insert(result,err)",
+        "    end",
+        "    return result",
+        "end"
+      ]
+    }
+  },
+  "expectation": {
+    "qps": [3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
+    "assertionFailure": {
+      "2147483647": [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      "1": [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      "2": [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      "3": [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      "4": [ 3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
+      "5": [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      "6": [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      "7": [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      "8": [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      "9": [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    }
+  }
+}

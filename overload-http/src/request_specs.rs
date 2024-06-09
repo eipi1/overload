@@ -206,7 +206,6 @@ struct JsonTemplateRequest {
     pub method: Method,
     #[validate(custom(function = "validate_url_json_val"))]
     pub url: Value,
-    #[validate(custom(function = "validate_host_header"))]
     pub headers: HashMap<String, String>,
     #[serde(default = "default_body")]
     pub body: Value,
@@ -243,17 +242,6 @@ impl From<JsonTemplate> for JsonTemplateRequest {
     }
 }
 
-fn validate_host_header(headers: &HashMap<String, String>) -> Result<(), ValidationError> {
-    let host_exists = headers.keys().any(|x| x.to_lowercase() == "host");
-    if host_exists {
-        Ok(())
-    } else {
-        Err(ValidationError::new(
-            "Host header must exists, use IP as the value if header is unknown or not required for the request.",
-        ))
-    }
-}
-
 const MESSAGE_VALIDATION_ERR_URL_STRING: &str = "Invalid url - requires string starting with /";
 
 fn validate_url_json_val(url: &Value) -> Result<(), ValidationError> {
@@ -261,9 +249,9 @@ fn validate_url_json_val(url: &Value) -> Result<(), ValidationError> {
         return Err(ValidationError::new(MESSAGE_VALIDATION_ERR_URL_STRING));
     }
     let url = url.as_str().unwrap();
-    let template_fn = datagen::template::PATTERN_FUNCTION.is_match(&url);
+    let template_fn = datagen::template::PATTERN_FUNCTION.is_match(url);
     if !template_fn {
-        validate_url_str(&url)?
+        validate_url_str(url)?
     }
     Ok(())
 }
@@ -316,19 +304,5 @@ mod tests {
             }"#;
         let result = serde_json::from_str::<JsonTemplate>(json_str);
         assert!(result.is_ok())
-    }
-
-    #[test]
-    fn test_validator_json_template_fail() {
-        let json_str = r#"{
-              "method": "GET",
-              "url": "{{patternStr(\"/anything/[a-z]{4}\")}}",
-              "headers": {
-                "Connection": "keep-alive"
-              }
-            }"#;
-        let result = serde_json::from_str::<JsonTemplate>(json_str);
-        assert!(result.is_err());
-        dbg!(result.err().unwrap().to_string());
     }
 }

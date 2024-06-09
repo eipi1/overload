@@ -101,6 +101,7 @@ mod tests {
     #[case("test-load-generation-batch.json")]
     #[case("json-template-get.json")]
     #[case("json-template-post.json")]
+    #[case("json-template-post-2.json")]
     #[case("json-template-post-null-body.json")]
     #[tokio::test(flavor = "multi_thread")]
     #[ignore]

@@ -135,8 +135,23 @@ impl Default for ConnectionKeepAlive {
 
 /// Describe the request
 #[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
+#[serde(from = "RequestShadow", rename_all = "camelCase")]
 pub struct Request {
+    pub name: Option<String>,
+    pub duration: u32,
+    pub target: Target,
+    pub req: RequestSpecEnum,
+    pub qps: RateSpecEnum,
+    pub concurrent_connection: Option<ConcurrentConnectionRateSpec>,
+    pub connection_keep_alive: ConnectionKeepAlive,
+    pub histogram_buckets: SmallVec<[f64; 6]>,
+    pub response_assertion: Option<ResponseAssertion>,
+    pub generation_mode: LoadGenerationMode,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestShadow {
     pub name: Option<String>,
     pub duration: u32,
     pub target: Target,
@@ -150,6 +165,42 @@ pub struct Request {
     pub response_assertion: Option<ResponseAssertion>,
     #[serde(default = "default_generation_mode")]
     pub generation_mode: LoadGenerationMode,
+}
+
+impl From<RequestShadow> for Request {
+    fn from(mut value: RequestShadow) -> Self {
+        let target = &value.target;
+        let req_spec = &mut value.req;
+        match req_spec {
+            RequestSpecEnum::JsonTemplateRequest(req) => {
+                validate_and_update_host_header(&mut req.headers, target)
+            }
+            RequestSpecEnum::RandomDataRequest(req) => {
+                validate_and_update_host_header(&mut req.headers, target)
+            }
+            _ => {}
+        }
+        Self {
+            name: value.name,
+            duration: value.duration,
+            target: value.target,
+            req: value.req,
+            qps: value.qps,
+            concurrent_connection: value.concurrent_connection,
+            connection_keep_alive: value.connection_keep_alive,
+            histogram_buckets: value.histogram_buckets,
+            response_assertion: value.response_assertion,
+            generation_mode: value.generation_mode,
+        }
+    }
+}
+
+/// check if host header exists, put the target host if it doesn't.
+fn validate_and_update_host_header(headers: &mut HashMap<String, String>, target: &Target) {
+    let host_exists = headers.keys().any(|x| http::header::HOST.eq(x.as_str()));
+    if !host_exists {
+        headers.insert(http::header::HOST.to_string(), target.host.clone());
+    }
 }
 
 /// Describe multiple tests in single request
@@ -342,6 +393,7 @@ pub const PATH_REQUEST_DATA_FILE_DOWNLOAD: &str = "/cluster/data-file/";
 #[cfg(test)]
 mod test {
     use crate::*;
+    use http::header::HOST;
     use http::Method;
     use std::collections::HashMap;
     use std::convert::TryInto;
@@ -529,5 +581,113 @@ mod test {
             "body": "{\"data\":[{\"shopId\":12345,\"itemId\":54321},{\"shopId\":12345,\"itemId\":54321}]}"
           }"#;
         let _req: HttpReq = serde_json::from_str(req_str).unwrap();
+    }
+
+    #[test]
+    fn test_host_header_update() {
+        let req_str = r#"
+        {
+          "duration": 10,
+          "name": "json-template-get.json",
+          "qps": {
+            "ConstantRate": {
+              "countPerSec": 3
+            }
+          },
+          "req": {
+            "JsonTemplateRequest": {
+              "method": "GET",
+              "url": "{{patternStr(\"/anything/[a-z]{4}\")}}",
+              "headers": {
+                "Connection":"keep-alive"
+              }
+            }
+          },
+          "target": {
+            "host": "127.0.0.1",
+            "port": 2080,
+            "protocol": "HTTP"
+          },
+          "generationMode": {
+            "batch": {
+              "batchSize": 3
+            }
+          },
+          "concurrentConnection": {
+            "ConstantRate": {
+              "countPerSec": 3
+            }
+          }
+        }
+        "#;
+        let result = serde_json::from_str(req_str);
+        assert!(result.is_ok());
+        let req: Request = result.unwrap();
+        let target_host = &req.target.host;
+        let req = req.req;
+        assert!(matches!(req, RequestSpecEnum::JsonTemplateRequest(_)));
+        if let RequestSpecEnum::JsonTemplateRequest(req) = req {
+            assert_eq!(req.headers.len(), 2);
+            assert!(req
+                .headers
+                .iter()
+                .any(|(k, v)| HOST.eq(k.as_str()) && v.eq(target_host)));
+
+            assert!(req.headers.keys().any(|x| { HOST.eq(x.as_str()) }));
+        }
+    }
+
+    #[test]
+    fn test_host_header_no_overwrite() {
+        let req_str = r#"
+        {
+          "duration": 10,
+          "name": "json-template-get.json",
+          "qps": {
+            "ConstantRate": {
+              "countPerSec": 3
+            }
+          },
+          "req": {
+            "JsonTemplateRequest": {
+              "method": "GET",
+              "url": "{{patternStr(\"/anything/[a-z]{4}\")}}",
+              "headers": {
+                "Connection":"keep-alive",
+                "host": "localhost"
+              }
+            }
+          },
+          "target": {
+            "host": "127.0.0.1",
+            "port": 2080,
+            "protocol": "HTTP"
+          },
+          "generationMode": {
+            "batch": {
+              "batchSize": 3
+            }
+          },
+          "concurrentConnection": {
+            "ConstantRate": {
+              "countPerSec": 3
+            }
+          }
+        }
+        "#;
+        let result = serde_json::from_str(req_str);
+        assert!(result.is_ok());
+        let req: Request = result.unwrap();
+        let req = req.req;
+        assert!(matches!(req, RequestSpecEnum::JsonTemplateRequest(_)));
+        if let RequestSpecEnum::JsonTemplateRequest(req) = req {
+            assert_eq!(req.headers.len(), 2);
+            assert!(req
+                .headers
+                .iter()
+                .any(|(k, v)| HOST.eq(k.as_str()) && v.eq("localhost")));
+
+            assert!(req.headers.keys().any(|x| { HOST.eq(x.as_str()) }));
+        }
     }
 }
