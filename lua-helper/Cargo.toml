@@ -9,11 +9,11 @@ edition.workspace = true
 version = "0.8"
 features = ["lua53", "send"]
 
-[dependencies.serde_json]
-version = "1.0"
-
 [dependencies.log]
 version = "0.4"
 
 [dev-dependencies.env_logger]
 version = "0.10"
+
+[dev-dependencies.serde_json]
+workspace = true

@@ -530,8 +530,8 @@ mod cluster_test {
         (tx, handle)
     }
 
+    // #[serial_test::serial]
     #[tokio::test]
-    #[serial_test::serial]
     #[ignore]
     async fn test_download_req_from_secondaries() {
         setup();
@@ -717,13 +717,13 @@ mod cluster_test {
         TestDiscoverService { instances }
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    #[serial_test::serial]
-    #[ignore]
     // Connection pool is now mutable, restricting usage to only one executor.
     // But as this test uses same process to simulate multiple nodes (using tokio::spawn),
     // it prevents other nodes from accessing pool while a node is already using it.
     // Disabled this test case until I can figure out how to do it.
+    #[tokio::test(flavor = "multi_thread")]
+    // #[serial_test::serial]
+    #[ignore]
     async fn test_requests() {
         info!("cluster: test_request_random_constant");
         setup();

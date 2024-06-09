@@ -100,7 +100,7 @@ features = ["v4"]
 
 [dependencies.mlua]
 version = "0.8"
-features = ["lua53", "send", "serialize", "mlua_derive"]
+features = ["lua53", "send", "serialize"]
 
 [dependencies.url]
 version = "2.3"

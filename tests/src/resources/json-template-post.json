@@ -1,0 +1,129 @@
+{
+  "request": {
+    "duration": 10,
+    "name": "json-template-post.json",
+    "qps": {
+      "ConstantRate": {
+        "countPerSec": 3
+      }
+    },
+    "req": {
+      "JsonTemplateRequest": {
+        "method": "POST",
+        "url": "/anything",
+        "headers": {
+          "Host": "127.0.0.1:2080",
+          "Connection": "keep-alive"
+        },
+        "body": {
+          "duration": "{{randomInt(100, 200)}}",
+          "name": "demo-test-{{patternStr(\"[a-zA-Z0-9_]{4,10}\")}}",
+          "qps": {
+            "ConstantRate": {
+              "countPerSec": "{{toInt(patternStr(\"1[0-9]{4}\"))}}"
+            }
+          },
+          "req": {
+            "RequestList": {
+              "data": [
+                {
+                  "method": "GET",
+                  "url": "example.com",
+                  "sendHeader": "{{randomBool()}}"
+                }
+              ]
+            }
+          },
+          "target": {
+            "host": "{{randomStr(5,10)}}.com",
+            "port": 8080,
+            "protocol": "HTTP"
+          },
+          "histogramBuckets": [
+            35,
+            40,
+            "{{randomInt(50, 60)}}",
+            "{{randomInt(70, 90)}}",
+            120,
+            "{{randomInt(150, 180)}}"
+          ],
+          "generation_mode": {
+            "batch": {
+              "batchSize": "{{randomFloat(10.4, 20.5)}}"
+            }
+          }
+        }
+      }
+    },
+    "target": {
+      "host": "127.0.0.1",
+      "port": 2080,
+      "protocol": "HTTP"
+    },
+    "generationMode": {
+      "batch": {
+        "batchSize": 3
+      }
+    },
+    "concurrentConnection": {
+      "ConstantRate": {
+        "countPerSec": 3
+      }
+    },
+    "responseAssertion": {
+      "luaAssertion": [
+        "function (method, url, reqBody, respBody)",
+        "    print(reqBody)",
+        "    print(respBody)",
+        "    result ={}",
+        "    if method~=\"POST\" then",
+        "        local err={}",
+        "        err.id=1",
+        "        err.success=false",
+        "        err.error=\"Invalid method\"",
+        "        table.insert(result,err)",
+        "    end",
+        "    jsonReq=json.decode(reqBody)",
+        "    jsonResp=json.decode(respBody)",
+        "    print(respBody)",
+        "    local val = getValueByPath(jsonResp, '/json/duration')",
+        "    if val ==nil or val<100 or val >199 then",
+        "        local err={}",
+        "        err.id=2",
+        "        err.success=false",
+        "        err.error=\"Invalid duration\"",
+        "        table.insert(result,err)",
+        "    end",
+        "    local val = getValueByPath(jsonResp, '/json/qps/ConstantRate/countPerSec')",
+        "    if val>10000 and val <= 19999 then --negative test",
+        "        local err={}",
+        "        err.id=3",
+        "        err.success=false",
+        "        err.error=\"Invalid countPerSec\"",
+        "        table.insert(result,err)",
+        "    end",
+        "    local val = getValueByPath(jsonResp, '/json/qps/ConstantRate/countPerSec')",
+        "    local val = tonumber(val)",
+        "    if val>=5 and val < 10 then",
+        "        local err={}",
+        "        err.id=4",
+        "        err.success=false",
+        "        err.error=\"Invalid target host\"",
+        "        table.insert(result,err)",
+        "    end",
+        "    return result",
+        "end"
+      ]
+    }
+  },
+  "expectation": {
+    "qps": [3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
+    "assertionFailure": {
+      "1": [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      "2": [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      "4": [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      "3": [ 3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
+      "2147483647": [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    }
+  }
+}

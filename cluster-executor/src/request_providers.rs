@@ -1,7 +1,10 @@
 use anyhow::{anyhow, Result as AnyResult};
 use datagen::generate_data;
+use datagen::template::populate_data;
 use log::{debug, error, trace};
-use overload_http::{HttpReq, RandomDataRequest, RequestFile, RequestList, SplitRequestFile};
+use overload_http::{
+    HttpReq, JsonTemplate, RandomDataRequest, RequestFile, RequestList, SplitRequestFile,
+};
 use remoc::rtc::async_trait;
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::ConnectOptions;
@@ -84,7 +87,7 @@ impl RequestProvider for RequestFile {
         }
         let mut random_ids = repeat_with(|| fastrand::usize(1..=self.size))
             .take(n)
-            .fold(String::new(), |acc, r| acc + &r.to_string() + ",");
+            .fold(String::new(), |acc, r| acc + r.to_string().as_str() + ",");
         random_ids.pop(); //remove last comma
 
         let random_data: Vec<HttpReq> = sqlx::query_as(
@@ -237,19 +240,56 @@ impl RequestProvider for RandomDataRequest {
     }
 }
 
+#[async_trait]
+impl RequestProvider for JsonTemplate {
+    async fn get_n(&mut self, n: usize) -> AnyResult<Vec<HttpReq>> {
+        let mut requests = vec![];
+        for _ in 0..n {
+            let mut url = self.url.clone();
+            populate_data(&self.engine, &mut url, &self.url_template);
+            let mut body = None;
+            if !self.body.is_null() {
+                let mut value = self.body.clone();
+                populate_data(&self.engine, &mut value, &self.body_template);
+                body = Some(value.to_string());
+            }
+
+            let req = HttpReq {
+                id: "".to_string(),
+                method: self.method.clone(),
+                url: url.as_str().unwrap().to_string(),
+                body,
+                headers: self.headers.clone(),
+            };
+            requests.push(req);
+        }
+
+        Ok(requests)
+    }
+
+    fn size_hint(&self) -> usize {
+        usize::MAX
+    }
+
+    fn shared(&self) -> bool {
+        true
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod test {
     use super::*;
     use crate::rate_spec::RateScheme;
     use crate::RequestGenerator;
     use datagen::data_schema_from_value;
+    use datagen::template::build_engine;
     use http::Method;
     use overload_http::{ConstantRate, Linear, Scheme, Steps, Target};
     use regex::Regex;
-    use serde_json::Value;
+    use serde_json::{json, Value};
     use std::collections::HashMap;
     use std::ops::Deref;
-    use std::sync::Once;
+    use std::sync::{Arc, Once};
     use std::time::Duration;
     use tokio::fs::File;
     use tokio::io::AsyncWriteExt;
@@ -725,6 +765,24 @@ pub(crate) mod test {
             uri_param_schema: Some(url_schema),
         };
         let requests = request.get_n(5).await;
+        assert!(requests.is_ok());
+    }
+
+    #[tokio::test]
+    async fn json_template_request_provider() {
+        setup();
+        let url = json!("/anything");
+        let mut generator = JsonTemplate {
+            method: Method::POST,
+            url: url.clone(),
+            headers: Default::default(),
+            body: Value::Null,
+            url_template: datagen::template::parse_templates(&url),
+            body_template: Default::default(),
+            engine: Arc::new(build_engine()),
+        };
+        let requests = generator.get_n(5).await;
+        dbg!(&requests);
         assert!(requests.is_ok());
     }
 

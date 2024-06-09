@@ -1,14 +1,16 @@
 use crate::{data_dir_path, HttpReq};
-// use anyhow::Result as AnyResult;
 use datagen::DataSchema;
 use http::Method;
 use regex::Regex;
+use rhai::{Engine, AST};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use smol_str::SmolStr;
 use sqlx::SqliteConnection;
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
+use std::sync::Arc;
+use validator::{Validate, ValidationError, ValidationErrors};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RequestList {
@@ -185,9 +187,122 @@ impl RandomDataRequest {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(try_from = "JsonTemplateRequest", into = "JsonTemplateRequest")]
+pub struct JsonTemplate {
+    pub method: Method,
+    pub url: Value,
+    pub headers: HashMap<String, String>,
+    pub body: Value,
+    pub url_template: HashMap<String, AST>,
+    pub body_template: HashMap<String, AST>,
+    pub engine: Arc<Engine>,
+}
+
+#[derive(Debug, Validate, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct JsonTemplateRequest {
+    #[serde(with = "http_serde::method")]
+    pub method: Method,
+    #[validate(custom(function = "validate_url_json_val"))]
+    pub url: Value,
+    pub headers: HashMap<String, String>,
+    #[serde(default = "default_body")]
+    pub body: Value,
+}
+
+impl TryFrom<JsonTemplateRequest> for JsonTemplate {
+    type Error = ValidationErrors;
+
+    fn try_from(value: JsonTemplateRequest) -> Result<Self, ValidationErrors> {
+        value.validate()?;
+        let engine = datagen::template::build_engine();
+        let url_template = datagen::template::parse_templates(&value.url);
+        let body_template = datagen::template::parse_templates(&value.body);
+        Ok(Self {
+            method: value.method,
+            url: value.url,
+            headers: value.headers,
+            body: value.body,
+            url_template,
+            body_template,
+            engine: Arc::new(engine),
+        })
+    }
+}
+
+impl From<JsonTemplate> for JsonTemplateRequest {
+    fn from(value: JsonTemplate) -> Self {
+        Self {
+            method: value.method,
+            url: value.url,
+            headers: value.headers,
+            body: value.body,
+        }
+    }
+}
+
+const MESSAGE_VALIDATION_ERR_URL_STRING: &str = "Invalid url - requires string starting with /";
+
+fn validate_url_json_val(url: &Value) -> Result<(), ValidationError> {
+    if !url.is_string() {
+        return Err(ValidationError::new(MESSAGE_VALIDATION_ERR_URL_STRING));
+    }
+    let url = url.as_str().unwrap();
+    let template_fn = datagen::template::PATTERN_FUNCTION.is_match(url);
+    if !template_fn {
+        validate_url_str(url)?
+    }
+    Ok(())
+}
+
+#[inline]
+fn validate_url_str(url: &str) -> Result<(), ValidationError> {
+    if !url.starts_with('/') {
+        return Err(ValidationError::new(MESSAGE_VALIDATION_ERR_URL_STRING));
+    }
+    Ok(())
+}
+
 fn default_split_range() -> usize {
     0
 }
 fn default_usize_max() -> usize {
     2147483647 //i32::max
+}
+fn default_body() -> Value {
+    Value::Null
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::JsonTemplate;
+
+    #[test]
+    fn test_validator_json_template_ok() {
+        let json_str = r#"{
+              "method": "GET",
+              "url": "{{patternStr(\"/anything/[a-z]{4}\")}}",
+              "headers": {
+                "Host": "127.0.0.1:2080",
+                "Connection": "keep-alive"
+              }
+            }"#;
+        let result = serde_json::from_str::<JsonTemplate>(json_str);
+        assert!(result.is_ok())
+    }
+
+    #[test]
+    fn test_validator_json_template_ok_2() {
+        let json_str = r#"{
+              "method": "GET",
+              "url": "/anything",
+              "headers": {
+                "Host": "127.0.0.1:2080",
+                "Connection": "keep-alive"
+              }
+            }"#;
+        let result = serde_json::from_str::<JsonTemplate>(json_str);
+        assert!(result.is_ok())
+    }
 }

@@ -25,6 +25,7 @@
   - [RequestFile](request/file.md)
   - [RandomDataRequest](request/random.md)
   - [SplitRequestFile](request/split-file.md)
+  - [JsonTemplate](request/template.md)
 - [QPS Specification](qps/README.md)
   - [ConstantRate](qps/constant.md)
   - [Linear](qps/linear.md)
