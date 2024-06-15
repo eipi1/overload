@@ -25,7 +25,7 @@ use tokio::sync::RwLock;
 use tokio::time::timeout;
 
 use overload_http::{
-    ConcurrentConnectionRateSpec, Elastic, HttpReq, RateSpecEnum, Request, RequestSpecEnum, Target,
+    ConcurrentConnectionRateSpec, HttpReq, RateSpecEnum, Request, RequestSpecEnum, Target,
 };
 use overload_metrics::Metrics;
 use response_assert::{AssertionError, LuaAssertionResultSender, LuaExecSender, ResponseAssertion};
@@ -153,13 +153,11 @@ impl RequestGenerator {
         requests: ReqProvider,
         qps_scheme: Box<dyn RateScheme + Send>,
         target: Target,
-        concurrent_connection: Option<Box<dyn RateScheme + Send>>,
+        concurrent_connection: Box<dyn RateScheme + Send>,
         response_assertion: Option<ResponseAssertion>,
     ) -> Self {
         let time_scale: u8 = 1;
         let total = duration * time_scale as u32;
-        let concurrent_connection =
-            concurrent_connection.unwrap_or_else(|| Box::<Elastic>::default());
         RequestGenerator {
             duration,
             time_scale,
@@ -192,17 +190,12 @@ impl Into<RequestGenerator> for Request {
             RequestSpecEnum::JsonTemplateRequest(req) => Box::new(req),
         };
 
-        let connection_rate = if let Some(connection_rate_spec) = self.concurrent_connection {
-            let rate_spec: Box<dyn RateScheme + Send> = match connection_rate_spec {
-                ConcurrentConnectionRateSpec::ArraySpec(spec) => Box::new(spec),
-                ConcurrentConnectionRateSpec::ConstantRate(spec) => Box::new(spec),
-                ConcurrentConnectionRateSpec::Linear(spec) => Box::new(spec),
-                ConcurrentConnectionRateSpec::Elastic(spec) => Box::new(spec),
-                ConcurrentConnectionRateSpec::Steps(spec) => Box::new(spec),
-            };
-            Some(rate_spec)
-        } else {
-            None
+        let connection_rate: Box<dyn RateScheme + Send> = match self.concurrent_connection {
+            ConcurrentConnectionRateSpec::ArraySpec(spec) => Box::new(spec),
+            ConcurrentConnectionRateSpec::ConstantRate(spec) => Box::new(spec),
+            ConcurrentConnectionRateSpec::Linear(spec) => Box::new(spec),
+            ConcurrentConnectionRateSpec::Elastic(spec) => Box::new(spec),
+            ConcurrentConnectionRateSpec::Steps(spec) => Box::new(spec),
         };
 
         RequestGenerator::new(

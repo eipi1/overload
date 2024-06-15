@@ -142,7 +142,7 @@ pub struct Request {
     pub target: Target,
     pub req: RequestSpecEnum,
     pub qps: RateSpecEnum,
-    pub concurrent_connection: Option<ConcurrentConnectionRateSpec>,
+    pub concurrent_connection: ConcurrentConnectionRateSpec,
     pub connection_keep_alive: ConnectionKeepAlive,
     pub histogram_buckets: SmallVec<[f64; 6]>,
     pub response_assertion: Option<ResponseAssertion>,
@@ -157,7 +157,8 @@ pub struct RequestShadow {
     pub target: Target,
     pub req: RequestSpecEnum,
     pub qps: RateSpecEnum,
-    pub concurrent_connection: Option<ConcurrentConnectionRateSpec>,
+    #[serde(default = "default_concurrent_connection")]
+    pub concurrent_connection: ConcurrentConnectionRateSpec,
     #[serde(default)]
     pub connection_keep_alive: ConnectionKeepAlive,
     #[serde(default = "default_histogram_bucket")]
@@ -381,6 +382,10 @@ pub fn default_histogram_bucket() -> SmallVec<[f64; 6]> {
 
 pub fn default_generation_mode() -> LoadGenerationMode {
     LoadGenerationMode::Immediate
+}
+
+pub fn default_concurrent_connection() -> ConcurrentConnectionRateSpec {
+    ConcurrentConnectionRateSpec::Elastic(Elastic::default())
 }
 
 fn uuid() -> String {
