@@ -93,7 +93,7 @@ impl LoadGenerationLogic for LoadGenerationMode {
             LoadGenerationMode::Batch { .. } => {
                 unimplemented!()
             }
-            LoadGenerationMode::Immediate => 65535,
+            LoadGenerationMode::Immediate => u16::MAX as usize,
         }
     }
 
@@ -182,7 +182,7 @@ async fn handle_connection_from_primary(
 
     let elastic_pool = matches!(
         request.concurrent_connection,
-        Some(ConcurrentConnectionRateSpec::Elastic(_))
+        ConcurrentConnectionRateSpec::Elastic(_)
     );
     let buckets = request.histogram_buckets.clone();
     let metrics = metrics_factory
@@ -327,7 +327,7 @@ async fn handle_connection_from_primary_v2(
 
     let elastic_pool = matches!(
         request.concurrent_connection,
-        Some(ConcurrentConnectionRateSpec::Elastic(_))
+        ConcurrentConnectionRateSpec::Elastic(_)
     );
 
     let buckets = request.histogram_buckets.clone();
@@ -538,7 +538,10 @@ async fn get_new_queue_pool(
     keep_alive: ConnectionKeepAlive,
     elastic_pool: bool,
 ) -> QueuePool {
-    debug!("Creating new pool for: {}", &host_port);
+    debug!(
+        "Creating new pool for: {}, elastic: {elastic_pool}",
+        &host_port
+    );
     QueuePool::new(host_port, keep_alive, elastic_pool)
 }
 

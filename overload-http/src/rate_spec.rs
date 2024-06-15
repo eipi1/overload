@@ -30,9 +30,17 @@ impl Default for Bounded {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Elastic {
-    max: u32,
+    pub(crate) max: u32,
+}
+
+impl Default for Elastic {
+    fn default() -> Self {
+        Self {
+            max: u16::MAX as u32,
+        }
+    }
 }
 
 /// Increase QPS linearly as per equation

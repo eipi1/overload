@@ -284,7 +284,7 @@ pub(crate) mod test {
     use datagen::data_schema_from_value;
     use datagen::template::build_engine;
     use http::Method;
-    use overload_http::{ConstantRate, Linear, Scheme, Steps, Target};
+    use overload_http::{ConstantRate, Elastic, Linear, Scheme, Steps, Target};
     use regex::Regex;
     use serde_json::{json, Value};
     use std::collections::HashMap;
@@ -417,7 +417,7 @@ pub(crate) mod test {
                 port: 8080,
                 protocol: Scheme::HTTP,
             },
-            None,
+            Box::<Elastic>::default(),
             None,
         );
         let ret = generator.next().await;
@@ -444,7 +444,7 @@ pub(crate) mod test {
                 port: 8080,
                 protocol: Scheme::HTTP,
             },
-            None,
+            Box::<Elastic>::default(),
             None,
         );
         let ret = generator.next().await;
@@ -470,7 +470,7 @@ pub(crate) mod test {
                 port: 8080,
                 protocol: Scheme::HTTP,
             },
-            None,
+            Box::<Elastic>::default(),
             None,
         );
         let ret = generator.next().await;
@@ -493,7 +493,7 @@ pub(crate) mod test {
                 port: 8080,
                 protocol: Scheme::HTTP,
             },
-            None,
+            Box::<Elastic>::default(),
             None,
         );
         let ret = generator.next().await;
@@ -517,7 +517,7 @@ pub(crate) mod test {
                 port: 8080,
                 protocol: Scheme::HTTP,
             },
-            None,
+            Box::<Elastic>::default(),
             None,
         );
         let arg = generator.next().await.unwrap();
@@ -552,11 +552,11 @@ pub(crate) mod test {
                 port: 8080,
                 protocol: Scheme::HTTP,
             },
-            Some(Box::new(Linear {
+            Box::new(Linear {
                 a: 0.5,
                 b: 1,
                 max: 10,
-            })),
+            }),
             None,
         );
         let arg = generator.next().await.unwrap();
