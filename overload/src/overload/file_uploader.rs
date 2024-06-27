@@ -12,19 +12,20 @@ use std::task::{Context, Poll};
 
 use crate::valid_sqlite;
 use anyhow::Error as AnyError;
+use async_compression::tokio::bufread::GzipDecoder;
 use bytes::{Buf, Bytes};
 use csv_async::{AsyncDeserializer, AsyncReaderBuilder};
 use futures_core::ready;
 use futures_util::{Stream, TryStreamExt};
 use http::{Method, Uri};
-use log::{error, trace};
+use log::{debug, error, trace};
 use overload_http::HttpReq;
 use overload_http::{GenericError, GenericResponse};
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{ConnectOptions, Connection};
 use tokio::fs::File;
-use tokio::io::{AsyncRead, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncWriteExt, BufReader};
 use tokio_stream::StreamExt;
 use tokio_util::io::StreamReader;
 use uuid::Uuid;
@@ -207,6 +208,7 @@ where
 pub async fn save_sqlite<S, B>(
     http_stream: S,
     data_dir: &str,
+    content_encoding: String,
 ) -> Result<GenericResponse<String>, GenericError>
 where
     S: Stream<Item = Result<B, warp::Error>> + Unpin + Send + Sync,
@@ -230,8 +232,15 @@ where
         std::io::Error::new(std::io::ErrorKind::Other, e)
     })
     .into_async_read();
-    let mut tokio_async_read = to_tokio_async_read(async_read);
-    tokio::io::copy(&mut tokio_async_read, &mut data_file).await?;
+    let mut reader = to_tokio_async_read(async_read);
+    if content_encoding == "gzip" {
+        debug!("extracting gzipped file");
+        let mut gzip_reader = GzipDecoder::new(BufReader::new(reader));
+        tokio::io::copy(&mut gzip_reader, &mut data_file).await?;
+    } else {
+        tokio::io::copy(&mut reader, &mut data_file).await?;
+    }
+
     let _ = data_file.flush().await;
     let valid_count = valid_sqlite(data_file_destination.to_str().unwrap()).await?;
     Ok(file_upload_success_response(file_name, valid_count))

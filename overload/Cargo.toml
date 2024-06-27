@@ -73,7 +73,7 @@ version = "0.3"
 version = "1.0"
 
 [dependencies.tokio]
-workspace=true
+workspace = true
 features = ["rt-multi-thread", "macros", "fs", "io-util", "sync", "parking_lot"]
 
 [dependencies.tokio-stream]
@@ -167,8 +167,12 @@ version = "0.1"
 [dependencies.tracing-subscriber]
 version = "0.2"
 
+[dependencies.async-compression]
+version = "0.4"
+features = ["gzip", "tokio"]
+
 [dev-dependencies.tokio]
-workspace=true
+workspace = true
 features = ["rt-multi-thread", "macros", "fs", "io-util", "time", "test-util"]
 
 [dev-dependencies.tokio-test]

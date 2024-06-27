@@ -1,3 +1,6 @@
+//! Standalone mode is a wrapper around cluster mode, instead of connecting to secondary nodes,
+//! it connects localhost
+
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -7,8 +10,6 @@ use tokio_stream::StreamExt;
 
 use overload_http::Request;
 
-///! Standalone mode is a wrapper around cluster mode, instead of connecting to secondary nodes,
-///! it connects localhost
 use crate::{
     get_sender_for_host_port, log_error, remoc_port, send_end_msg, send_metadata_with_primary,
     send_request_to_secondary, JobStatus, MessageFromPrimary, RateMessage, RequestGenerator,
