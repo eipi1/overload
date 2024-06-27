@@ -135,6 +135,9 @@ pub fn upload_csv_file(
 pub fn upload_sqlite_file(
     cluster: Arc<Cluster>,
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+    let enc = warp::header::<String>(http::header::CONTENT_ENCODING.as_str())
+        .map(Some)
+        .or_else(|_| async { Ok::<(Option<String>,), std::convert::Infallible>((None,)) });
     warp::post()
         .and(
             warp::path("request-file")
@@ -143,10 +146,11 @@ pub fn upload_sqlite_file(
         )
         .and(warp::body::content_length_limit(1024 * 1024 * 1024))
         .and(warp::header::<u64>("content-length"))
+        .and(enc)
         .and(warp::body::stream())
-        .and_then(move |content_len, stream| {
+        .and_then(move |content_len, content_encoding, stream| {
             let tmp = cluster.clone();
-            async move { upload_sqlite_file_handler(stream, tmp, content_len).await }
+            async move { upload_sqlite_file_handler(stream, tmp, content_len, content_encoding).await }
         })
 }
 
@@ -279,6 +283,7 @@ async fn upload_sqlite_file_handler<S, B>(
     data: S,
     cluster: Arc<Cluster>,
     content_len: u64,
+    content_encoding: Option<String>,
 ) -> Result<impl warp::Reply, Infallible>
 where
     S: Stream<Item = Result<B, warp::Error>> + Unpin + Send + Sync + 'static,
@@ -286,7 +291,14 @@ where
 {
     let path = data_dir_path();
     let data_dir = path.to_str().unwrap();
-    let result = overload::cluster::save_sqlite(data, data_dir, cluster, content_len).await;
+    let result = overload::cluster::save_sqlite(
+        data,
+        data_dir,
+        cluster,
+        content_len,
+        content_encoding.unwrap_or("bytes".to_string()),
+    )
+    .await;
     match result {
         Ok(r) => Ok(reply::with_status(reply::json(&r), StatusCode::OK)),
         Err(e) => Ok(reply::with_status(

@@ -9,7 +9,7 @@ curl --location --request POST '{overload_host}:3030/request-file/sqlite' \
 --data-binary '@/path/to/requests.sqlite'
 ```
 
-### CSV format
+### CSV format (Deprecated, use sqlite instead)
 It's not recommended to use CSV format for large file as Overload have to convert CSV to Sqlite. The conversion
 process may take time.
 
@@ -30,7 +30,7 @@ The CSV should have header included.
 ### Sqlite format
 The recommended format for large request file.
 
-A way to convert CSV to Sqlite is follows -
+One of the many ways to convert CSV to Sqlite is follows -
 
 ```shell
 sqlite3 sample-request.sqlite "VACUUM;"
@@ -51,6 +51,26 @@ POST|/sample/path/5|{"sample":"json body","host":"127.0.0.1","port":2080,"protoc
 GET|/sample/path/6||{"Connection":"keep-alive"}
 GET|/sample/path/7||{"Connection":"keep-alive"}
 sqlite> 
+```
+
+To upload using curl -
+```shell
+curl --location '{overload_host}:3030/request-file/sqlite' \
+--header 'Content-Type: application/octet-stream' \
+--data-binary '@/path/to/test-requests-post.sqlite'
+```
+
+### Support for Gzip (version: SNAPSHOT)
+To allow larger and faster upload, Overload also supports gzipped sqlite file, but requires "Content-Encoding: gzip" header in the request. The uploaded
+sqlite file will be unzipped in the server.
+
+To upload using curl
+```shell
+cat /path/to/test-requests-post.sqlite | gzip | \
+curl -vi --location '{overload_host}:3030/request-file/sqlite' \
+--header "Content-Encoding: gzip" \
+--header 'Content-Type: application/octet-stream' \
+--data-binary @-
 ```
 
 ### Response

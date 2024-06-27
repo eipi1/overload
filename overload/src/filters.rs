@@ -76,6 +76,9 @@ pub fn upload_csv_file() -> impl Filter<Extract = impl warp::Reply, Error = warp
 
 pub fn upload_sqlite_file(
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+    let enc = warp::header::<String>(http::header::CONTENT_ENCODING.as_str())
+        .map(Some)
+        .or_else(|_| async { Ok::<(Option<String>,), std::convert::Infallible>((None,)) });
     warp::post()
         .and(
             warp::path("request-file")
@@ -83,6 +86,7 @@ pub fn upload_sqlite_file(
                 .and(warp::path::end()),
         )
         .and(warp::body::content_length_limit(1024 * 1024 * 1024))
+        .and(enc)
         .and(warp::body::stream())
         .and_then(upload_sqlite_file_handler)
 }
@@ -131,14 +135,22 @@ where
 }
 
 /// should use shared storage, no need to forward upload request
-async fn upload_sqlite_file_handler<S, B>(data: S) -> Result<impl warp::Reply, Infallible>
+async fn upload_sqlite_file_handler<S, B>(
+    content_encoding: Option<String>,
+    data: S,
+) -> Result<impl warp::Reply, Infallible>
 where
     S: Stream<Item = Result<B, warp::Error>> + Unpin + Send + Sync,
     B: Buf + Send + Sync,
 {
     let path = data_dir_path();
     let data_dir = path.to_str().unwrap();
-    let result = overload::file_uploader::save_sqlite(data, data_dir).await;
+    let result = overload::file_uploader::save_sqlite(
+        data,
+        data_dir,
+        content_encoding.unwrap_or("bytes".to_string()),
+    )
+    .await;
     match result {
         Ok(r) => Ok(reply::with_status(reply::json(&r), StatusCode::OK)),
         Err(e) => Ok(reply::with_status(

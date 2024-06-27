@@ -223,6 +223,7 @@ pub async fn save_sqlite<S, B>(
     data_dir: &str,
     cluster: Arc<Cluster>,
     content_len: u64,
+    content_encoding: String,
 ) -> GenericResult<String>
 where
     S: Stream<Item = Result<B, warp::Error>> + Unpin + Send + Sync + 'static,
@@ -232,7 +233,7 @@ where
         Err(inactive_cluster_error())
     } else if cluster.is_primary().await {
         debug!("[handle_file_upload] primary node, saving the file");
-        crate::file_uploader::save_sqlite(data, data_dir).await
+        crate::file_uploader::save_sqlite(data, data_dir, content_encoding).await
     } else {
         // forward request to primary
         let client = Client::new();
@@ -249,6 +250,7 @@ where
                 .uri(url.to_string())
                 .method("POST")
                 .header(CONTENT_LENGTH, content_len)
+                .header(http::header::CONTENT_ENCODING, content_encoding)
                 .body(Body::from(stream))?;
             let resp = client.request(request).await?;
             let bytes = hyper::body::to_bytes(resp.into_body()).await?.reader();
