@@ -22,7 +22,7 @@ version = "1.0"
 version = "1.0"
 
 [dependencies.http]
-version = "0.2"
+workspace = true
 
 [dependencies.jsonschema]
 version = "0.16"
@@ -37,6 +37,3 @@ version = "0.4"
 [dependencies.tokio]
 workspace = true
 features = ["sync"]
-
-[dependencies.mlua]
-version = "0.8"
