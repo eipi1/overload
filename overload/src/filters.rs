@@ -280,7 +280,9 @@ mod standalone_mode_tests {
         info!("using ports: {}, {}", http_port, remoc_port);
         //wait a bit for bootstrapping
         tokio::time::sleep(Duration::from_millis(50)).await;
-        std::env::set_var(ENV_NAME_REMOC_PORT, remoc_port.to_string());
+        unsafe {
+            std::env::set_var(ENV_NAME_REMOC_PORT, remoc_port.to_string());
+        }
 
         let (mock_server, url) = ASYNC_ONCE_HTTP_MOCK.get_or_init(init_http_mock).await;
 
@@ -329,7 +331,9 @@ mod standalone_mode_tests {
         // let (tx, http_port, remoc_port, handle) = init_env().await;
         // info!("handle status: {}", handle.is_finished());
         info!("using ports: {}, {}", http_port, remoc_port);
-        std::env::set_var(ENV_NAME_REMOC_PORT, remoc_port.to_string());
+        unsafe {
+            std::env::set_var(ENV_NAME_REMOC_PORT, remoc_port.to_string());
+        }
 
         let (mock_server, url) = ASYNC_ONCE_HTTP_MOCK.get_or_init(init_http_mock).await;
 
@@ -373,7 +377,9 @@ mod standalone_mode_tests {
 
         let (tx, http_port, remoc_port) = init_env().await;
         info!("using ports: {}, {}", http_port, remoc_port);
-        std::env::set_var(ENV_NAME_REMOC_PORT, remoc_port.to_string());
+        unsafe {
+            std::env::set_var(ENV_NAME_REMOC_PORT, remoc_port.to_string());
+        }
 
         let (mock_server, url) = ASYNC_ONCE_HTTP_MOCK.get_or_init(init_http_mock).await;
 
@@ -422,7 +428,9 @@ mod standalone_mode_tests {
         info!("using ports: {}, {}", http_port, remoc_port);
         //wait a bit for bootstrapping
         tokio::time::sleep(Duration::from_millis(50)).await;
-        std::env::set_var(ENV_NAME_REMOC_PORT, remoc_port.to_string());
+        unsafe {
+            std::env::set_var(ENV_NAME_REMOC_PORT, remoc_port.to_string());
+        }
 
         let (mock_server, url) = ASYNC_ONCE_HTTP_MOCK.get_or_init(init_http_mock).await;
 
@@ -466,7 +474,9 @@ mod standalone_mode_tests {
         info!("using ports: {}, {}", http_port, remoc_port);
         //wait a bit for bootstrapping
         tokio::time::sleep(Duration::from_millis(50)).await;
-        std::env::set_var(ENV_NAME_REMOC_PORT, remoc_port.to_string());
+        unsafe {
+            std::env::set_var(ENV_NAME_REMOC_PORT, remoc_port.to_string());
+        }
 
         let (mock_server, url) = ASYNC_ONCE_HTTP_MOCK.get_or_init(init_http_mock).await;
 
@@ -526,7 +536,9 @@ mod standalone_mode_tests {
 
         let (tx, http_port, remoc_port) = init_env().await;
         info!("using ports: {}, {}", http_port, remoc_port);
-        std::env::set_var(ENV_NAME_REMOC_PORT, remoc_port.to_string());
+        unsafe {
+            std::env::set_var(ENV_NAME_REMOC_PORT, remoc_port.to_string());
+        }
 
         let (mock_server, url) = ASYNC_ONCE_HTTP_MOCK.get_or_init(init_http_mock).await;
 

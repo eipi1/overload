@@ -130,11 +130,17 @@ features = ["gzip", "tokio"]
 workspace = true
 features = ["rt-multi-thread", "macros", "fs", "io-util", "time", "test-util"]
 
+[dev-dependencies.more-asserts]
+version = "0.3"
+
 [dev-dependencies.httpmock]
 version = "0.6"
 
 [dev-dependencies.sha2]
 version = "0.10"
+
+[dev-dependencies.portpicker]
+version = "0.1"
 
 [dev-dependencies.test-case]
 version = "2.2"
