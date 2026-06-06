@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result as AnyResult};
+use anyhow::{Result as AnyResult, anyhow};
 use datagen::generate_data;
 use datagen::template::populate_data;
 use log::{debug, error, trace};
@@ -6,8 +6,8 @@ use overload_http::{
     HttpReq, JsonTemplate, RandomDataRequest, RequestFile, RequestList, SplitRequestFile,
 };
 use remoc::rtc::async_trait;
-use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::ConnectOptions;
+use sqlx::sqlite::SqliteConnectOptions;
 use std::cmp::{max, min};
 use std::iter::repeat_with;
 use std::str::FromStr;
@@ -148,8 +148,10 @@ impl RequestProvider for SplitRequestFile {
             if self.range_end_inclusive == 0 {
                 self.range_end_inclusive = self.size;
             }
-            trace!("[SplitRequestFile] - init - range_start_inclusive:{}, range_end_inclusive:{}, next_read_cursor:{}", 
-                self.range_start_inclusive, self.range_end_inclusive, self.next_read_cursor)
+            trace!(
+                "[SplitRequestFile] - init - range_start_inclusive:{}, range_end_inclusive:{}, next_read_cursor:{}",
+                self.range_start_inclusive, self.range_end_inclusive, self.next_read_cursor
+            )
         }
 
         let mut data_need = n;
@@ -208,16 +210,16 @@ impl RequestProvider for RandomDataRequest {
         for _ in 0..n {
             let mut body = Option::None;
             let mut url = self.url.clone();
-            if let Some(schema) = &self.uri_param_schema {
-                if let Some(positions) = &self.url_param_pos {
-                    let data = generate_data(schema);
-                    RandomDataRequest::substitute_param_with_data(&mut url, positions, data)
-                }
+            if let Some(schema) = &self.uri_param_schema
+                && let Some(positions) = &self.url_param_pos
+            {
+                let data = generate_data(schema);
+                RandomDataRequest::substitute_param_with_data(&mut url, positions, data)
             }
-            if matches!(self.method, http::Method::POST) {
-                if let Some(schema) = &self.body_schema {
-                    body = Some(generate_data(schema).to_string());
-                }
+            if matches!(self.method, http::Method::POST)
+                && let Some(schema) = &self.body_schema
+            {
+                body = Some(generate_data(schema).to_string());
             }
             let req = HttpReq {
                 id: "".to_string(),
@@ -279,14 +281,14 @@ impl RequestProvider for JsonTemplate {
 #[cfg(test)]
 pub(crate) mod test {
     use super::*;
-    use crate::rate_spec::RateScheme;
     use crate::RequestGenerator;
+    use crate::rate_spec::RateScheme;
     use datagen::data_schema_from_value;
     use datagen::template::build_engine;
     use http::Method;
     use overload_http::{ConstantRate, Elastic, Linear, Scheme, Steps, Target};
     use regex::Regex;
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
     use std::collections::HashMap;
     use std::ops::Deref;
     use std::sync::{Arc, Once};
@@ -399,11 +401,13 @@ pub(crate) mod test {
         "#;
         let steps = serde_json::from_str::<Steps>(json_str);
         assert!(steps.is_err());
-        assert!(steps
-            .err()
-            .unwrap()
-            .to_string()
-            .starts_with("start(9) can not be greater than or equal to end(9)"));
+        assert!(
+            steps
+                .err()
+                .unwrap()
+                .to_string()
+                .starts_with("start(9) can not be greater than or equal to end(9)")
+        );
     }
 
     #[tokio::test]
@@ -787,8 +791,7 @@ pub(crate) mod test {
     }
 
     async fn create_sqlite_file() -> anyhow::Result<()> {
-        let sqlite_base64 =
-            "U1FMaXRlIGZvcm1hdCAzABAAAgIAQCAgAAAAAgAAAAIAAAAAAAAAAAAAAAEAAAAEAAAAAAAAAAAA\
+        let sqlite_base64 = "U1FMaXRlIGZvcm1hdCAzABAAAgIAQCAgAAAAAgAAAAIAAAAAAAAAAAAAAAEAAAAEAAAAAAAAAAAA\
 AAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAC5PfA0AAAABD0sAD0sAAAAA\
 AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\
 AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\
@@ -933,8 +936,14 @@ IjoicmFuZG9tIGRhdGEiLCJzZWNvbmQta2V5IjoibW9yZSBkYXRhIn17IkF1dGhvcml6YXRpb24i\
 OiJCZWFyZXIgMTIzIn0oAgVJEwARaHR0cDovL2h0dHBiaW4ub3JnL2FueXRoaW5nLzEzR0VUe30o\
 AQVJEwARaHR0cDovL2h0dHBiaW4ub3JnL2FueXRoaW5nLzExR0VUe30=";
         let mut file = File::create("test-data.sqlite").await?;
-        file.write_all(base64::decode(sqlite_base64).unwrap().as_slice())
-            .await?;
+        use base64::Engine;
+        file.write_all(
+            base64::engine::general_purpose::STANDARD
+                .decode(sqlite_base64)
+                .unwrap()
+                .as_slice(),
+        )
+        .await?;
         Ok(())
     }
 }

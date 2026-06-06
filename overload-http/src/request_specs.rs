@@ -1,8 +1,8 @@
-use crate::{data_dir_path, HttpReq};
+use crate::{HttpReq, data_dir_path};
 use datagen::DataSchema;
 use http::Method;
 use regex::Regex;
-use rhai::{Engine, AST};
+use rhai::{AST, Engine};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use smol_str::SmolStr;

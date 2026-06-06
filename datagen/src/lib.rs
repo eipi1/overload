@@ -4,14 +4,14 @@
 pub mod template;
 
 use crate::DataSchema::Empty;
-use anyhow::{anyhow, Error as AnyError, Result as AnyResult};
+use anyhow::{Error as AnyError, Result as AnyResult, anyhow};
 use log::{error, trace, warn};
 use rand::thread_rng;
 use regex_generate::generate_from_hir;
-use regex_syntax::hir::Hir;
 use regex_syntax::Parser;
+use regex_syntax::hir::Hir;
 use serde::{Deserialize, Serialize, Serializer};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 use std::convert::TryFrom;
 
@@ -324,15 +324,14 @@ fn validate_constraints(
             properties
         )));
     }
-    if let Some(min) = min {
-        if let Some(max) = max {
-            if max.as_i64() < min.as_i64() {
-                return Err(anyhow!(format!(
-                    "invalid constraints - minimum > maximum - {}",
-                    properties
-                )));
-            }
-        }
+    if let Some(min) = min
+        && let Some(max) = max
+        && max.as_i64() < min.as_i64()
+    {
+        return Err(anyhow!(format!(
+            "invalid constraints - minimum > maximum - {}",
+            properties
+        )));
     }
 
     // validated length
@@ -344,15 +343,14 @@ fn validate_constraints(
             properties
         )));
     }
-    if let Some(min) = min {
-        if let Some(max) = max {
-            if max.as_i64() < min.as_i64() {
-                return Err(anyhow!(format!(
-                    "invalid constraints - minLength > maxLength - {}",
-                    properties
-                )));
-            }
-        }
+    if let Some(min) = min
+        && let Some(max) = max
+        && max.as_i64() < min.as_i64()
+    {
+        return Err(anyhow!(format!(
+            "invalid constraints - minLength > maxLength - {}",
+            properties
+        )));
     }
     Ok(())
 }
@@ -532,28 +530,28 @@ fn generate_string_data(constraints: &HashMap<Keywords, Constraints>) -> String 
             .unwrap_or("Error: invalid constant constraint")
             .into();
     }
-    if let Some(constraint) = constraints.get(&Keywords::Pattern) {
-        if let Some((pattern, hir)) = constraint.as_pattern() {
-            let mut rng = thread_rng();
-            let mut buffer: Vec<u8> = vec![];
-            return match hir.as_ref() {
-                Some(hir) => generate_from_hir(&mut buffer, hir, &mut rng, PATTER_MAX_REPEAT)
+    if let Some(constraint) = constraints.get(&Keywords::Pattern)
+        && let Some((pattern, hir)) = constraint.as_pattern()
+    {
+        let mut rng = thread_rng();
+        let mut buffer: Vec<u8> = vec![];
+        return match hir.as_ref() {
+            Some(hir) => generate_from_hir(&mut buffer, hir, &mut rng, PATTER_MAX_REPEAT)
+                .ok()
+                .and_then(|_| String::from_utf8(buffer).ok())
+                .unwrap_or(format!("Couldn't generate string for: {}", pattern)),
+            None => {
+                log::warn!("Hir not pre-generated for pattern constraint");
+                Parser::new()
+                    .parse(pattern)
                     .ok()
+                    .and_then(|ir| {
+                        generate_from_hir(&mut buffer, &ir, &mut rng, PATTER_MAX_REPEAT).ok()
+                    })
                     .and_then(|_| String::from_utf8(buffer).ok())
-                    .unwrap_or(format!("Couldn't generate string for: {}", pattern)),
-                None => {
-                    log::warn!("Hir not pre-generated for pattern constraint");
-                    Parser::new()
-                        .parse(pattern)
-                        .ok()
-                        .and_then(|ir| {
-                            generate_from_hir(&mut buffer, &ir, &mut rng, PATTER_MAX_REPEAT).ok()
-                        })
-                        .and_then(|_| String::from_utf8(buffer).ok())
-                        .unwrap_or(format!("Couldn't generate string for: {}", pattern))
-                }
-            };
-        }
+                    .unwrap_or(format!("Couldn't generate string for: {}", pattern))
+            }
+        };
     }
     let min = constraints
         .get(&Keywords::MinLength)
@@ -572,10 +570,10 @@ fn generate_string_data(constraints: &HashMap<Keywords, Constraints>) -> String 
 
 #[cfg(test)]
 mod test {
-    use crate::{data_schema_from_value, generate_data, Constraints, DataSchema, Keywords};
+    use crate::{Constraints, DataSchema, Keywords, data_schema_from_value, generate_data};
     use log::info;
     use regex::Regex;
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
     use std::str::FromStr;
     use std::sync::Once;
 
@@ -984,11 +982,13 @@ mod test {
         "#;
         let schema = serde_json::from_str::<DataSchema>(data);
         assert!(schema.is_err());
-        assert!(schema
-            .err()
-            .unwrap()
-            .to_string()
-            .contains("minimum > maximum"));
+        assert!(
+            schema
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("minimum > maximum")
+        );
     }
 
     #[test]
@@ -1021,11 +1021,13 @@ mod test {
         "#;
         let schema = serde_json::from_str::<DataSchema>(data);
         assert!(schema.is_err());
-        assert!(schema
-            .err()
-            .unwrap()
-            .to_string()
-            .contains("minLength > maxLength"));
+        assert!(
+            schema
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("minLength > maxLength")
+        );
     }
 
     #[test]
@@ -1057,11 +1059,13 @@ mod test {
         "#;
         let schema = serde_json::from_str::<DataSchema>(data);
         assert!(schema.is_err());
-        assert!(schema
-            .err()
-            .unwrap()
-            .to_string()
-            .contains("requires both minimum & maximum"));
+        assert!(
+            schema
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("requires both minimum & maximum")
+        );
     }
 
     #[test]
@@ -1093,11 +1097,13 @@ mod test {
         "#;
         let schema = serde_json::from_str::<DataSchema>(data);
         assert!(schema.is_err());
-        assert!(schema
-            .err()
-            .unwrap()
-            .to_string()
-            .contains("requires both minimum & maximum"));
+        assert!(
+            schema
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("requires both minimum & maximum")
+        );
     }
 
     #[test]
@@ -1129,11 +1135,13 @@ mod test {
         "#;
         let schema = serde_json::from_str::<DataSchema>(data);
         assert!(schema.is_err());
-        assert!(schema
-            .err()
-            .unwrap()
-            .to_string()
-            .contains("requires both minLength & maxLength"));
+        assert!(
+            schema
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("requires both minLength & maxLength")
+        );
     }
 
     #[test]
@@ -1165,11 +1173,13 @@ mod test {
         "#;
         let schema = serde_json::from_str::<DataSchema>(data);
         assert!(schema.is_err());
-        assert!(schema
-            .err()
-            .unwrap()
-            .to_string()
-            .contains("requires both minLength & maxLength"));
+        assert!(
+            schema
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("requires both minLength & maxLength")
+        );
     }
 
     #[test]

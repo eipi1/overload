@@ -8,13 +8,13 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use anyhow::Result as AnyResult;
-use futures_core::future::BoxFuture;
 use futures_core::Stream;
+use futures_core::future::BoxFuture;
 use futures_util::FutureExt;
 use http::{StatusCode, Uri};
+use hyper::Error;
 use hyper::body::Bytes;
 use hyper::client::conn::ResponseFuture;
-use hyper::Error;
 use lazy_static::lazy_static;
 use log::{error, info, trace};
 use once_cell::sync::OnceCell;
@@ -291,8 +291,7 @@ impl Future for HttpRequestFuture<'_> {
                     let elapsed = self.timer.unwrap().elapsed().as_millis() as f64;
                     trace!(
                         "HttpRequestFuture [{}] - body - Ready, elapsed={}",
-                        &self.job_id,
-                        &elapsed
+                        &self.job_id, &elapsed
                     );
                     if let Ok(body) = body {
                         if self.assertion.simple_assertions.is_some() {
@@ -329,9 +328,10 @@ impl Future for HttpRequestFuture<'_> {
                                         OriginalRequest::PlaceHolder => {}
                                     },
                                     Err(e) => {
-                                        error!("HttpRequestFuture [{}] - error - body can not convert to string - {}",
-                                            &self.job_id,
-                                            e.to_string())
+                                        error!(
+                                            "HttpRequestFuture [{}] - error - body can not convert to string - {}",
+                                            &self.job_id, e
+                                        )
                                     }
                                 }
                             }
@@ -364,9 +364,7 @@ impl Future for HttpRequestFuture<'_> {
                         let elapsed = self.timer.unwrap().elapsed().as_millis() as f64;
                         trace!(
                             "HttpRequestFuture [{}] - status: {:?}, elapsed: {}",
-                            &self.job_id,
-                            &self.status,
-                            &elapsed
+                            &self.job_id, &self.status, &elapsed
                         );
                         let status_str = status.as_str();
                         self.metrics.upstream_response_time(status_str, elapsed);
@@ -410,8 +408,7 @@ async fn do_lua_assertion(
     if let Err(e) = result {
         error!(
             "do_lua_assertion [{}] - error - failed to send to lua executor - {}",
-            &job_id,
-            e.to_string()
+            &job_id, e
         )
     }
 
@@ -425,16 +422,14 @@ async fn do_lua_assertion(
             Err(e) => {
                 error!(
                     "do_lua_assertion [{}] - error - receiver error - {}",
-                    &job_id,
-                    e.to_string()
+                    &job_id, e
                 )
             }
         },
         Err(e) => {
             error!(
                 "do_lua_assertion [{}] - error - receiver timeout - {}",
-                &job_id,
-                e.to_string()
+                &job_id, e
             )
         }
     }
@@ -454,8 +449,7 @@ async fn do_lua_assertion(
 fn do_simple_assertion(self_: &Pin<&mut HttpRequestFuture>, body: &Bytes) {
     trace!(
         "[HttpRequestFuture] [{}] - asserting - {:?}",
-        &self_.job_id,
-        &self_.assertion
+        &self_.job_id, &self_.assertion
     );
     let _ = serde_json::from_slice(body.as_ref())
         .map_err(|e| {

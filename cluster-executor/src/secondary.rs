@@ -3,11 +3,11 @@
 use crate::connection::{ConnectionKeepAlive, HttpConnection, QueuePool};
 use crate::request_providers::RequestProvider;
 use crate::{
-    data_dir_path, log_error, HttpRequestFuture, HttpRequestState, MessageFromPrimary, Metadata,
-    OriginalRequest, RateMessage, ReturnableConnection, CYCLE_LENGTH_IN_MILLIS,
-    CYCLE_LENGTH_IN_MILLIS_V2,
+    CYCLE_LENGTH_IN_MILLIS, CYCLE_LENGTH_IN_MILLIS_V2, HttpRequestFuture, HttpRequestState,
+    MessageFromPrimary, Metadata, OriginalRequest, RateMessage, ReturnableConnection,
+    data_dir_path, log_error,
 };
-use anyhow::{anyhow, Error as AnyError, Result as AnyResult};
+use anyhow::{Error as AnyError, Result as AnyResult, anyhow};
 use cluster_mode::Cluster;
 use common_env::wait_on_no_connection;
 use common_types::LoadGenerationMode;
@@ -20,14 +20,14 @@ use hyper::body::{Bytes, HttpBody};
 use hyper::{Body, Client};
 use lazy_static::lazy_static;
 use log::{debug, error, info, trace, warn};
-use lua_helper::{init_lua, load_lua_func, load_lua_func_with_registry, LuaAssertionResult};
+use lua_helper::{LuaAssertionResult, init_lua, load_lua_func, load_lua_func_with_registry};
 use mlua::Value::Function;
 use once_cell::sync::OnceCell;
 use overload_http::{
-    ConcurrentConnectionRateSpec, HttpReq, Request, RequestSpecEnum, Target,
-    PATH_REQUEST_DATA_FILE_DOWNLOAD,
+    ConcurrentConnectionRateSpec, HttpReq, PATH_REQUEST_DATA_FILE_DOWNLOAD, Request,
+    RequestSpecEnum, Target,
 };
-use overload_metrics::{Metrics, MetricsFactory, METRICS_FACTORY};
+use overload_metrics::{METRICS_FACTORY, Metrics, MetricsFactory};
 use regex::Regex;
 use remoc::rch;
 use remoc::rch::base::{Receiver, RecvError};
@@ -45,10 +45,10 @@ use std::{env, io};
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
+use tokio::sync::RwLock;
 use tokio::sync::mpsc::{UnboundedReceiver as TkMpscReceiver, UnboundedSender as TkMpscSender};
 use tokio::sync::oneshot::Sender;
 use tokio::sync::oneshot::{Receiver as TkOneShotReceiver, Sender as TkOneShotSender};
-use tokio::sync::RwLock;
 use tokio::time::{sleep, timeout};
 use tokio_stream::StreamExt;
 use url::Url;
@@ -231,59 +231,66 @@ async fn handle_connection_from_primary(
                 error_exit = true;
                 break;
             }
-            Ok(msg) => {
-                match msg {
-                    None => {
-                        debug!("[handle_connection_from_primary] - None received, exiting loop");
+            Ok(msg) => match msg {
+                None => {
+                    debug!("[handle_connection_from_primary] - None received, exiting loop");
+                    break;
+                }
+                Some(msg) => match msg {
+                    MessageFromPrimary::Metadata(_) => {
+                        error!(
+                            "[handle_connection_from_primary] - [{}] - unexpected MessageFromPrimary::Request",
+                            &job_id
+                        );
+                    }
+                    MessageFromPrimary::Rates(rate) => {
+                        trace!("[handle_connection_from_primary] - {:?}", &rate);
+                        (prev_connection_count, time_offset) = handle_rate_msg(
+                            rate,
+                            prev_connection_count,
+                            &metrics,
+                            time_offset,
+                            job_id.clone(),
+                            &mut queue_pool,
+                            &mut request_spec,
+                            response_assertion.clone(),
+                            lua_executor_sender.clone(),
+                        )
+                        .await;
+                    }
+                    MessageFromPrimary::Stop => {
+                        stop = true;
                         break;
                     }
-                    Some(msg) => match msg {
-                        MessageFromPrimary::Metadata(_) => {
-                            error!("[handle_connection_from_primary] - [{}] - unexpected MessageFromPrimary::Request", &job_id);
-                        }
-                        MessageFromPrimary::Rates(rate) => {
-                            trace!("[handle_connection_from_primary] - {:?}", &rate);
-                            (prev_connection_count, time_offset) = handle_rate_msg(
-                                rate,
-                                prev_connection_count,
-                                &metrics,
-                                time_offset,
-                                job_id.clone(),
-                                &mut queue_pool,
-                                &mut request_spec,
-                                response_assertion.clone(),
-                                lua_executor_sender.clone(),
-                            )
-                            .await;
-                        }
-                        MessageFromPrimary::Stop => {
-                            stop = true;
-                            break;
-                        }
-                        MessageFromPrimary::Finished => {
-                            finish = true;
-                            stop = true;
-                            break;
-                        }
-                        MessageFromPrimary::Reset => {
-                            info!(
-                                "[handle_connection_from_primary] - [{}] - reset received",
-                                &job_id
+                    MessageFromPrimary::Finished => {
+                        finish = true;
+                        stop = true;
+                        break;
+                    }
+                    MessageFromPrimary::Reset => {
+                        info!(
+                            "[handle_connection_from_primary] - [{}] - reset received",
+                            &job_id
+                        );
+                        reset = true;
+                    }
+                    MessageFromPrimary::Request(mut req) => {
+                        if !reset {
+                            error!(
+                                "[handle_connection_from_primary] - [{}] - unexpected message - {:?}",
+                                &job_id, req
                             );
-                            reset = true;
                         }
-                        MessageFromPrimary::Request(mut req) => {
-                            if !reset {
-                                error!("[handle_connection_from_primary] - [{}] - unexpected message - {:?}", &job_id, req);
-                            }
-                            info!("[handle_connection_from_primary] - [{}] - reset - new request - {:?}", &job_id, &req);
-                            prepare(&mut req, metadata.primary_host.clone()).await?;
-                            request_spec = req.req;
-                            reset = false;
-                        }
-                    },
-                }
-            }
+                        info!(
+                            "[handle_connection_from_primary] - [{}] - reset - new request - {:?}",
+                            &job_id, &req
+                        );
+                        prepare(&mut req, metadata.primary_host.clone()).await?;
+                        request_spec = req.req;
+                        reset = false;
+                    }
+                },
+            },
         }
     }
     // #[cfg(feature = "cluster")]
@@ -307,8 +314,10 @@ async fn handle_connection_from_primary(
     // {
     //     METRICS_FACTORY.remove_metrics(&job_id).await;
     // }
-    debug!("[handle_connection_from_primary] - [{}] - exiting with status stop:{}, finish:{}, error_exit:{}", &job_id,
-    stop, finish, error_exit);
+    debug!(
+        "[handle_connection_from_primary] - [{}] - exiting with status stop:{}, finish:{}, error_exit:{}",
+        &job_id, stop, finish, error_exit
+    );
     Ok(())
 }
 
@@ -387,48 +396,55 @@ async fn handle_connection_from_primary_v2(
                 error_exit = true;
                 break;
             }
-            Ok(msg) => {
-                match msg {
-                    None => {
-                        debug!("[handle_connection_from_primary] - None received, exiting loop");
+            Ok(msg) => match msg {
+                None => {
+                    debug!("[handle_connection_from_primary] - None received, exiting loop");
+                    break;
+                }
+                Some(msg) => match msg {
+                    MessageFromPrimary::Metadata(_) => {
+                        error!(
+                            "[handle_connection_from_primary] - [{}] - unexpected MessageFromPrimary::Request",
+                            &job_id
+                        );
+                    }
+                    MessageFromPrimary::Rates(rate) => {
+                        trace!("[handle_connection_from_primary] - {:?}", &rate);
+                        handle_rate_msg_v2(rate, &mut ctx).await;
+                    }
+                    MessageFromPrimary::Stop => {
+                        stop = true;
                         break;
                     }
-                    Some(msg) => match msg {
-                        MessageFromPrimary::Metadata(_) => {
-                            error!("[handle_connection_from_primary] - [{}] - unexpected MessageFromPrimary::Request", &job_id);
-                        }
-                        MessageFromPrimary::Rates(rate) => {
-                            trace!("[handle_connection_from_primary] - {:?}", &rate);
-                            handle_rate_msg_v2(rate, &mut ctx).await;
-                        }
-                        MessageFromPrimary::Stop => {
-                            stop = true;
-                            break;
-                        }
-                        MessageFromPrimary::Finished => {
-                            finish = true;
-                            stop = true;
-                            break;
-                        }
-                        MessageFromPrimary::Reset => {
-                            info!(
-                                "[handle_connection_from_primary] - [{}] - reset received",
-                                &job_id
+                    MessageFromPrimary::Finished => {
+                        finish = true;
+                        stop = true;
+                        break;
+                    }
+                    MessageFromPrimary::Reset => {
+                        info!(
+                            "[handle_connection_from_primary] - [{}] - reset received",
+                            &job_id
+                        );
+                        reset = true;
+                    }
+                    MessageFromPrimary::Request(mut req) => {
+                        if !reset {
+                            error!(
+                                "[handle_connection_from_primary] - [{}] - unexpected message - {:?}",
+                                &job_id, req
                             );
-                            reset = true;
                         }
-                        MessageFromPrimary::Request(mut req) => {
-                            if !reset {
-                                error!("[handle_connection_from_primary] - [{}] - unexpected message - {:?}", &job_id, req);
-                            }
-                            info!("[handle_connection_from_primary] - [{}] - reset - new request - {:?}", &job_id, &req);
-                            prepare(&mut req, metadata.primary_host.clone()).await?;
-                            ctx.request_spec = req.req;
-                            reset = false;
-                        }
-                    },
-                }
-            }
+                        info!(
+                            "[handle_connection_from_primary] - [{}] - reset - new request - {:?}",
+                            &job_id, &req
+                        );
+                        prepare(&mut req, metadata.primary_host.clone()).await?;
+                        ctx.request_spec = req.req;
+                        reset = false;
+                    }
+                },
+            },
         }
     }
     {
@@ -447,8 +463,9 @@ async fn handle_connection_from_primary_v2(
             METRICS_FACTORY.remove_metrics(&job_id).await;
         }
     }
-    info!("[handle_connection_from_primary] - [{}] - exiting with status stop:{}, finish:{}, error_exit:{}", 
-        &job_id,stop, finish, error_exit
+    info!(
+        "[handle_connection_from_primary] - [{}] - exiting with status stop:{}, finish:{}, error_exit:{}",
+        &job_id, stop, finish, error_exit
     );
     Ok(())
 }
@@ -567,7 +584,7 @@ async fn check_for_request_msg(rx: &mut Receiver<MessageFromPrimary>) -> Result<
             _ => {
                 return Err(anyhow!(
                     "Expected MessageFromPrimary::Request|Reset, but didn't receive"
-                ))
+                ));
             }
         }
     }
@@ -635,7 +652,10 @@ async fn send_n_request_in_t_duration<T: LoadGenerationLogic>(
 
     let time_remaining = || CYCLE_LENGTH_IN_MILLIS_V2 - start_of_cycle.elapsed().as_millis() as i64;
     if time_remaining() < 10 {
-        error!("[{}] [send_n_request_in_t_duration] - available time is less than 10ms. not sending any request", &ctx.job_id);
+        error!(
+            "[{}] [send_n_request_in_t_duration] - available time is less than 10ms. not sending any request",
+            &ctx.job_id
+        );
         return;
     }
 
@@ -669,8 +689,15 @@ async fn send_n_request_in_t_duration<T: LoadGenerationLogic>(
             .get_connections(requested_connection, &ctx.metrics)
             .await;
         let available_connection = connections.len();
-        debug!("[{}] - connection requested:{}, available connection: {}, request remaining: {}, remaining duration: {}ms, sleep duration: {}ms",
-            &job_id, requested_connection, available_connection, total_remaining_qps, remaining_t, sleep_time);
+        debug!(
+            "[{}] - connection requested:{}, available connection: {}, request remaining: {}, remaining duration: {}ms, sleep duration: {}ms",
+            &job_id,
+            requested_connection,
+            available_connection,
+            total_remaining_qps,
+            remaining_t,
+            sleep_time
+        );
 
         if available_connection < 1 {
             //adjust sleep time
@@ -850,8 +877,7 @@ async fn send_multiple_requests(
         let remaining_time_in_cycle = time_remaining();
         trace!(
             "remaining time in cycle:{}, remaining requests: {}",
-            remaining_time_in_cycle,
-            remaining_requests
+            remaining_time_in_cycle, remaining_requests
         );
         if remaining_time_in_cycle < 1 {
             warn!(
@@ -888,8 +914,15 @@ async fn send_multiple_requests(
             .get_connections(requested_connection, &metrics)
             .await;
         let available_connection = connections.len();
-        debug!("[{}] - connection requested:{}, available connection: {}, request remaining: {}, remaining duration: {}, sleep duration: {}",
-            &job_id, requested_connection, available_connection, total_remaining_qps, remaining_t, sleep_time);
+        debug!(
+            "[{}] - connection requested:{}, available connection: {}, request remaining: {}, remaining duration: {}, sleep duration: {}",
+            &job_id,
+            requested_connection,
+            available_connection,
+            total_remaining_qps,
+            remaining_t,
+            sleep_time
+        );
         if available_connection < requested_connection as usize {
             if available_connection < 1 {
                 //adjust sleep time
@@ -1085,7 +1118,7 @@ pub(crate) fn initiator_for_request_from_primary(
     request: &mut Request,
     primary_uri: String,
 ) -> BoxFuture<'static, Result<(), anyhow::Error>> {
-    return match &mut request.req {
+    match &mut request.req {
         RequestSpecEnum::RequestFile(req) => {
             download_request_file_from_primary(req.file_name.to_string(), primary_uri).boxed()
         }
@@ -1095,7 +1128,7 @@ pub(crate) fn initiator_for_request_from_primary(
         RequestSpecEnum::RandomDataRequest(_)
         | RequestSpecEnum::RequestList(_)
         | RequestSpecEnum::JsonTemplateRequest(_) => noop().boxed(),
-    };
+    }
 }
 
 pub async fn noop() -> Result<(), anyhow::Error> {
@@ -1153,8 +1186,7 @@ pub async fn download_file_from_url(
         tokio_util::compat::FuturesAsyncReadCompatExt::compat(r)
     }
     let futures_io_async_read =
-        TryStreamExt::map_err(resp.body_mut(), |e| io::Error::new(io::ErrorKind::Other, e))
-            .into_async_read();
+        TryStreamExt::map_err(resp.body_mut(), io::Error::other).into_async_read();
     let mut tokio_async_read = to_tokio_async_read(futures_io_async_read);
     tokio::io::copy(&mut tokio_async_read, data_file_destination).await?;
     let _ = data_file_destination.flush().await;
@@ -1168,14 +1200,14 @@ mod test {
     #[cfg(feature = "cluster")]
     use crate::primary::get_sender_for_secondary;
     use crate::secondary::{
-        fill_req_if_less_than_connections, handle_rate_msg, primary_listener,
-        send_multiple_requests, ExecutionContext,
+        ExecutionContext, fill_req_if_less_than_connections, handle_rate_msg, primary_listener,
+        send_multiple_requests,
     };
     use crate::test_common::init;
     #[cfg(feature = "cluster")]
     use crate::test_common::{cluster_node, get_request};
     use crate::{
-        send_metadata_with_primary, send_request_to_secondary, RateMessage, DEFAULT_REMOC_PORT,
+        DEFAULT_REMOC_PORT, RateMessage, send_metadata_with_primary, send_request_to_secondary,
     };
     use common_types::LoadGenerationMode;
     use httpmock::{Mock, MockServer};

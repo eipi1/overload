@@ -59,18 +59,15 @@ pub fn init_lua() -> Lua {
 
 pub fn load_lua_func<'lua>(lua_chunk: &str, lua: &'lua Lua) -> Option<Function<'lua>> {
     debug!("loading lua module from");
-    let result = lua
-        .load(lua_chunk)
+    lua.load(lua_chunk)
         .eval::<Function>()
         .map_err(|e| error!("Failed to load lua function - {}", e))
-        .ok();
-    result
+        .ok()
 }
 
 pub fn load_lua_func_with_registry(lua_chunk: &str, lua: &Lua) -> Option<RegistryKey> {
     debug!("loading lua module from");
-    let result = lua
-        .load(lua_chunk)
+    lua.load(lua_chunk)
         .eval::<Function>()
         .map_err(|e| error!("Failed to load lua function:{}, error: {}", lua_chunk, e))
         .ok()
@@ -78,8 +75,7 @@ pub fn load_lua_func_with_registry(lua_chunk: &str, lua: &Lua) -> Option<Registr
             lua.create_registry_value(func)
                 .map_err(|e| error!("Failed to create registry value - {}", e))
                 .ok()
-        });
-    result
+        })
 }
 
 pub fn verify_lua_chunk(chunk: &str) -> Result<(), String> {

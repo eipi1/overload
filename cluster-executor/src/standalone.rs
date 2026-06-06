@@ -11,9 +11,9 @@ use tokio_stream::StreamExt;
 use overload_http::Request;
 
 use crate::{
+    JOB_STATUS, JobStatus, MessageFromPrimary, REMOC_PORT, RateMessage, RequestGenerator,
     get_sender_for_host_port, log_error, remoc_port, send_end_msg, send_metadata_with_primary,
-    send_request_to_secondary, JobStatus, MessageFromPrimary, RateMessage, RequestGenerator,
-    JOB_STATUS, REMOC_PORT,
+    send_request_to_secondary,
 };
 
 pub async fn handle_request(request: Request) {

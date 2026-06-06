@@ -12,8 +12,8 @@ use overload_metrics::MetricsFactory;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::ConnectOptions;
+use sqlx::sqlite::SqliteConnectOptions;
 use std::env;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -79,15 +79,15 @@ pub(crate) fn pre_check(request: &Request) -> Result<(), ErrorCode> {
             }
         }
         RequestSpecEnum::RandomDataRequest(req) => {
-            if let Some(schema) = &req.body_schema {
-                if matches!(generate_data(schema), Value::Null) {
-                    return Err(ErrorCode::BodyGenerationFailure);
-                }
+            if let Some(schema) = &req.body_schema
+                && matches!(generate_data(schema), Value::Null)
+            {
+                return Err(ErrorCode::BodyGenerationFailure);
             }
-            if let Some(schema) = &req.uri_param_schema {
-                if matches!(generate_data(schema), Value::Null) {
-                    return Err(ErrorCode::UriParamGenerationFailure);
-                }
+            if let Some(schema) = &req.uri_param_schema
+                && matches!(generate_data(schema), Value::Null)
+            {
+                return Err(ErrorCode::UriParamGenerationFailure);
             }
         }
         _ => {}

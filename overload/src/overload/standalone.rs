@@ -1,5 +1,5 @@
-use crate::{job_id, pre_check, Response};
-use cluster_executor::{get_status_all, get_status_by_job_id, JobStatus};
+use crate::{Response, job_id, pre_check};
+use cluster_executor::{JobStatus, get_status_all, get_status_by_job_id};
 use log::error;
 use overload_http::{GenericError, GenericResponse, JobStatusQueryParams, MultiRequest, Request};
 use std::collections::HashMap;

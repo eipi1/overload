@@ -3,8 +3,8 @@ use log::trace;
 use rand::thread_rng;
 use regex::Regex;
 use rhai::packages::{Package, StandardPackage};
-use rhai::{Dynamic, Engine, AST};
-use serde_json::{json, Value};
+use rhai::{AST, Dynamic, Engine};
+use serde_json::{Value, json};
 use std::cmp::max;
 use std::collections::HashMap;
 
@@ -33,8 +33,7 @@ pub fn parse_templates_inner(
             if let Some(ast) = find_pattern_and_compile(&PATTERN_FUNCTION, str_val, engine) {
                 trace!(
                     "[parse_templates] - input: {}, Rhai AST: {:?}",
-                    str_val,
-                    ast
+                    str_val, ast
                 );
                 template_map.insert(path.to_string(), ast);
             }
@@ -60,14 +59,14 @@ fn find_pattern_and_compile(regex: &Regex, target: &str, engine: &Engine) -> Opt
         "[parse_templates] - text: {target}, captures: {:?}",
         &captures
     );
-    if let Some(captures) = captures {
-        if captures.len() > 1 {
-            let expr = captures.get(1).unwrap().as_str();
-            let ast = engine
-                .compile(expr)
-                .unwrap_or_else(|e| engine.compile(format!("`{}`", e)).unwrap());
-            return Some(ast);
-        }
+    if let Some(captures) = captures
+        && captures.len() > 1
+    {
+        let expr = captures.get(1).unwrap().as_str();
+        let ast = engine
+            .compile(expr)
+            .unwrap_or_else(|e| engine.compile(format!("`{}`", e)).unwrap());
+        return Some(ast);
     }
     None
 }
@@ -168,14 +167,14 @@ fn register_template_functions(engine: &mut Engine) {
 #[cfg(test)]
 mod tests {
     use crate::template::{
-        build_engine, find_pattern_and_compile, parse_templates_inner, populate_data,
-        PATTERN_FUNCTION,
+        PATTERN_FUNCTION, build_engine, find_pattern_and_compile, parse_templates_inner,
+        populate_data,
     };
     use crate::test::init_logger;
     use log::info;
     use regex::Regex;
-    use rhai::{Dynamic, Engine, AST};
-    use serde_json::{json, Value};
+    use rhai::{AST, Dynamic, Engine};
+    use serde_json::{Value, json};
     use std::collections::HashMap;
 
     #[test]

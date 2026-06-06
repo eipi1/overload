@@ -1,8 +1,8 @@
 use crate::split_request::process_and_send_request;
 use crate::{
+    JOB_STATUS, JobStatus, MessageFromPrimary, REMOC_PORT_NAME, RateMessage, RequestGenerator,
     get_sender_for_host_port, log_error, remoc_port_name, require_reset, send_end_msg,
-    send_metadata, send_request_to_secondary, JobStatus, MessageFromPrimary, RateMessage,
-    RequestGenerator, JOB_STATUS, REMOC_PORT_NAME,
+    send_metadata, send_request_to_secondary,
 };
 use cluster_mode::{Cluster, RestClusterNode};
 use log::{debug, error, info};
@@ -44,7 +44,7 @@ pub async fn handle_request(request: Request, cluster: Arc<Cluster>) {
     let mut sender_dropped = false;
     let require_reset = require_reset(&request);
     while let Some((qps, connection_count)) = stream.next().await {
-        if counter % 5 == 0 {
+        if counter.is_multiple_of(5) {
             // check for stop every 5 seconds
             if matches!(
                 JOB_STATUS.read().await.get(&job_id),
@@ -241,7 +241,7 @@ pub(crate) async fn get_sender_for_secondary(
 mod test {
     use crate::primary::{get_sender_for_secondary, send_rate_message_to_secondaries};
     use crate::test_common::{cluster_node, get_request, init};
-    use crate::{send_request_to_secondary, MessageFromPrimary};
+    use crate::{MessageFromPrimary, send_request_to_secondary};
     use log::{info, trace};
     use remoc::rch;
     use remoc::rch::base::Receiver;
@@ -250,7 +250,7 @@ mod test {
     use std::collections::HashMap;
     use std::error::Error;
     use std::net::Ipv4Addr;
-    use std::sync::mpsc::{channel, Receiver as StdReceiver, Sender as StdSender};
+    use std::sync::mpsc::{Receiver as StdReceiver, Sender as StdSender, channel};
     use std::time::Duration;
     use tokio::net::TcpListener;
     use tokio::time::sleep;
@@ -480,6 +480,7 @@ mod test {
         handle.abort();
     }
 
+    #[allow(dead_code)]
     pub struct TestDiscoverService {
         instances: Vec<ServiceInstance>,
     }
