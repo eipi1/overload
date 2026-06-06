@@ -6,14 +6,13 @@ edition.workspace = true
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies.mlua]
-version = "0.8"
-features = ["lua53", "send"]
+workspace = true
 
 [dependencies.log]
 version = "0.4"
 
 [dev-dependencies.env_logger]
-version = "0.10"
+version = "0.11"
 
 [dev-dependencies.serde_json]
 workspace = true

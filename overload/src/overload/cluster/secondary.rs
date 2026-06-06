@@ -1,6 +1,6 @@
 use crate::cluster::primary_uri;
-use crate::cluster::{unknown_error_resp, GenericResult};
-use crate::{Response, PATH_JOB_STATUS, PATH_STOP_JOB};
+use crate::cluster::{GenericResult, unknown_error_resp};
+use crate::{PATH_JOB_STATUS, PATH_STOP_JOB, Response};
 use bytes::Buf;
 use cluster_executor::JobStatus;
 use cluster_mode::Cluster;
@@ -8,8 +8,8 @@ use hyper::client::HttpConnector;
 use hyper::{Body, Client};
 use log::trace;
 use overload_http::{GenericError, GenericResponse, JobStatusQueryParams};
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use std::sync::Arc;
 
 pub(crate) async fn forward_other_requests_to_primary<T: Serialize + DeserializeOwned>(

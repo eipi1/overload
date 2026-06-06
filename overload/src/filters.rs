@@ -10,7 +10,7 @@ use overload::standalone::handle_get_status;
 use overload_http::{JobStatusQueryParams, MultiRequest, Request};
 use std::collections::HashMap;
 use std::convert::{Infallible, TryFrom};
-use warp::{reply, Filter};
+use warp::{Filter, reply};
 
 pub fn get_routes() -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     let prometheus_metric = filters_common::prometheus_metric();
@@ -39,8 +39,8 @@ pub fn overload_req() -> impl Filter<Extract = impl warp::Reply, Error = warp::R
         .and_then(|request: Request| async move { execute(request).await })
 }
 
-pub fn overload_multi_req(
-) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+pub fn overload_multi_req()
+-> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     warp::post()
         .and(warp::path("tests").and(warp::path::end()))
         .and(warp::body::content_length_limit(1024 * 1024 * 5))
@@ -48,8 +48,8 @@ pub fn overload_multi_req(
         .and_then(|request: MultiRequest| async move { execute_multiple(request).await })
 }
 
-pub fn upload_binary_file(
-) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+pub fn upload_binary_file()
+-> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     warp::post()
         .and(
             warp::path("test")
@@ -74,8 +74,8 @@ pub fn upload_csv_file() -> impl Filter<Extract = impl warp::Reply, Error = warp
         .and_then(upload_csv_file_handler)
 }
 
-pub fn upload_sqlite_file(
-) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+pub fn upload_sqlite_file()
+-> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     let enc = warp::header::<String>(http::header::CONTENT_ENCODING.as_str())
         .map(Some)
         .or_else(|_| async { Ok::<(Option<String>,), std::convert::Infallible>((None,)) });
@@ -280,7 +280,9 @@ mod standalone_mode_tests {
         info!("using ports: {}, {}", http_port, remoc_port);
         //wait a bit for bootstrapping
         tokio::time::sleep(Duration::from_millis(50)).await;
-        std::env::set_var(ENV_NAME_REMOC_PORT, remoc_port.to_string());
+        unsafe {
+            std::env::set_var(ENV_NAME_REMOC_PORT, remoc_port.to_string());
+        }
 
         let (mock_server, url) = ASYNC_ONCE_HTTP_MOCK.get_or_init(init_http_mock).await;
 
@@ -329,7 +331,9 @@ mod standalone_mode_tests {
         // let (tx, http_port, remoc_port, handle) = init_env().await;
         // info!("handle status: {}", handle.is_finished());
         info!("using ports: {}, {}", http_port, remoc_port);
-        std::env::set_var(ENV_NAME_REMOC_PORT, remoc_port.to_string());
+        unsafe {
+            std::env::set_var(ENV_NAME_REMOC_PORT, remoc_port.to_string());
+        }
 
         let (mock_server, url) = ASYNC_ONCE_HTTP_MOCK.get_or_init(init_http_mock).await;
 
@@ -373,7 +377,9 @@ mod standalone_mode_tests {
 
         let (tx, http_port, remoc_port) = init_env().await;
         info!("using ports: {}, {}", http_port, remoc_port);
-        std::env::set_var(ENV_NAME_REMOC_PORT, remoc_port.to_string());
+        unsafe {
+            std::env::set_var(ENV_NAME_REMOC_PORT, remoc_port.to_string());
+        }
 
         let (mock_server, url) = ASYNC_ONCE_HTTP_MOCK.get_or_init(init_http_mock).await;
 
@@ -422,7 +428,9 @@ mod standalone_mode_tests {
         info!("using ports: {}, {}", http_port, remoc_port);
         //wait a bit for bootstrapping
         tokio::time::sleep(Duration::from_millis(50)).await;
-        std::env::set_var(ENV_NAME_REMOC_PORT, remoc_port.to_string());
+        unsafe {
+            std::env::set_var(ENV_NAME_REMOC_PORT, remoc_port.to_string());
+        }
 
         let (mock_server, url) = ASYNC_ONCE_HTTP_MOCK.get_or_init(init_http_mock).await;
 
@@ -466,7 +474,9 @@ mod standalone_mode_tests {
         info!("using ports: {}, {}", http_port, remoc_port);
         //wait a bit for bootstrapping
         tokio::time::sleep(Duration::from_millis(50)).await;
-        std::env::set_var(ENV_NAME_REMOC_PORT, remoc_port.to_string());
+        unsafe {
+            std::env::set_var(ENV_NAME_REMOC_PORT, remoc_port.to_string());
+        }
 
         let (mock_server, url) = ASYNC_ONCE_HTTP_MOCK.get_or_init(init_http_mock).await;
 
@@ -526,7 +536,9 @@ mod standalone_mode_tests {
 
         let (tx, http_port, remoc_port) = init_env().await;
         info!("using ports: {}, {}", http_port, remoc_port);
-        std::env::set_var(ENV_NAME_REMOC_PORT, remoc_port.to_string());
+        unsafe {
+            std::env::set_var(ENV_NAME_REMOC_PORT, remoc_port.to_string());
+        }
 
         let (mock_server, url) = ASYNC_ONCE_HTTP_MOCK.get_or_init(init_http_mock).await;
 

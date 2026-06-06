@@ -4,7 +4,6 @@ use std::error::Error as StdError;
 use std::fmt;
 use std::fmt::{Debug, Display};
 use std::io::Error as StdIoError;
-use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::str::FromStr;
@@ -88,7 +87,7 @@ where
                         success += 1;
                         sqlx::query("insert into http_req values(?,?,?,?)")
                             .bind(&req.url)
-                            .bind(&req.method.to_string())
+                            .bind(req.method.to_string())
                             .bind(&req.body)
                             .bind(serde_json::to_string(&req.headers)?)
                             .execute(&mut connection)
@@ -147,7 +146,7 @@ impl StdError for WarpStdIoError {}
 #[allow(clippy::from_over_into)]
 impl Into<StdIoError> for WarpStdIoError {
     fn into(self) -> StdIoError {
-        std::io::Error::new(ErrorKind::Other, self.inner.to_string())
+        std::io::Error::other(self.inner.to_string())
     }
 }
 
@@ -228,10 +227,7 @@ where
         ))
     })?;
     let http_stream = WarpByteStream { inner: http_stream };
-    let async_read = TryStreamExt::map_err(http_stream, |e| {
-        std::io::Error::new(std::io::ErrorKind::Other, e)
-    })
-    .into_async_read();
+    let async_read = TryStreamExt::map_err(http_stream, std::io::Error::other).into_async_read();
     let mut reader = to_tokio_async_read(async_read);
     if content_encoding == "gzip" {
         debug!("extracting gzipped file");
@@ -260,7 +256,6 @@ mod test {
     use crate::file_uploader::csv_reader_to_sqlite;
     use crate::log_error;
     use csv_async::AsyncReaderBuilder;
-    use log::error;
     use std::sync::Once;
 
     static ONCE: Once = Once::new();

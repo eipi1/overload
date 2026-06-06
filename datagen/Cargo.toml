@@ -34,8 +34,7 @@ version = "0.6"
 version = "0.2"
 
 [dependencies.anyhow]
-version = "1.0"
-
+workspace = true
 
 [dependencies.log]
 version = "0.4"

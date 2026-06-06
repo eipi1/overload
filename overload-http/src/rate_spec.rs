@@ -112,7 +112,7 @@ impl TryFrom<StepsShadowType> for Steps {
                 "Need more than one step. Use ConstantQPS for single step."
             ));
         }
-        value.steps.sort_by(|a, b| a.start.cmp(&b.start));
+        value.steps.sort_by_key(|a| a.start);
         //check continuity of steps
         let steps = &value.steps;
         let mut iter = steps.iter();
@@ -127,8 +127,12 @@ impl TryFrom<StepsShadowType> for Steps {
         let mut prev = first.end;
         for current in iter {
             if prev + 1 != current.start {
-                return Err(anyhow::anyhow!("Steps are not continuous. An step ends at {} but next step should start at {}, but starts at {}",
-                 prev, prev+1, current.start));
+                return Err(anyhow::anyhow!(
+                    "Steps are not continuous. An step ends at {} but next step should start at {}, but starts at {}",
+                    prev,
+                    prev + 1,
+                    current.start
+                ));
             } else {
                 prev = current.end;
             }

@@ -12,8 +12,8 @@ use once_cell::sync::OnceCell;
 use response_assert::ResponseAssertion;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
-use sqlx::sqlite::SqliteRow;
 use sqlx::Row;
+use sqlx::sqlite::SqliteRow;
 use std::collections::HashMap;
 use std::error::Error as StdError;
 use std::fmt::{Display, Formatter};
@@ -398,8 +398,8 @@ pub const PATH_REQUEST_DATA_FILE_DOWNLOAD: &str = "/cluster/data-file/";
 #[cfg(test)]
 mod test {
     use crate::*;
-    use http::header::HOST;
     use http::Method;
+    use http::header::HOST;
     use std::collections::HashMap;
     use std::convert::TryInto;
 
@@ -633,10 +633,11 @@ mod test {
         assert!(matches!(req, RequestSpecEnum::JsonTemplateRequest(_)));
         if let RequestSpecEnum::JsonTemplateRequest(req) = req {
             assert_eq!(req.headers.len(), 2);
-            assert!(req
-                .headers
-                .iter()
-                .any(|(k, v)| HOST.eq(k.as_str()) && v.eq(target_host)));
+            assert!(
+                req.headers
+                    .iter()
+                    .any(|(k, v)| HOST.eq(k.as_str()) && v.eq(target_host))
+            );
 
             assert!(req.headers.keys().any(|x| { HOST.eq(x.as_str()) }));
         }
@@ -687,10 +688,11 @@ mod test {
         assert!(matches!(req, RequestSpecEnum::JsonTemplateRequest(_)));
         if let RequestSpecEnum::JsonTemplateRequest(req) = req {
             assert_eq!(req.headers.len(), 2);
-            assert!(req
-                .headers
-                .iter()
-                .any(|(k, v)| HOST.eq(k.as_str()) && v.eq("localhost")));
+            assert!(
+                req.headers
+                    .iter()
+                    .any(|(k, v)| HOST.eq(k.as_str()) && v.eq("localhost"))
+            );
 
             assert!(req.headers.keys().any(|x| { HOST.eq(x.as_str()) }));
         }

@@ -7,10 +7,10 @@ use overload_http::{GenericError, GenericResponse};
 use overload_metrics::METRICS_FACTORY;
 use prometheus::{Encoder, TextEncoder};
 use serde::Serialize;
-use warp::{reply, Filter};
+use warp::{Filter, reply};
 
-pub fn prometheus_metric(
-) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+pub fn prometheus_metric()
+-> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     warp::get().and(warp::path("metrics")).map(|| {
         let encoder = TextEncoder::new();
         let metrics = METRICS_FACTORY.registry().gather();

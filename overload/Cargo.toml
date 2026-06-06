@@ -1,6 +1,6 @@
 [package]
 name = "overload"
-version = "0.8.0"
+version = "0.9.0"
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -15,9 +15,6 @@ keywords = ["load-testing", "cluster"]
 [lib]
 name = "overload"
 path = "src/overload/lib.rs"
-
-[dependencies.response-assert]
-path = "../response-assert"
 
 [dependencies.lua-helper]
 path = "../lua-helper"
@@ -47,15 +44,7 @@ version = "0.3"
 optional = true
 
 [dependencies.bytes]
-version = "1.0"
-
-[dependencies.smallvec]
-version = "1.7"
-features = ["serde", "union", "const_generics"]
-
-[dependencies.smol_str]
-version = "0.1.18"
-features = ["serde"]
+version = "1.4"
 
 [dependencies.lazy_static]
 version = "1.4"
@@ -69,9 +58,6 @@ version = "0.3"
 [dependencies.futures-util]
 version = "0.3"
 
-[dependencies.pin-project]
-version = "1.0"
-
 [dependencies.tokio]
 workspace = true
 features = ["rt-multi-thread", "macros", "fs", "io-util", "sync", "parking_lot"]
@@ -83,25 +69,15 @@ version = "0.1"
 version = "0.7"
 features = ["io", "compat"]
 
-[dependencies.native-tls]
-version = "0.2"
-
 [dependencies.http]
-version = "0.2"
+workspace = true
 
 [dependencies.url]
-version = "2.2"
+workspace = true
 
 [dependencies.hyper]
-version = "0.14"
+workspace = true
 features = ["runtime", "http1", "http2", "client", "stream"]
-
-[dependencies.hyper-tls]
-version = "0.5"
-
-[dependencies.tower]
-version = "0.4"
-features = ["util"]
 
 [dependencies.warp]
 version = "0.3"
@@ -114,9 +90,7 @@ version = "1.2"
 features = ["tokio"]
 
 [dependencies.sqlx]
-version = "0.5"
-default-features = false
-features = ["sqlite", "runtime-tokio-native-tls"]
+workspace = true
 
 [dependencies.regex]
 version = "1.4"
@@ -128,30 +102,11 @@ features = ["derive"]
 [dependencies.serde_json]
 version = "1.0"
 
-[dependencies.http-serde]
-version = "1.0"
-
 [dependencies.uuid]
 version = "1.1"
 features = ["v4"]
 
-[dependencies.fastrand]
-version = "1.4"
-
-[dependencies.rand]
-version = "0.8"
-
-[dependencies.regex-syntax]
-version = "0.6"
-
-[dependencies.regex_generate]
-git = "https://github.com/eipi1/regex_generate"
-branch = "pub-gen-from-hir"
-
 [dependencies.anyhow]
-version = "1.0"
-
-[dependencies.cfg-if]
 version = "1.0"
 
 [dependencies.prometheus]
@@ -175,26 +130,14 @@ features = ["gzip", "tokio"]
 workspace = true
 features = ["rt-multi-thread", "macros", "fs", "io-util", "time", "test-util"]
 
-[dev-dependencies.tokio-test]
-version = "0.4"
-
 [dev-dependencies.more-asserts]
 version = "0.3"
-
-[dev-dependencies.base64]
-version = "0.13"
 
 [dev-dependencies.httpmock]
 version = "0.6"
 
-[dev-dependencies.assert-json-diff]
-version = "2.0"
-
 [dev-dependencies.sha2]
 version = "0.10"
-
-[dev-dependencies.serial_test]
-version = "0.9"
 
 [dev-dependencies.portpicker]
 version = "0.1"

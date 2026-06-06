@@ -1,4 +1,4 @@
-use futures_util::{stream::FuturesUnordered, StreamExt};
+use futures_util::{StreamExt, stream::FuturesUnordered};
 use hyper::client::conn;
 use hyper::client::conn::{Connection, SendRequest};
 use hyper::{Body, Error};
@@ -7,8 +7,8 @@ use overload_metrics::Metrics;
 use std::collections::VecDeque;
 use std::env;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::net::TcpStream;
 use tokio::sync::RwLock;
@@ -377,9 +377,7 @@ impl QueuePool {
     */
 
     #[inline]
-    async fn check_ready<'a>(
-        mut connection: HttpConnection,
-    ) -> (HttpConnection, Result<(), Error>) {
+    async fn check_ready(mut connection: HttpConnection) -> (HttpConnection, Result<(), Error>) {
         let result = connection.request_handle.ready().await.map(|_| {});
         (connection, result)
     }
@@ -457,7 +455,7 @@ fn since_epoch() -> u64 {
 }
 
 fn get_expiry(ttl: u32) -> u64 {
-    since_epoch().checked_add(ttl as u64).unwrap_or(u64::MAX)
+    since_epoch().saturating_add(ttl as u64)
 }
 
 /*

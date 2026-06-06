@@ -4,7 +4,7 @@ use crate::filters_common;
 use crate::filters_common::prometheus_metric;
 use bytes::{Buf, Bytes, BytesMut};
 use cluster_executor::data_dir_path;
-use cluster_mode::{get_cluster_info, Cluster};
+use cluster_mode::{Cluster, get_cluster_info};
 use futures_util::future::Either;
 use futures_util::{FutureExt, Stream, StreamExt};
 use http::StatusCode;
@@ -23,7 +23,7 @@ use std::task::Poll;
 use tokio::fs::File;
 use tokio::io::AsyncSeekExt;
 use warp::reply::{Json, Response, WithStatus};
-use warp::{reply, Filter};
+use warp::{Filter, reply};
 
 lazy_static! {
     pub static ref CLUSTER: Arc<Cluster> = Arc::new(Cluster::new());
@@ -336,8 +336,7 @@ async fn cluster_request_vote(
 ) -> Result<impl warp::Reply, Infallible> {
     trace!(
         "req: cluster_request_vote: requester: {}, term: {}",
-        &requester_node_id,
-        &term
+        &requester_node_id, &term
     );
     if !cluster_mode {
         let err = no_cluster_err();
@@ -359,8 +358,7 @@ async fn cluster_request_vote_response(
 ) -> Result<impl warp::Reply, Infallible> {
     trace!(
         "req: cluster_request_vote_response: term: {}, vote: {}",
-        &term,
-        &vote
+        &term, &vote
     );
     if !cluster_mode {
         let err = no_cluster_err();
@@ -380,8 +378,7 @@ async fn cluster_heartbeat(
 ) -> Result<impl warp::Reply, Infallible> {
     trace!(
         "req: cluster_heartbeat: leader: {}, term: {}",
-        &leader_node_id,
-        &term
+        &leader_node_id, &term
     );
     if !cluster_mode {
         let err = no_cluster_err();
@@ -398,8 +395,8 @@ fn no_cluster_err() -> WithStatus<Json> {
     reply::with_status(reply::json(&error_msg), StatusCode::NOT_FOUND)
 }
 
-pub fn download_req_from_secondaries(
-) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+pub fn download_req_from_secondaries()
+-> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     warp::path!("cluster" / "data-file" / String)
         .and_then(|filename| async move { response_file(filename).await })
 }
@@ -448,7 +445,7 @@ fn file_stream(
             let mut f = match result {
                 Ok(f) => f,
                 Err(f) => {
-                    return Either::Left(futures_util::stream::once(futures_util::future::err(f)))
+                    return Either::Left(futures_util::stream::once(futures_util::future::err(f)));
                 }
             };
 
@@ -505,11 +502,11 @@ mod cluster_test {
     use csv_async::AsyncReaderBuilder;
     use http::Request;
     use httpmock::Method::POST;
-    use hyper::body::to_bytes;
     use hyper::Body;
+    use hyper::body::to_bytes;
     use log::info;
     use overload::file_uploader::csv_reader_to_sqlite;
-    use overload::{init, JobStatus};
+    use overload::{JobStatus, init};
     use regex::Regex;
     use rust_cloud_discovery::DiscoveryService;
     use rust_cloud_discovery::ServiceInstance;
@@ -527,10 +524,10 @@ mod cluster_test {
 
     fn start_warp_with_route(
         route: impl Filter<Extract = impl warp::Reply, Error = warp::Rejection>
-            + Send
-            + Sync
-            + Clone
-            + 'static,
+        + Send
+        + Sync
+        + Clone
+        + 'static,
     ) -> (Sender<()>, JoinHandle<()>) {
         let (tx, rx) = tokio::sync::oneshot::channel::<()>();
         let (_addr, server) =

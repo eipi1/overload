@@ -54,11 +54,7 @@ mod tests {
     }
 
     fn instance_count() -> usize {
-        if !cfg!(feature = "cluster") {
-            1
-        } else {
-            3
-        }
+        if !cfg!(feature = "cluster") { 1 } else { 3 }
     }
 
     pub fn resource_dir() -> PathBuf {
@@ -672,8 +668,8 @@ mod tests {
 
     pub fn get_value_for_metrics(metrics: &str) -> i64 {
         info!("getting value for metrics: {}", metrics.trim());
-        return metrics
+        metrics
             .rsplit_once(' ')
-            .map_or(0, |(_, count)| count.parse::<i64>().unwrap());
+            .map_or(0, |(_, count)| count.parse::<i64>().unwrap())
     }
 }

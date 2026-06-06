@@ -51,7 +51,7 @@ features = ["derive"]
 version = "1.0"
 
 [dependencies.http]
-version = "0.2"
+workspace = true
 
 [dependencies.log]
 version = "0.4"
@@ -66,18 +66,16 @@ version = "0.3"
 version = "0.3"
 
 [dependencies.fastrand]
-version = "1.8"
+version = "2.4"
 
 [dependencies.sqlx]
-version = "0.5"
-default-features = false
-features = ["sqlite", "runtime-tokio-native-tls"]
+workspace = true
 
 [dependencies.tokio-stream]
 version = "0.1"
 
 [dependencies.hyper]
-version = "0.14"
+workspace = true
 
 [dependencies.tower]
 version = "0.4"
@@ -99,36 +97,26 @@ version = "1.2"
 features = ["v4"]
 
 [dependencies.mlua]
-version = "0.8"
-features = ["lua53", "send", "serialize"]
+workspace = true
 
 [dependencies.url]
-version = "2.3"
+workspace = true
 
 [dev-dependencies.tracing-subscriber]
 version = "0.3"
 features = ["fmt", "env-filter"]
 
-[dev-dependencies.tracing-core]
-version = "0.1"
-
 [dev-dependencies.httpmock]
 version = "0.6"
-
-[dev-dependencies.url]
-version = "2.3"
-
-[dev-dependencies.tokio-test]
-version = "0.4"
 
 [dev-dependencies.more-asserts]
 version = "0.3"
 
 [dev-dependencies.rand]
-version = "0.8"
+version = "0.10"
 
 [dev-dependencies.base64]
-version = "0.13"
+version = "0.22"
 
 [dev-dependencies.env_logger]
 workspace = true

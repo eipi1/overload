@@ -1,9 +1,9 @@
 use crate::cluster::secondary::{
     forward_get_status_request, forward_stop_request_to_primary, forward_test_request,
 };
-use crate::{job_id, pre_check, Response, PATH_FILE_UPLOAD, PATH_FILE_UPLOAD_SQLITE};
+use crate::{PATH_FILE_UPLOAD, PATH_FILE_UPLOAD_SQLITE, Response, job_id, pre_check};
 use bytes::Buf;
-use cluster_executor::{get_status_all, get_status_by_job_id, ErrorCode, JobStatus};
+use cluster_executor::{ErrorCode, JobStatus, get_status_all, get_status_by_job_id};
 use cluster_mode::{Cluster, RestClusterNode};
 use futures_util::Stream;
 use http::header::CONTENT_LENGTH;
@@ -286,7 +286,7 @@ pub(crate) async fn primary_uri(
 
 pub(crate) fn convert_stream<S, B>(
     data: S,
-) -> Box<dyn Stream<Item = Result<bytes::Bytes, Box<(dyn std::error::Error + Send + Sync)>>> + Send>
+) -> Box<dyn Stream<Item = Result<bytes::Bytes, Box<dyn std::error::Error + Send + Sync>>> + Send>
 where
     S: Stream<Item = Result<B, warp::Error>> + Unpin + Send + Sync + 'static,
     B: Buf + Send + Sync,

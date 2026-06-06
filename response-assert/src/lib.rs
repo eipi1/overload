@@ -6,7 +6,7 @@ use anyhow::anyhow;
 use http::{Method, Uri};
 use jsonpath_lib::Compiled;
 use log::trace;
-use lua_helper::{call_lua_func_from_registry, LuaAssertionResult};
+use lua_helper::{LuaAssertionResult, call_lua_func_from_registry};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -64,6 +64,7 @@ impl TryFrom<Value> for JsonSchema {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Deserialize, Serialize)]
 struct JsonSchemaShadowType {
     pub(crate) schema: Value,
@@ -177,7 +178,7 @@ pub fn simple_assert(
             .simple_assertions
             .as_ref()
             .map_or(0, |v| { v.len() }),
-        request_url.to_string()
+        request_url
     );
     let mut errors = vec![];
     let mut paths: Option<Vec<&str>> = None;
@@ -326,11 +327,7 @@ pub fn simple_assert(
             all_matched = false;
         }
     }
-    if all_matched {
-        Ok(())
-    } else {
-        Err(errors)
-    }
+    if all_matched { Ok(()) } else { Err(errors) }
 }
 
 type ResponseBody = String;
@@ -395,7 +392,7 @@ pub async fn init_lua_executor(response_assert: &ResponseAssertion) -> Option<Lu
 
 #[cfg(test)]
 mod tests {
-    use crate::{simple_assert, Actual, Assertion, Expectation, ResponseAssertion, SegmentNumber};
+    use crate::{Actual, Assertion, Expectation, ResponseAssertion, SegmentNumber, simple_assert};
     use http::Uri;
     use serde_json::Value;
 

@@ -1,5 +1,5 @@
 use crate::request_providers::RequestProvider;
-use crate::{log_error, MessageFromPrimary};
+use crate::{MessageFromPrimary, log_error};
 use log::{error, info};
 use overload_http::{Request, RequestSpecEnum};
 use remoc::rch::base::Sender;

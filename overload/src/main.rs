@@ -1,7 +1,7 @@
 // #![allow(deprecated)]
 #[cfg(feature = "cluster")]
 use cloud_discovery_kubernetes::KubernetesDiscoverService;
-use cluster_executor::{remoc_port, REMOC_PORT};
+use cluster_executor::{REMOC_PORT, remoc_port};
 #[cfg(feature = "cluster")]
 use cluster_mode::ClusterConfig;
 use log::info;
@@ -62,8 +62,14 @@ async fn main() {
             Ok(k8s) => {
                 let discovery_client = DiscoveryClient::new(k8s);
                 let config = cluster_config();
-                info!("cluster configuration - connection_timeout:{}, election_timeout:{}, update_interval: {}, max_node: {}, min_node:{}",
-                    &config.connection_timeout, &config.election_timeout, &config.update_interval,&config.max_node,&config.min_node);
+                info!(
+                    "cluster configuration - connection_timeout:{}, election_timeout:{}, update_interval: {}, max_node: {}, min_node:{}",
+                    &config.connection_timeout,
+                    &config.election_timeout,
+                    &config.update_interval,
+                    &config.max_node,
+                    &config.min_node
+                );
                 tokio::spawn(cluster_mode::start_cluster(
                     filters::CLUSTER.clone(),
                     discovery_client,
@@ -72,7 +78,7 @@ async fn main() {
             }
             Err(e) => {
                 _cluster_up = false;
-                info!("error initializing kubernetes: {}", e.to_string());
+                info!("error initializing kubernetes: {}", e);
             }
         }
     }
