@@ -20,14 +20,14 @@ impl LuaAssertionResult {
     }
 }
 
-impl FromLua<'_> for LuaAssertionResult {
+impl FromLua for LuaAssertionResult {
     fn from_lua(lua_value: Value, _lua: &Lua) -> mlua::Result<Self> {
         match lua_value {
             Value::Table(table) => {
-                let id = table.raw_get::<_, i32>("id")?;
+                let id = table.raw_get::<i32>("id")?;
                 let mut result = Ok(());
-                if !table.raw_get::<_, bool>("success")? {
-                    result = Err(table.raw_get::<_, String>("error")?);
+                if !table.raw_get::<bool>("success")? {
+                    result = Err(table.raw_get::<_>("error")?);
                 }
                 Ok(Self {
                     assertion_id: id,
@@ -36,7 +36,7 @@ impl FromLua<'_> for LuaAssertionResult {
             }
             _ => Err(mlua::Error::FromLuaConversionError {
                 from: lua_value.type_name(),
-                to: "LuaAssertionResult",
+                to: "LuaAssertionResult".to_string(),
                 message: Some("expected table".to_string()),
             }),
         }
@@ -57,7 +57,7 @@ pub fn init_lua() -> Lua {
     lua
 }
 
-pub fn load_lua_func<'lua>(lua_chunk: &str, lua: &'lua Lua) -> Option<Function<'lua>> {
+pub fn load_lua_func(lua_chunk: &str, lua: &Lua) -> Option<Function> {
     debug!("loading lua module from");
     lua.load(lua_chunk)
         .eval::<Function>()
@@ -97,7 +97,7 @@ pub fn call_lua_func_from_registry(
 ) -> Result<(), Vec<LuaAssertionResult>> {
     match lua.registry_value::<Function>(func_key) {
         Ok(func) => func
-            .call::<_, Vec<LuaAssertionResult>>((method, url, req_body, resp_body))
+            .call::<Vec<LuaAssertionResult>>((method, url, req_body, resp_body))
             .map_err(|e| {
                 error!("Error calling lua function: {}", &e);
                 vec![LuaAssertionResult::lua_error(e.to_string())]
@@ -151,7 +151,7 @@ mod tests {
 
         assert_eq!(
             test_json
-                .call::<_, String>("{\"hello\":\"world\"}".to_string())
+                .call::<String>("{\"hello\":\"world\"}".to_string())
                 .unwrap(),
             "world from lua"
         );
@@ -226,11 +226,11 @@ mod tests {
             .unwrap();
 
         let json = sample_json();
-        let lua_table = test_json.call::<_, Table>(json.to_string()).unwrap();
+        let lua_table = test_json.call::<Table>(json.to_string()).unwrap();
         let v = lua_table
-            .get::<_, Table>(1)
+            .get::<Table>(1)
             .unwrap()
-            .get::<_, String>("id")
+            .get::<String>("id")
             .unwrap();
         assert_eq!(v, "0001".to_string())
     }
@@ -258,15 +258,12 @@ mod tests {
             .unwrap();
 
         let json = sample_json();
-        let lua_table = test_json.call::<_, Table>(json.to_string()).unwrap();
+        let lua_table = test_json.call::<Table>(json.to_string()).unwrap();
         // let v =
-        assert_eq!(lua_table.get::<_, String>(1).unwrap(), "0001".to_string());
-        assert_eq!(lua_table.get::<_, String>(2).unwrap(), "0002".to_string());
-        assert_eq!(lua_table.get::<_, String>(3).unwrap(), "1001".to_string());
-        assert_eq!(
-            lua_table.get::<_, String>(4).unwrap(),
-            "Chocolate".to_string()
-        );
+        assert_eq!(lua_table.get::<String>(1).unwrap(), "0001".to_string());
+        assert_eq!(lua_table.get::<String>(2).unwrap(), "0002".to_string());
+        assert_eq!(lua_table.get::<String>(3).unwrap(), "1001".to_string());
+        assert_eq!(lua_table.get::<String>(4).unwrap(), "Chocolate".to_string());
     }
 
     fn sample_json() -> serde_json::Value {
@@ -352,7 +349,7 @@ mod tests {
         "#;
         let lua = Lua::new();
         let lua_twice: Function = lua.load(lua_txt).eval().unwrap();
-        assert_eq!(lua_twice.call::<_, u32>(5).unwrap(), 10);
+        assert_eq!(lua_twice.call::<u32>(5).unwrap(), 10);
     }
 
     #[test]

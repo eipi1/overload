@@ -51,7 +51,7 @@ pub async fn handle_request(request: Request) {
     let mut counter = 0u8;
     while let Some((qps, connection_count)) = stream.next().await {
         counter += 1;
-        if counter % 5 == 0 {
+        if counter.is_multiple_of(5) {
             // check for stop every 5 seconds
             if matches!(
                 JOB_STATUS.read().await.get(&job_id),
