@@ -1,3 +1,7 @@
-*
-!target/debug/overload
-!target/release/overload
+target
+.vscode
+.github
+*.log
+.git
+.idea
+docs

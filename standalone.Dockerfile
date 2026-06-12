@@ -13,7 +13,7 @@ WORKDIR /usr/src/overload
 COPY . .
 
 # Build the application
-RUN cargo build --features "cluster" --release
+RUN cargo build --release
 
 # Runtime stage
 FROM debian:trixie-slim

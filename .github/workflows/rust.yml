@@ -17,13 +17,13 @@ env:
 jobs:
   build:
 
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
 
     steps:
     - name: install lua
       run: sudo apt install -y liblua5.3-dev
     - name: Checkout
-      uses: actions/checkout@v2
+      uses: actions/checkout@v4
     - name: Set up cargo cache
       uses: actions/cache@v3
       continue-on-error: false
