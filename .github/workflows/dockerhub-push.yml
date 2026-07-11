@@ -22,6 +22,7 @@ jobs:
     - name: Get version
       run: |
         if [[ ${{ github.event_name }} == 'release' ]]; then
+            cargo generate-lockfile
             PKG_VERSION=$(cargo pkgid -p file://$(pwd)/overload | cut -d# -f2)
             TAG_VERSION=${GITHUB_REF:11}
             if [[ $PKG_VERSION != $TAG_VERSION ]]; then
@@ -40,16 +41,17 @@ jobs:
         registry: ghcr.io
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
-    - name: Build cluster image
-      uses: docker/build-push-action@v7
-      with:
-        context: .
-        push: true
-        tags: ghcr.io/${{ github.repository }}:cluster-${{ env.version }}${{ env.suffix }}
     - name: Build & push standalone image
       uses: docker/build-push-action@v7
       with:
         context: .
         file: standalone.Dockerfile
         push: true
-        tags: ghcr.io/${{ github.repository }}:standalone-${{ env.version }}${{ env.suffix }}
+        tags:
+          ghcr.io/${{ github.repository }}:standalone-${{ env.version }}${{ env.suffix }}
+    - name: Build cluster image
+      uses: docker/build-push-action@v7
+      with:
+        context: .
+        push: true
+        tags: ghcr.io/${{ github.repository }}:cluster-${{ env.version }}${{ env.suffix }}
