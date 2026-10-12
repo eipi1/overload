@@ -8,6 +8,8 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use anyhow::Result as AnyResult;
+#[cfg(feature = "cluster")]
+use cluster_mode::RestClusterNode;
 use futures_core::Stream;
 use futures_core::future::BoxFuture;
 use futures_util::FutureExt;
@@ -516,7 +518,7 @@ async fn get_sender_for_host_port(port: u16, host: &str) -> Option<Sender<Messag
 
 #[cfg(feature = "cluster")]
 pub(crate) async fn send_metadata(
-    cluster: &cluster_mode::Cluster,
+    cluster: &cluster_mode::Cluster<RestClusterNode>,
     senders: &mut HashMap<String, Sender<MessageFromPrimary>>,
     instances: &[String],
 ) {
@@ -633,6 +635,8 @@ mod test_common {
     use crate::RequestGenerator;
     #[cfg(feature = "cluster")]
     use cluster_mode::RestClusterNode;
+    #[cfg(feature = "cluster")]
+    use cluster_mode::RestClusterNodeId;
     use env_logger::Env;
     use overload_http::Request;
     #[cfg(feature = "cluster")]
@@ -710,7 +714,7 @@ mod test_common {
         let ports = vec![port1, port2];
 
         RestClusterNode::new(
-            uuid::Uuid::new_v4().to_string(),
+            RestClusterNodeId::from(uuid::Uuid::new_v4().to_string()),
             ServiceInstance::new(
                 Some(Uuid::new_v4().to_string()),
                 Some(String::from_str("test").unwrap()),

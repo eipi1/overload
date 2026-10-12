@@ -17,7 +17,7 @@ RUN cargo build --features "cluster" --release
 
 # Runtime stage
 FROM debian:trixie-slim
-
+LABEL org.opencontainers.image.source = "https://github.com/eipi1/overload"
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y \
     ca-certificates \

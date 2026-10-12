@@ -21,7 +21,10 @@ pub(crate) mod secondary;
 
 type GenericResult<T> = Result<GenericResponse<T>, GenericError>;
 
-pub async fn handle_request_cluster(mut request: Request, cluster: Arc<Cluster>) -> Response {
+pub async fn handle_request_cluster(
+    mut request: Request,
+    cluster: Arc<Cluster<RestClusterNode>>,
+) -> Response {
     let job_id = job_id(&request.name);
     request.name = Some(job_id.clone());
     if !cluster.is_active().await {
@@ -54,7 +57,7 @@ pub async fn handle_request_cluster(mut request: Request, cluster: Arc<Cluster>)
 
 pub async fn handle_multi_request_cluster(
     mut requests: MultiRequest,
-    cluster: Arc<Cluster>,
+    cluster: Arc<Cluster<RestClusterNode>>,
 ) -> Response {
     let job_id = job_id(&requests.name);
     if !cluster.is_active().await {
@@ -85,7 +88,7 @@ pub async fn handle_multi_request_cluster(
 
 pub async fn handle_history_all(
     params: JobStatusQueryParams,
-    cluster: Arc<Cluster>,
+    cluster: Arc<Cluster<RestClusterNode>>,
 ) -> GenericResult<JobStatus> {
     if !cluster.is_active().await {
         Err(inactive_cluster_error())
@@ -139,7 +142,7 @@ pub(crate) async fn get_job_status(
     job_status
 }
 
-pub async fn stop(job_id: String, cluster: Arc<Cluster>) -> GenericResult<String> {
+pub async fn stop(job_id: String, cluster: Arc<Cluster<RestClusterNode>>) -> GenericResult<String> {
     if !cluster.is_active().await {
         Err(inactive_cluster_error())
     } else if cluster.is_primary().await {
@@ -179,7 +182,7 @@ pub async fn stop_job(job_id: String) -> Result<GenericResponse<String>, Generic
 pub async fn handle_file_upload<S, B>(
     data: S,
     data_dir: &str,
-    cluster: Arc<Cluster>,
+    cluster: Arc<Cluster<RestClusterNode>>,
     content_len: u64,
 ) -> GenericResult<String>
 where
@@ -221,7 +224,7 @@ where
 pub async fn save_sqlite<S, B>(
     data: S,
     data_dir: &str,
-    cluster: Arc<Cluster>,
+    cluster: Arc<Cluster<RestClusterNode>>,
     content_len: u64,
     content_encoding: String,
 ) -> GenericResult<String>

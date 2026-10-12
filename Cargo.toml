@@ -19,6 +19,9 @@ rust-version = "1.96"
 authors = ["Md Sarowar Alam <sarowar.cse@gmail.com>"]
 license = "MIT"
 
+[workspace.dependencies.cluster-mode]
+path = "../cluster-mode"
+
 [workspace.dependencies.tokio]
 version = "1.52"
 default-features = false

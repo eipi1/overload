@@ -573,14 +573,19 @@ async fn check_for_request_msg(rx: &mut Receiver<MessageFromPrimary>) -> Result<
         //timeout of 30 sec
         trace!("[check_for_request_msg] ...");
         let msg = tokio::time::timeout(Duration::from_secs(30), rx.recv()).await;
-        info!("[check_for_request_msg] - received {:?}", msg);
         let msg = msg??.ok_or_else(|| anyhow!("No message received"))?;
 
         match msg {
             MessageFromPrimary::Request(request) => {
+                info!(
+                    "[check_for_request_msg] Received request from primary: {:?}",
+                    serde_json::to_string(&request)
+                );
                 return Ok(request);
             }
-            MessageFromPrimary::Reset => {}
+            MessageFromPrimary::Reset => {
+                info!("[check_for_request_msg] Received Reset from primary");
+            }
             _ => {
                 return Err(anyhow!(
                     "Expected MessageFromPrimary::Request|Reset, but didn't receive"

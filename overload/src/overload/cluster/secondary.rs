@@ -3,7 +3,7 @@ use crate::cluster::{GenericResult, unknown_error_resp};
 use crate::{PATH_JOB_STATUS, PATH_STOP_JOB, Response};
 use bytes::Buf;
 use cluster_executor::JobStatus;
-use cluster_mode::Cluster;
+use cluster_mode::{Cluster, RestClusterNode};
 use hyper::client::HttpConnector;
 use hyper::{Body, Client};
 use log::trace;
@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 pub(crate) async fn forward_other_requests_to_primary<T: Serialize + DeserializeOwned>(
     req: http::Request<Body>,
-    _cluster: Arc<Cluster>,
+    _cluster: Arc<Cluster<RestClusterNode>>,
     client: Client<HttpConnector>,
 ) -> GenericResult<T> {
     trace!("forwarding request to primary: {}", &req.uri());
@@ -26,7 +26,7 @@ pub(crate) async fn forward_other_requests_to_primary<T: Serialize + Deserialize
 
 pub(crate) async fn forward_stop_request_to_primary(
     job_id: &String,
-    cluster: &Arc<Cluster>,
+    cluster: &Arc<Cluster<RestClusterNode>>,
 ) -> GenericResult<String> {
     let client = Client::new();
     if let Ok(uri) = primary_uri(&cluster.primaries().await).await {
@@ -42,7 +42,7 @@ pub(crate) async fn forward_stop_request_to_primary(
 
 pub(crate) async fn forward_get_status_request(
     params: JobStatusQueryParams,
-    cluster: &Arc<Cluster>,
+    cluster: &Arc<Cluster<RestClusterNode>>,
 ) -> GenericResult<JobStatus> {
     let client = Client::new();
     if let Ok(uri) = primary_uri(&cluster.primaries().await).await {
@@ -59,7 +59,7 @@ pub(crate) async fn forward_get_status_request(
 pub(crate) async fn forward_test_request<T: Serialize>(
     path: &str,
     request: T,
-    cluster: Arc<Cluster>,
+    cluster: Arc<Cluster<RestClusterNode>>,
     client: Client<HttpConnector>,
 ) -> anyhow::Result<Response> {
     let primaries = cluster

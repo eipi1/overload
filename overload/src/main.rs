@@ -4,6 +4,8 @@ use cloud_discovery_kubernetes::KubernetesDiscoverService;
 use cluster_executor::{REMOC_PORT, remoc_port};
 #[cfg(feature = "cluster")]
 use cluster_mode::ClusterConfig;
+#[cfg(feature = "cluster")]
+use cluster_mode::RestClusterNode;
 use log::info;
 #[cfg(feature = "cluster")]
 use rust_cloud_discovery::DiscoveryClient;
@@ -36,7 +38,6 @@ async fn main() {
         cluster_executor::data_dir_path().as_path().to_str()
     );
 
-    let mut _cluster_up = true;
     #[cfg(feature = "cluster")]
     {
         info!("Running in cluster mode");
@@ -63,8 +64,8 @@ async fn main() {
                 let discovery_client = DiscoveryClient::new(k8s);
                 let config = cluster_config();
                 info!(
-                    "cluster configuration - connection_timeout:{}, election_timeout:{}, update_interval: {}, max_node: {}, min_node:{}",
-                    &config.connection_timeout,
+                    "cluster configuration - message_timeout:{}, election_timeout:{}, update_interval: {}, max_node: {}, min_node:{}",
+                    &config.message_timeout,
                     &config.election_timeout,
                     &config.update_interval,
                     &config.max_node,
@@ -74,10 +75,11 @@ async fn main() {
                     filters::CLUSTER.clone(),
                     discovery_client,
                     config,
+                    RestClusterNode::new,
+                    RestClusterNode::get_info,
                 ));
             }
             Err(e) => {
-                _cluster_up = false;
                 info!("error initializing kubernetes: {}", e);
             }
         }

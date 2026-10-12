@@ -4,7 +4,7 @@ use crate::filters_common;
 use crate::filters_common::prometheus_metric;
 use bytes::{Buf, Bytes, BytesMut};
 use cluster_executor::data_dir_path;
-use cluster_mode::{Cluster, get_cluster_info};
+use cluster_mode::{Cluster, RestClusterNode, RestClusterNodeId, get_cluster_info};
 use futures_util::future::Either;
 use futures_util::{FutureExt, Stream, StreamExt};
 use http::StatusCode;
@@ -26,14 +26,16 @@ use warp::reply::{Json, Response, WithStatus};
 use warp::{Filter, reply};
 
 lazy_static! {
-    pub static ref CLUSTER: Arc<Cluster> = Arc::new(Cluster::new());
+    pub static ref CLUSTER: Arc<Cluster<RestClusterNode>> = Arc::new(Cluster::new(
+        RestClusterNodeId::from(uuid::Uuid::new_v4().to_string())
+    ));
 }
 
 pub fn get_routes() -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     get_routes_with_cluster(CLUSTER.clone())
 }
 pub fn get_routes_with_cluster(
-    cluster: Arc<Cluster>,
+    cluster: Arc<Cluster<RestClusterNode>>,
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     let upload_binary_file = upload_binary_file(cluster.clone());
     let upload_csv_file = upload_csv_file(cluster.clone());
@@ -47,6 +49,8 @@ pub fn get_routes_with_cluster(
     let info = info(cluster.clone());
     let request_vote = request_vote(cluster.clone());
     let request_vote_response = request_vote_response(cluster.clone());
+    let request_pre_vote = crate::filters::request_pre_vote(cluster.clone());
+    let request_pre_vote_response = crate::filters::request_pre_vote_response(cluster.clone());
     let heartbeat = heartbeat(cluster);
     let download_data_file = download_req_from_secondaries();
 
@@ -65,13 +69,15 @@ pub fn get_routes_with_cluster(
         .or(info)
         .or(request_vote)
         .or(request_vote_response)
+        .or(request_pre_vote)
+        .or(request_pre_vote_response)
         .or(heartbeat)
         // .or(overload_req_secondary)
         .or(download_data_file)
 }
 
 pub fn overload_req(
-    cluster: Arc<Cluster>,
+    cluster: Arc<Cluster<RestClusterNode>>,
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     warp::post()
         .and(warp::path("test").and(warp::path::end()))
@@ -84,7 +90,7 @@ pub fn overload_req(
 }
 
 pub fn overload_multi_req(
-    cluster: Arc<Cluster>,
+    cluster: Arc<Cluster<RestClusterNode>>,
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     warp::post()
         .and(warp::path("tests").and(warp::path::end()))
@@ -97,7 +103,7 @@ pub fn overload_multi_req(
 }
 
 pub fn upload_binary_file(
-    cluster: Arc<Cluster>,
+    cluster: Arc<Cluster<RestClusterNode>>,
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     warp::post()
         .and(
@@ -115,7 +121,7 @@ pub fn upload_binary_file(
 }
 
 pub fn upload_csv_file(
-    cluster: Arc<Cluster>,
+    cluster: Arc<Cluster<RestClusterNode>>,
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     warp::post()
         .and(
@@ -133,7 +139,7 @@ pub fn upload_csv_file(
 }
 
 pub fn upload_sqlite_file(
-    cluster: Arc<Cluster>,
+    cluster: Arc<Cluster<RestClusterNode>>,
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     let enc = warp::header::<String>(http::header::CONTENT_ENCODING.as_str())
         .map(Some)
@@ -155,7 +161,7 @@ pub fn upload_sqlite_file(
 }
 
 pub fn stop_req(
-    cluster: Arc<Cluster>,
+    cluster: Arc<Cluster<RestClusterNode>>,
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     warp::path!("test" / "stop" / String).and_then(move |job_id: String| {
         let tmp = cluster.clone();
@@ -164,7 +170,7 @@ pub fn stop_req(
 }
 
 pub fn history(
-    cluster: Arc<Cluster>,
+    cluster: Arc<Cluster<RestClusterNode>>,
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     warp::path!("test" / "status")
         // should replace with untagged enum JobStatusQueryParams, but doesn't work due to
@@ -189,7 +195,7 @@ pub fn history(
 }
 
 pub fn info(
-    cluster: Arc<Cluster>,
+    cluster: Arc<Cluster<RestClusterNode>>,
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     warp::path!("cluster" / "info").and_then(move || {
         let tmp = cluster.clone();
@@ -199,7 +205,7 @@ pub fn info(
 }
 
 pub fn request_vote(
-    cluster: Arc<Cluster>,
+    cluster: Arc<Cluster<RestClusterNode>>,
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     warp::path!("cluster" / "raft" / "request-vote" / String / usize).and_then(
         move |node_id, term| {
@@ -211,7 +217,7 @@ pub fn request_vote(
 }
 
 pub fn request_vote_response(
-    cluster: Arc<Cluster>,
+    cluster: Arc<Cluster<RestClusterNode>>,
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     warp::path!("cluster" / "raft" / "vote" / usize / bool).and_then(move |term, vote| {
         let tmp = cluster.clone();
@@ -219,8 +225,29 @@ pub fn request_vote_response(
     })
 }
 
+pub fn request_pre_vote(
+    cluster: Arc<Cluster<RestClusterNode>>,
+) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+    warp::path!("cluster" / "raft" / "request-pre-vote" / String / usize).and_then(
+        move |node_id, term| {
+            let tmp = cluster.clone();
+            // let mode = cluster_up;
+            async move { cluster_request_pre_vote(tmp, true, node_id, term).await }
+        },
+    )
+}
+
+pub fn request_pre_vote_response(
+    cluster: Arc<Cluster<RestClusterNode>>,
+) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+    warp::path!("cluster" / "raft" / "pre-vote" / usize / bool).and_then(move |term, vote| {
+        let tmp = cluster.clone();
+        async move { cluster_request_pre_vote_response(tmp, true, term, vote).await }
+    })
+}
+
 pub fn heartbeat(
-    cluster: Arc<Cluster>,
+    cluster: Arc<Cluster<RestClusterNode>>,
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     warp::path!("cluster" / "raft" / "beat" / String / usize).and_then(move |leader_node, term| {
         let tmp = cluster.clone();
@@ -230,7 +257,7 @@ pub fn heartbeat(
 
 async fn execute_cluster(
     request: Request,
-    cluster: Arc<Cluster>,
+    cluster: Arc<Cluster<RestClusterNode>>,
 ) -> Result<impl warp::Reply, Infallible> {
     trace!(
         "req: execute_cluster: {}",
@@ -244,7 +271,7 @@ async fn execute_cluster(
 
 async fn execute_multi_req_cluster(
     request: MultiRequest,
-    cluster: Arc<Cluster>,
+    cluster: Arc<Cluster<RestClusterNode>>,
 ) -> Result<impl warp::Reply, Infallible> {
     trace!(
         "req: execute_multi_req_cluster: {}",
@@ -259,7 +286,7 @@ async fn execute_multi_req_cluster(
 /// should use shared storage, no need to forward upload request
 async fn upload_csv_file_handler<S, B>(
     data: S,
-    cluster: Arc<Cluster>,
+    cluster: Arc<Cluster<RestClusterNode>>,
     content_len: u64,
 ) -> Result<impl warp::Reply, Infallible>
 where
@@ -281,7 +308,7 @@ where
 /// should use shared storage, no need to forward upload request
 async fn upload_sqlite_file_handler<S, B>(
     data: S,
-    cluster: Arc<Cluster>,
+    cluster: Arc<Cluster<RestClusterNode>>,
     content_len: u64,
     content_encoding: Option<String>,
 ) -> Result<impl warp::Reply, Infallible>
@@ -308,14 +335,17 @@ where
     }
 }
 
-async fn stop(job_id: String, cluster: Arc<Cluster>) -> Result<impl warp::Reply, Infallible> {
+async fn stop(
+    job_id: String,
+    cluster: Arc<Cluster<RestClusterNode>>,
+) -> Result<impl warp::Reply, Infallible> {
     let resp = overload::cluster::stop(job_id, cluster.clone()).await;
     trace!("resp: stop: {:?}", &resp);
     Ok(filters_common::generic_result_to_reply_with_status(resp))
 }
 
 async fn cluster_info(
-    cluster: Arc<Cluster>,
+    cluster: Arc<Cluster<RestClusterNode>>,
     cluster_mode: bool,
 ) -> Result<impl warp::Reply, Infallible> {
     if !cluster_mode {
@@ -329,7 +359,7 @@ async fn cluster_info(
 }
 
 async fn cluster_request_vote(
-    cluster: Arc<Cluster>,
+    cluster: Arc<Cluster<RestClusterNode>>,
     cluster_mode: bool,
     requester_node_id: String,
     term: usize,
@@ -351,7 +381,7 @@ async fn cluster_request_vote(
 }
 
 async fn cluster_request_vote_response(
-    cluster: Arc<Cluster>,
+    cluster: Arc<Cluster<RestClusterNode>>,
     cluster_mode: bool,
     term: usize,
     vote: bool,
@@ -370,8 +400,50 @@ async fn cluster_request_vote_response(
     }
 }
 
+async fn cluster_request_pre_vote(
+    cluster: Arc<Cluster<RestClusterNode>>,
+    cluster_mode: bool,
+    requester_node_id: String,
+    term: usize,
+) -> Result<impl warp::Reply, Infallible> {
+    trace!(
+        "req: cluster_request_vote: requester: {}, term: {}",
+        &requester_node_id, &term
+    );
+    if !cluster_mode {
+        let err = no_cluster_err();
+        Ok(err)
+    } else {
+        cluster
+            .accept_raft_request_pre_vote(requester_node_id, term)
+            .await;
+        let json = reply::with_status(reply::json(&Value::Null), StatusCode::OK);
+        Ok(json)
+    }
+}
+
+async fn cluster_request_pre_vote_response(
+    cluster: Arc<Cluster<RestClusterNode>>,
+    cluster_mode: bool,
+    term: usize,
+    vote: bool,
+) -> Result<impl warp::Reply, Infallible> {
+    trace!(
+        "req: cluster_request_vote_response: term: {}, vote: {}",
+        &term, &vote
+    );
+    if !cluster_mode {
+        let err = no_cluster_err();
+        Ok(err)
+    } else {
+        cluster.accept_raft_request_pre_vote_resp(term, vote).await;
+        let json = reply::with_status(reply::json(&Value::Null), StatusCode::OK);
+        Ok(json)
+    }
+}
+
 async fn cluster_heartbeat(
-    cluster: Arc<Cluster>,
+    cluster: Arc<Cluster<RestClusterNode>>,
     cluster_mode: bool,
     leader_node_id: String,
     term: usize,
@@ -498,7 +570,7 @@ mod cluster_test {
     use crate::filters_common::test_common::*;
     use async_trait::async_trait;
     use bytes::Buf;
-    use cluster_mode::{Cluster, ClusterConfig};
+    use cluster_mode::{Cluster, ClusterConfig, RestClusterNode, RestClusterNodeId};
     use csv_async::AsyncReaderBuilder;
     use http::Request;
     use httpmock::Method::POST;
@@ -593,18 +665,28 @@ mod cluster_test {
         }
     }
 
+    pub fn new_node(
+        node_id: RestClusterNodeId,
+        service_instance: ServiceInstance,
+    ) -> RestClusterNode {
+        RestClusterNode::new(node_id, service_instance)
+    }
+
     async fn start_overload_at_port(
         port: u16,
         discovery_client: DiscoveryClient<TestDiscoverService>,
     ) -> tokio::sync::oneshot::Sender<()> {
         info!("Running in cluster mode");
 
-        let cluster = Arc::new(Cluster::new());
+        let id = RestClusterNodeId::from(uuid::Uuid::new_v4().to_string());
+        let cluster = Arc::new(Cluster::<RestClusterNode>::new(id));
 
         tokio::spawn(cluster_mode::start_cluster(
             cluster.clone(),
             discovery_client,
             ClusterConfig::default(),
+            new_node,
+            RestClusterNode::get_info,
         ));
 
         info!("spawning executor init");

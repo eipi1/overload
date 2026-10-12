@@ -30,7 +30,7 @@ path = "../common-env"
 version = "0.2"
 
 [dependencies.cluster-mode]
-version = "0.3"
+workspace = true
 
 [dependencies.remoc]
 version = "0.10"

@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio_stream::StreamExt;
 
-pub async fn handle_request(request: Request, cluster: Arc<Cluster>) {
+pub async fn handle_request(request: Request, cluster: Arc<Cluster<RestClusterNode>>) {
     let job_id = request.name.clone().unwrap();
     info!(
         "[handle_request] - [{}] - started processing request: {:?}",
@@ -189,7 +189,7 @@ fn calculate_req_per_secondary(
 #[inline]
 async fn init_senders(
     senders: &mut HashMap<String, Sender<MessageFromPrimary>>,
-    cluster: &Cluster,
+    cluster: &Cluster<RestClusterNode>,
     request: Request,
 ) {
     let new_instances = create_senders_for_cluster_nodes(senders, cluster).await;
@@ -202,7 +202,7 @@ async fn init_senders(
 /// Instance id of newly created senders
 async fn create_senders_for_cluster_nodes(
     senders: &mut HashMap<String, Sender<MessageFromPrimary>>,
-    cluster: &Cluster,
+    cluster: &Cluster<RestClusterNode>,
 ) -> Vec<String> {
     let mut new_nodes = vec![];
     if let Some(secondaries) = cluster.secondaries().await {
