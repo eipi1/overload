@@ -18,7 +18,7 @@ use hyper::Error;
 use hyper::body::Bytes;
 use hyper::client::conn::ResponseFuture;
 use lazy_static::lazy_static;
-use log::{error, info, trace};
+use log::{error, info, trace, warn};
 use once_cell::sync::OnceCell;
 use remoc::rch::base::{Receiver, Sender};
 use serde::{Deserialize, Serialize};
@@ -522,8 +522,19 @@ pub(crate) async fn send_metadata(
     senders: &mut HashMap<String, Sender<MessageFromPrimary>>,
     instances: &[String],
 ) {
-    let primary_host = cluster.get_service_instance().await.unwrap();
-    let primary_host = primary_host.host().as_ref().unwrap().clone();
+    let primary_host = match cluster.get_service_instance().await {
+        Some(instance) => match instance.host() {
+            Some(host) => host.clone(),
+            None => {
+                warn!("[send_metadata] primary service instance has no host; using empty host");
+                String::new()
+            }
+        },
+        None => {
+            warn!("[send_metadata] primary has no service instance; using empty host");
+            String::new()
+        }
+    };
     send_metadata_with_primary(&primary_host, senders, instances).await;
 }
 

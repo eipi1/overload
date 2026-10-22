@@ -181,6 +181,9 @@ fn calculate_req_per_secondary(
         if pos < connection_count_remainder {
             *conn_con_ += 1;
         }
+        if *conn_con_ == 0 && *qps_ > 0 {
+            *conn_con_ = 1;
+        }
     }
 
     (qps_to_secondaries, connection_count_to_secondaries)
@@ -433,39 +436,6 @@ mod test {
         }
     }
 
-    // async fn assert_rate_msg(
-    //     rx1: StdReceiver<MessageFromPrimary>,
-    //     mut sender_map: &mut HashMap<String, Sender<MessageFromPrimary>>,
-    //     rx2: StdReceiver<MessageFromPrimary>,
-    //     qps: u32, conn_count: u32, qps: u32, exp_conn_count: u32,
-    // ) {
-    //     send_rate_message_to_secondaries(&mut sender_map, 10, 5).await;
-    //     let primary = rx1.recv_timeout(Duration::from_millis(500)).unwrap();
-    //     let mut conn_count = 0;
-    //     match primary {
-    //         MessageFromPrimary::Rates(r) => {
-    //             conn_count += r.connections;
-    //             assert!(r.connections == 3 || r.connections == 2);
-    //             assert_eq!(r.qps, 5);
-    //         }
-    //         _ => {
-    //             panic!("unexpected message");
-    //         }
-    //     }
-    //     let primary = rx2.recv_timeout(Duration::from_millis(500)).unwrap();
-    //     match primary {
-    //         MessageFromPrimary::Rates(r) => {
-    //             conn_count += r.connections;
-    //             assert!(r.connections == 3 || r.connections == 2);
-    //             assert_eq!(r.qps, 5);
-    //         }
-    //         _ => {
-    //             panic!("unexpected message");
-    //         }
-    //     }
-    //     assert_eq!(conn_count, 5);
-    // }
-
     #[tokio::test]
     async fn test_get_sender_for_secondary() {
         init();
@@ -492,56 +462,4 @@ mod test {
             Ok(self.instances.clone())
         }
     }
-
-    // #[allow(dead_code)]
-    // fn get_discovery_service() -> TestDiscoverService {
-    //     let mut instances = vec![];
-    //     let instance = ServiceInstance::new(
-    //         Some(Uuid::new_v4().to_string()),
-    //         Some(String::from_str("test").unwrap()),
-    //         Some(String::from_str("127.0.0.1").unwrap()),
-    //         Some(3030),
-    //         false,
-    //         Some("http://127.0.0.1:3030".to_string()),
-    //         std::collections::HashMap::new(),
-    //         Some(String::from_str("HTTP").unwrap()),
-    //     );
-    //
-    //     instances.push(instance);
-    //     let instance = ServiceInstance::new(
-    //         Some(Uuid::new_v4().to_string()),
-    //         Some(String::from_str("test").unwrap()),
-    //         Some(String::from_str("127.0.0.1").unwrap()),
-    //         Some(3031),
-    //         false,
-    //         Some("http://127.0.0.1:3031".to_string()),
-    //         std::collections::HashMap::new(),
-    //         Some(String::from_str("HTTP").unwrap()),
-    //     );
-    //     instances.push(instance);
-    //     let instance = ServiceInstance::new(
-    //         Some(Uuid::new_v4().to_string()),
-    //         Some(String::from_str("test").unwrap()),
-    //         Some(String::from_str("127.0.0.1").unwrap()),
-    //         Some(3032),
-    //         false,
-    //         Some("http://127.0.0.1:3032".to_string()),
-    //         std::collections::HashMap::new(),
-    //         Some(String::from_str("HTTP").unwrap()),
-    //     );
-    //     instances.push(instance);
-    //
-    //     let instance = ServiceInstance::new(
-    //         Some(Uuid::new_v4().to_string()),
-    //         Some(String::from_str("test").unwrap()),
-    //         Some(String::from_str("127.0.0.1").unwrap()),
-    //         Some(3033),
-    //         false,
-    //         Some("http://127.0.0.1:3033".to_string()),
-    //         std::collections::HashMap::new(),
-    //         Some(String::from_str("HTTP").unwrap()),
-    //     );
-    //     instances.push(instance);
-    //     TestDiscoverService { instances }
-    // }
 }

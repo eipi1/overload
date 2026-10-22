@@ -121,5 +121,13 @@ version = "0.22"
 [dev-dependencies.env_logger]
 workspace = true
 
+[dev-dependencies.portpicker]
+version = "0.1"
+
+[dev-dependencies.tokio]
+workspace = true
+features = ["time"]
+
+
 [features]
 cluster = []
