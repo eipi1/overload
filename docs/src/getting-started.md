@@ -1,7 +1,7 @@
 # Getting Started
 ## Start Test
 The following request will send two `GET` request per second(`"countPerSec": 2`) to `httpbin.org/get` for 120
-seconds(`"duration": 120`). More example can be found in [test cases](https://github.com/eipi1/overload/tree/main/tests/src/resources)
+seconds(`"duration": 120`). More example can be found in [test cases](https://github.com/eipi1/overload/tree/main/overload/tests/resources)
 ```shell
 curl --location --request POST '{overload_host}:3030/test' \
 --header 'Content-Type: application/json' \

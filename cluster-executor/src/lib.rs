@@ -18,7 +18,9 @@ use hyper::Error;
 use hyper::body::Bytes;
 use hyper::client::conn::ResponseFuture;
 use lazy_static::lazy_static;
-use log::{error, info, trace, warn};
+#[cfg(feature = "cluster")]
+use log::warn;
+use log::{error, info, trace};
 use once_cell::sync::OnceCell;
 use remoc::rch::base::{Receiver, Sender};
 use serde::{Deserialize, Serialize};

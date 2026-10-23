@@ -181,7 +181,7 @@ fn calculate_req_per_secondary(
         if pos < connection_count_remainder {
             *conn_con_ += 1;
         }
-        if *conn_con_ == 0 && *qps_ > 0 {
+        if connection_count > 0 && *conn_con_ == 0 && *qps_ > 0 {
             *conn_con_ = 1;
         }
     }
@@ -242,7 +242,9 @@ pub(crate) async fn get_sender_for_secondary(
 
 #[cfg(test)]
 mod test {
-    use crate::primary::{get_sender_for_secondary, send_rate_message_to_secondaries};
+    use crate::primary::{
+        calculate_req_per_secondary, get_sender_for_secondary, send_rate_message_to_secondaries,
+    };
     use crate::test_common::{cluster_node, get_request, init};
     use crate::{MessageFromPrimary, send_request_to_secondary};
     use log::{info, trace};
@@ -461,5 +463,23 @@ mod test {
         async fn discover_instances(&self) -> Result<Vec<ServiceInstance>, Box<dyn Error>> {
             Ok(self.instances.clone())
         }
+    }
+
+    #[test]
+    fn test_calculate_req_per_secondary() {
+        // When connection_count is 0 (elastic), connection count should remain 0 even if qps > 0
+        let (qps, conn) = calculate_req_per_secondary(6, 0, 3);
+        assert_eq!(qps, vec![2, 2, 2]);
+        assert_eq!(conn, vec![0, 0, 0]);
+
+        // When connection_count > 0 and qps > 0, secondaries with 0 connections get 1
+        let (qps, conn) = calculate_req_per_secondary(3, 1, 3);
+        assert_eq!(qps, vec![1, 1, 1]);
+        assert_eq!(conn, vec![1, 1, 1]);
+
+        // Normal division with remainder
+        let (qps, conn) = calculate_req_per_secondary(10, 5, 3);
+        assert_eq!(qps, vec![4, 3, 3]);
+        assert_eq!(conn, vec![2, 2, 1]);
     }
 }

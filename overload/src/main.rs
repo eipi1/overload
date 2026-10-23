@@ -19,6 +19,8 @@ use std::str::FromStr;
 #[cfg_attr(feature = "cluster", path = "filters_cluster.rs")]
 mod filters;
 mod filters_common;
+#[cfg(feature = "cluster")]
+mod static_discovery;
 
 #[cfg(feature = "cluster")]
 const ENV_NAME_CLUSTER_UPDATE_INTERVAL: &str = "CLUSTER_UPDATE_INTERVAL";
@@ -42,45 +44,69 @@ async fn main() {
     {
         info!("Running in cluster mode");
 
-        //todo get from k8s itself
-        #[cfg(feature = "cluster")]
-        let service = env::var("K8S_ENDPOINT_NAME")
-            .ok()
-            .unwrap_or_else(|| "overload".to_string());
-        #[cfg(feature = "cluster")]
-        let namespace = env::var("K8S_NAMESPACE_NAME")
-            .ok()
-            .unwrap_or_else(|| "default".to_string());
+        let static_peers = env::var(static_discovery::ENV_NAME_CLUSTER_STATIC_PEERS).ok();
+        if let Some(peers) = static_peers {
+            info!(
+                "Initializing static cluster discovery with peers: {}",
+                peers
+            );
+            let static_discovery = static_discovery::StaticDiscoveryService::new(&peers)
+                .expect("Failed to parse CLUSTER_STATIC_PEERS");
+            let discovery_client = DiscoveryClient::new(static_discovery);
+            let config = cluster_config();
+            info!(
+                "cluster configuration - message_timeout:{}, election_timeout:{}, update_interval: {}, max_node: {}, min_node:{}",
+                &config.message_timeout,
+                &config.election_timeout,
+                &config.update_interval,
+                &config.max_node,
+                &config.min_node
+            );
+            tokio::spawn(cluster_mode::start_cluster(
+                filters::CLUSTER.clone(),
+                discovery_client,
+                config,
+                RestClusterNode::new,
+                RestClusterNode::get_info,
+            ));
+        } else {
+            let service = env::var("K8S_ENDPOINT_NAME")
+                .ok()
+                .unwrap_or_else(|| "overload".to_string());
+            let namespace = env::var("K8S_NAMESPACE_NAME")
+                .ok()
+                .unwrap_or_else(|| "default".to_string());
 
-        info!("k8s endpoint name: {}", &service);
-        info!("k8s namespace: {}", namespace);
+            info!("k8s endpoint name: {}", &service);
+            info!("k8s namespace: {}", namespace);
 
-        // initialize cluster
-        // init discovery service
-        let k8s = KubernetesDiscoverService::init(service, namespace).await;
+            // initialize cluster
+            // init discovery service
+            let k8s = KubernetesDiscoverService::init(service, namespace).await;
 
-        match k8s {
-            Ok(k8s) => {
-                let discovery_client = DiscoveryClient::new(k8s);
-                let config = cluster_config();
-                info!(
-                    "cluster configuration - message_timeout:{}, election_timeout:{}, update_interval: {}, max_node: {}, min_node:{}",
-                    &config.message_timeout,
-                    &config.election_timeout,
-                    &config.update_interval,
-                    &config.max_node,
-                    &config.min_node
-                );
-                tokio::spawn(cluster_mode::start_cluster(
-                    filters::CLUSTER.clone(),
-                    discovery_client,
-                    config,
-                    RestClusterNode::new,
-                    RestClusterNode::get_info,
-                ));
-            }
-            Err(e) => {
-                info!("error initializing kubernetes: {}", e);
+            match k8s {
+                Ok(k8s) => {
+                    let discovery_client = DiscoveryClient::new(k8s);
+                    let config = cluster_config();
+                    info!(
+                        "cluster configuration - message_timeout:{}, election_timeout:{}, update_interval: {}, max_node: {}, min_node:{}",
+                        &config.message_timeout,
+                        &config.election_timeout,
+                        &config.update_interval,
+                        &config.max_node,
+                        &config.min_node
+                    );
+                    tokio::spawn(cluster_mode::start_cluster(
+                        filters::CLUSTER.clone(),
+                        discovery_client,
+                        config,
+                        RestClusterNode::new,
+                        RestClusterNode::get_info,
+                    ));
+                }
+                Err(e) => {
+                    info!("error initializing kubernetes: {}", e);
+                }
             }
         }
     }
@@ -96,7 +122,9 @@ async fn main() {
 
     let routes = filters::get_routes();
     info!("staring server...");
-    warp::serve(routes).run(([0, 0, 0, 0], 3030)).await;
+    warp::serve(routes)
+        .run(([0, 0, 0, 0], overload_http::http_port()))
+        .await;
 }
 
 #[cfg(feature = "cluster")]

@@ -4,7 +4,7 @@ version = "0.9.0"
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
-readme = "README.md"
+readme = "../README.md"
 repository = "https://github.com/eipi1/overload"
 description = """
 A distributed load testing application
@@ -15,6 +15,10 @@ keywords = ["load-testing", "cluster"]
 [lib]
 name = "overload"
 path = "src/overload/lib.rs"
+
+[[test]]
+name = "e2e"
+path = "tests/e2e/main.rs"
 
 [dependencies.lua-helper]
 path = "../lua-helper"
@@ -145,5 +149,24 @@ version = "0.1"
 [dev-dependencies.test-case]
 version = "2.2"
 
+[dev-dependencies.rstest]
+version = "0.16"
+
+[dev-dependencies.reqwest]
+version = "0.11"
+features = ["json", "stream"]
+
+[dev-dependencies.env_logger]
+version = "0.10"
+
+[dev-dependencies.hyper]
+workspace = true
+features = ["server", "tcp"]
+
 [features]
-cluster = ["rust-cloud-discovery", "cloud-discovery-kubernetes", "cluster-mode"]
+cluster = [
+    "rust-cloud-discovery",
+    "cloud-discovery-kubernetes",
+    "cluster-mode",
+    "cluster-executor/cluster",
+]

@@ -48,4 +48,13 @@ Maximum number of allowed node in a cluster. Minimum is `4`, default `20`.
 ### CLUSTER_MIN_NODE
 Minimum number of nodes required to create a cluster. Minimum is `4`, default `4`.
 
+### HTTP_ENDPOINT_PORT
+Port on which the HTTP server listens for incoming requests. Default is `3030`.
+
+### CLUSTER_COM_PORT
+Port used for cluster communication via Remoc between primary and secondaries. Default is `3031`.
+
+### CLUSTER_STATIC_PEERS
+Comma-separated list of static peers for cluster discovery in the format `host:http_port:remoc_port,...`. When set, static peer discovery is used instead of Kubernetes.
+
 

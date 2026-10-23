@@ -7,7 +7,6 @@ members = [
     "datagen",
     "overload-metrics",
     "lua-helper",
-    "tests",
     "common-types",
     "common-env"
 ]
